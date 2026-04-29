@@ -58,7 +58,7 @@ export function AuthProvider({ children }) {
         // Only wipe the session on a real auth failure. Network blips and
         // timeouts (status 0) must not log the user out — they'll retry on
         // the next mount/reload.
-        if (err?.status === 401) {
+        if (err?.authInvalid || err?.status === 401) {
           localStorage.removeItem('aztea_key')
           localStorage.removeItem('aztea_user')
           setApiKey('')

@@ -6,6 +6,16 @@ const CLIENT_ID = 'web-app'
 let _onSessionExpired = null
 export function setSessionExpiredHandler(fn) { _onSessionExpired = fn }
 
+function isInvalidApiKeyError(status, parsedBody) {
+  const code = typeof parsedBody?.error === 'string' ? parsedBody.error.trim().toUpperCase() : ''
+  const message = typeof parsedBody?.message === 'string' ? parsedBody.message.trim().toLowerCase() : ''
+  return (
+    status === 401
+    || (status === 403 && code === 'INVALID_API_KEY')
+    || message === 'api key is invalid or expired.'
+  )
+}
+
 // A 401 from a single data endpoint does NOT mean the session is dead — it
 // could be a transient backend issue, a scope edge-case, or a race right after
 // login. Before tearing down the session, verify with /auth/me. Only if that
@@ -165,6 +175,7 @@ function makeApiError(response, parsedBody) {
   err.status = response.status
   err.body = parsedBody
   err.code = errorCode || null
+  err.authInvalid = isInvalidApiKeyError(response.status, parsedBody)
   if (parsedBody && typeof parsedBody === 'object' && typeof parsedBody.request_id === 'string' && parsedBody.request_id) {
     err.requestId = parsedBody.request_id
   } else {
@@ -224,9 +235,15 @@ async function request(path, {
   }
   const parsedBody = await parseResponseBody(response)
   if (!response.ok && throwOnError) {
-    if (response.status === 401 && _onSessionExpired && !path.startsWith('/auth/')) {
-      // Verify with /auth/me before tearing down — see verifyAndExpire above.
-      verifyAndExpire(key)
+    if (_onSessionExpired && !path.startsWith('/auth/') && key) {
+      if (isInvalidApiKeyError(response.status, parsedBody)) {
+        // An explicit invalid/expired key response should fail closed
+        // immediately instead of leaving the UI in a broken signed-in state.
+        _onSessionExpired()
+      } else if (response.status === 401) {
+        // Verify with /auth/me before tearing down — see verifyAndExpire above.
+        verifyAndExpire(key)
+      }
     }
     throw makeApiError(response, parsedBody)
   }

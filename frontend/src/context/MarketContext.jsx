@@ -24,7 +24,7 @@ export function MarketProvider({ apiKey, children }) {
     // toast for timeouts/network errors — the next successful poll silently
     // recovers and surfacing them just spams the corner.
     const code = err?.code
-    if (code === 'network.timeout' || code === 'network.error') return
+    if (code === 'network.timeout' || code === 'network.error' || err?.authInvalid) return
     const msg = (err && err.message) ? err.message : fallbackMsg
     if (lastRefreshError.current !== msg) {
       showToast(msg, 'error')

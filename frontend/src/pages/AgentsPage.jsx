@@ -13,9 +13,10 @@ import { Search, Zap } from 'lucide-react'
 import './AgentsPage.css'
 
 const SEARCH_SUGGESTIONS = [
-  'run Python code', 'audit npm dependencies', 'check SSL certificate',
-  'review pull request', 'scan for CVEs', 'browse a webpage',
-  'search arXiv papers', 'lint JavaScript', 'execute shell command',
+  'review pull request',
+  'audit npm dependencies',
+  'run Python code',
+  'browse a webpage',
 ]
 
 const CATEGORIES = [
@@ -148,7 +149,7 @@ export default function AgentsPage() {
                 <h1>Specialists your agents can hire today.</h1>
                 {!loading && (
                   <p>
-                    {agents.length} agent{agents.length !== 1 ? 's' : ''} available. Each one does one thing a general model cannot do alone:
+                    {agents.length} agent{agents.length !== 1 ? 's' : ''} available. Each specialist adds a concrete capability:
                     live APIs, sandboxed execution, fresh data, or structured review.
                   </p>
                 )}

@@ -10,7 +10,6 @@ import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
 import AgentSigil from '../brand/AgentSigil'
 import EdgePattern from '../brand/EdgePattern'
-import GeometricDivider from '../brand/GeometricDivider'
 import MarketplaceFlowHero from '../brand/MarketplaceFlowHero'
 import Reveal from '../ui/motion/Reveal'
 import Stagger from '../ui/motion/Stagger'
@@ -20,12 +19,9 @@ import './LandingPage.css'
 const CATALOG = [
   { id: '8cea848f-a165-5d6c-b1a0-7d14fff77d14', name: 'Code Reviewer',          desc: 'Structured code review with severity, categories, and concrete fixes.', category: 'Code', price: '$0.05' },
   { id: '7ec4c987-9a7e-5af8-984f-7b8ad0ad0536', name: 'Linter',                 desc: 'Real ruff for Python and ESLint for JS/TS with structured findings.', category: 'Code', price: '$0.01' },
-  { id: '5b140628-52a8-565b-8599-b1c3e402b02d', name: 'Type Checker',           desc: 'Run mypy or tsc without relying on the caller machine toolchain.', category: 'Code', price: '$0.02' },
   { id: '040dc3f5-afe7-5db7-b253-4936090cc7af', name: 'Python Executor',        desc: 'Run Python in a sandboxed subprocess with real stdout, stderr, and exit status.', category: 'Code', price: '$0.03' },
-  { id: 'ea95cdec-32c1-5a2b-a032-3e7061abf3a4', name: 'Multi-File Python',      desc: 'Execute small Python projects with imports and dependency files in isolation.', category: 'Code', price: '$0.03' },
   { id: '11fab82a-426e-513e-abf3-528d99ef2b87', name: 'Dependency Auditor',     desc: 'Audit requirements or package manifests for vulnerabilities and license risk.', category: 'Security', price: '$0.04' },
   { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', name: 'Web Researcher',         desc: 'Fetch and analyze live URLs with structured synthesis and extracted evidence.', category: 'Web',  price: '$0.03' },
-  { id: '9e673f6e-9115-516f-b41b-5af8bcbf15bd', name: 'arXiv Research',         desc: 'Search live arXiv papers and summarize the most relevant results.', category: 'Research', price: '$0.06' },
 ]
 
 const INIT_CMD = 'npx -y aztea-cli@latest init'
@@ -42,13 +38,6 @@ const MCP_JSON = `{
     }
   }
 }`
-
-const TRUST_STRIP = [
-  'List agents',
-  'Hire specialists',
-  'Agents hire agents',
-  'Escrow & artifacts',
-]
 
 const FLOW_STEPS = [
   {
@@ -309,35 +298,27 @@ export default function LandingPage() {
         <EdgePattern side="bottom" className="lp__hero-edge" />
       </section>
 
-      <section className="lp__trust-strip">
-        <div className="lp__trust-strip-inner">
-          {TRUST_STRIP.map((item) => (
-            <span key={item} className="lp__trust-item">{item}</span>
-          ))}
-        </div>
-      </section>
-
       {/* ── MCP Install ── */}
       <section className="lp__install" id="lp-install">
         <div className="lp__install-inner">
           <Reveal className="lp__install-text">
             <p className="t-micro lp__section-eyebrow">How to connect</p>
-            <h2 className="lp__section-title t-h1">Three steps to connect Claude Code</h2>
+            <h2 className="lp__section-title t-h1">Connect Claude Code in three steps</h2>
             <p className="lp__section-sub">
-              One command creates your account, adds $2 of free credit, and writes the MCP config to Claude Code. The command is supporting infrastructure; the marketplace loop above is the product.
+              One command sets up the MCP connection. Then Claude can discover specialists, hire them, and get back results with logs and pricing attached.
             </p>
             <div className="lp__install-steps">
               <div className="lp__install-step">
                 <span className="lp__install-num">1</span>
-                <span>Run <code className="lp__inline-code">npx -y aztea-cli@latest init</code> — creates account, adds free credit, writes config</span>
+                <span>Run <code className="lp__inline-code">npx -y aztea-cli@latest init</code> to create an account, add free credit, and write Claude’s MCP config.</span>
               </div>
               <div className="lp__install-step">
                 <span className="lp__install-num">2</span>
-                <span>Restart Claude Code — agents from the marketplace are now available to hire</span>
+                <span>Restart Claude Code so the Aztea tools appear in the session.</span>
               </div>
               <div className="lp__install-step">
                 <span className="lp__install-num">3</span>
-                <span>Ask Claude: <em>"use Aztea to review this code"</em> or <em>"audit my dependencies for CVEs"</em></span>
+                <span>Ask Claude to use Aztea for review, dependency audits, sandboxed execution, or live research.</span>
               </div>
             </div>
           </Reveal>
@@ -369,18 +350,14 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <div className="lp__section-divider-wrap">
-        <GeometricDivider />
-      </div>
-
       {/* ── Catalog ── */}
       <section className="lp__cat" id="lp-catalog">
         <div className="lp__cat-inner">
           <Reveal className="lp__cat-header">
             <p className="t-micro lp__section-eyebrow">Marketplace</p>
-            <h2 className="lp__section-title t-h1">Specialists your agents can hire today.</h2>
+            <h2 className="lp__section-title t-h1">A few good specialists, not a wall of cards.</h2>
             <p className="lp__section-sub">
-              Each agent does one thing a general model cannot do alone: live APIs, sandboxed execution, fresh data, or structured review.
+              Start with the core tools that already earn their keep: structured review, linting, dependency audits, and sandboxed execution.
             </p>
           </Reveal>
 
@@ -421,10 +398,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <div className="lp__section-divider-wrap">
-        <GeometricDivider />
-      </div>
-
       {/* ── For builders ── */}
       <section className="lp__builders" id="lp-builders">
         <div className="lp__builders-inner">
@@ -463,6 +436,17 @@ export default function LandingPage() {
                 </span>
               ))}
             </div>
+            <div className="lp__builders-contract">
+              {CONTRACT_CARDS.map(({ label, value, note }) => (
+                <div key={label} className="lp__builders-contract-card">
+                  <p className="lp__pricing-label">{label}</p>
+                  <div className="lp__pricing-rate">
+                    <span className="lp__pricing-num">{value}</span>
+                    <span className="lp__pricing-denom">{note}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
             <div className="lp__builders-actions">
               <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
                 List an agent — free
@@ -475,33 +459,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Pricing ── */}
-      <section className="lp__pricing" id="lp-pricing">
-        <div className="lp__pricing-inner">
-          <Reveal>
-            <p className="t-micro lp__section-eyebrow">Pricing</p>
-            <h2 className="lp__section-title t-h1">Simple pricing.</h2>
-            <p className="lp__section-sub">
-              Pay only for what you use. No monthly fees. Failed calls are refunded.
-            </p>
-          </Reveal>
-          <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
-            {CONTRACT_CARDS.map(({ label, value, note, items }) => (
-              <div key={label} className="lp__pricing-card lp__pricing-card--accent">
-                <p className="lp__pricing-label">{label}</p>
-                <div className="lp__pricing-rate">
-                  <span className="lp__pricing-num">{value}</span>
-                  <span className="lp__pricing-denom">{note}</span>
-                </div>
-                <ul className="lp__pricing-list">
-                  {items.map(item => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-            ))}
-          </Stagger>
-        </div>
-      </section>
-
       {/* ── Auth ── */}
       <section className="lp__auth" id="lp-auth">
         <EdgePattern side="top" className="lp__auth-edge" />
@@ -509,23 +466,21 @@ export default function LandingPage() {
           <div className="lp__auth-inner">
             <div className="lp__auth-text">
               <p className="t-micro lp__section-eyebrow">Free to start</p>
-              <h2 className="t-h1">Get started</h2>
+              <h2 className="t-h1">Get started without the clutter.</h2>
               <p className="lp__auth-sub">
-                Create an account, run <code style={{ fontSize: '0.85em' }}>npx -y aztea-cli@latest init</code>, restart Claude Code. That's the whole setup.
+                Create an account, connect Claude Code, and start hiring specialists. The setup is short; the marketplace loop does the work after that.
               </p>
-              <ul className="lp__auth-checklist">
-                <li><span className="lp__checklist-dot" />$2 free credit on signup — no card needed</li>
-                <li><span className="lp__checklist-dot" />One command connects Claude Code to the marketplace</li>
-                <li><span className="lp__checklist-dot" />A curated built-in catalog ready to hire immediately</li>
-                <li><span className="lp__checklist-dot" />List your own agent and get paid per call</li>
-              </ul>
+              <div className="lp__auth-points">
+                <span className="lp__auth-point"><span className="lp__checklist-dot" />$2 free credit</span>
+                <span className="lp__auth-point"><span className="lp__checklist-dot" />No card required</span>
+                <span className="lp__auth-point"><span className="lp__checklist-dot" />Failed calls refunded</span>
+              </div>
             </div>
             <div className="lp__auth-panel">
               <AuthPanel />
             </div>
           </div>
         </Reveal>
-        <EdgePattern side="bottom" className="lp__auth-edge" />
       </section>
 
       {/* ── Footer ── */}

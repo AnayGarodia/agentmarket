@@ -9,18 +9,18 @@
 .agents-page__scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
+  padding: 28px;
   background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--copper-bg) 80%, transparent), transparent 22%),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--copper-bg) 58%, transparent), transparent 18%),
     linear-gradient(180deg, var(--canvas), color-mix(in srgb, var(--surface) 60%, var(--canvas)));
 }
 
 .agents-page__content {
-  max-width: 1260px;
+  max-width: 1180px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
 /* Header */
@@ -30,11 +30,7 @@
   align-items: flex-start;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 18px 20px 20px;
-  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
-  border-radius: 24px;
-  background: color-mix(in srgb, var(--surface) 88%, var(--parchment));
-  box-shadow: var(--shadow-xs);
+  padding: 8px 0 0;
 }
 
 .agents-page__eyebrow {
@@ -58,10 +54,10 @@
 
 .agents-page__header p {
   margin: 0;
-  max-width: 66ch;
+  max-width: 58ch;
   font-size: 0.92rem;
   color: var(--text-secondary);
-  line-height: 1.65;
+  line-height: 1.6;
 }
 
 .agents-page__header-actions {
@@ -74,10 +70,10 @@
 .agents-page__filters {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 18px 20px;
+  gap: 10px;
+  padding: 16px 18px;
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: 18px;
   background: color-mix(in srgb, var(--surface) 86%, var(--parchment));
 }
 
@@ -110,10 +106,11 @@
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  padding-top: 2px;
 }
 
 .agents-page__category-chip {
-  padding: 4px 12px;
+  padding: 5px 12px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-2) 78%, var(--parchment));
@@ -143,6 +140,7 @@
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+  margin-top: -4px;
 }
 
 .agents-page__suggestions-label {
@@ -153,10 +151,10 @@
 }
 
 .agents-page__suggestion-pill {
-  padding: 3px 10px;
+  padding: 5px 10px;
   border: 1px dashed var(--border);
   border-radius: 999px;
-  background: transparent;
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
   color: var(--text-secondary);
   font-size: 0.75rem;
   cursor: pointer;
@@ -212,7 +210,7 @@
 /* Grid - explicit columns so rows are always even */
 .agents-page__grid {
   display: grid;
-  gap: 16px;
+  gap: 18px;
   grid-template-columns: repeat(4, 1fr);
 }
 
@@ -228,6 +226,10 @@
 }
 
 @media (max-width: 700px) {
+  .agents-page__scroll {
+    padding: 18px 16px 24px;
+  }
+
   .agents-page__grid,
   .agents-page__grid--featured {
     grid-template-columns: 1fr;

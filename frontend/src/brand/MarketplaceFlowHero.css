@@ -1,12 +1,12 @@
 .mfh {
   position: relative;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
-  border-radius: 28px;
+  border-radius: 22px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, var(--parchment)), var(--surface)),
     var(--surface);
   box-shadow: var(--shadow-lg);
-  padding: 28px;
+  padding: 24px;
   overflow: hidden;
 }
 
@@ -15,18 +15,18 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 22% 18%, color-mix(in srgb, var(--accent-bg) 75%, transparent), transparent 42%),
-    radial-gradient(circle at 80% 28%, color-mix(in srgb, var(--copper-bg) 82%, transparent), transparent 38%);
+    radial-gradient(circle at 22% 18%, color-mix(in srgb, var(--accent-bg) 56%, transparent), transparent 36%),
+    radial-gradient(circle at 80% 28%, color-mix(in srgb, var(--copper-bg) 60%, transparent), transparent 34%);
   pointer-events: none;
 }
 
 .mfh__halo {
   position: absolute;
   inset: 16px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 22%, transparent);
-  border-radius: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 18px;
   pointer-events: none;
-  opacity: 0.8;
+  opacity: 0.7;
 }
 
 .mfh__grid,
@@ -39,7 +39,7 @@
   display: grid;
   grid-template-columns: 1.05fr 88px 1.3fr 1.25fr;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
 .mfh__node,
@@ -47,16 +47,16 @@
 .mfh__artifact-card {
   background: color-mix(in srgb, var(--surface) 84%, var(--parchment));
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: 16px;
   box-shadow: var(--shadow-sm);
 }
 
 .mfh__node {
-  padding: 18px 18px 16px;
+  padding: 16px 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-height: 170px;
+  gap: 10px;
+  min-height: 154px;
 }
 
 .mfh__node-icon {
@@ -96,12 +96,12 @@
 .mfh__market-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .mfh__market-tags span {
-  font-size: 0.72rem;
-  padding: 4px 8px;
+  font-size: 0.68rem;
+  padding: 3px 7px;
   border-radius: 999px;
   border: 1px solid var(--accent-border);
   background: var(--accent-bg);
@@ -126,14 +126,14 @@
 
 .mfh__specialists {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .mfh__specialist {
-  padding: 14px 16px 12px;
+  padding: 13px 14px 11px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .mfh__specialist-head {
@@ -162,10 +162,10 @@
 }
 
 .mfh__return {
-  margin-top: 18px;
+  margin-top: 16px;
   display: grid;
   grid-template-columns: 1fr minmax(0, 340px);
-  gap: 18px;
+  gap: 16px;
   align-items: center;
 }
 
@@ -181,7 +181,7 @@
 }
 
 .mfh__artifact-card {
-  padding: 16px 18px;
+  padding: 14px 16px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, var(--sage-bg)), var(--surface));
 }
 
