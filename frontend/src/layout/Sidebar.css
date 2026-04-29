@@ -2,8 +2,9 @@
   width: var(--sidebar-w);
   min-width: var(--sidebar-w);
   height: 100%;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 90%, var(--parchment)), var(--surface));
+  border-right: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -20,15 +21,27 @@
   text-decoration: none;
   flex-shrink: 0;
   transition: opacity 0.15s ease;
+  position: relative;
 }
 .sidebar__brand:hover { opacity: 0.8; }
+
+.sidebar__brand::after {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 8px;
+  height: 1px;
+  background:
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--copper) 35%, var(--border)), transparent);
+}
 
 
 .sidebar__wordmark {
   font-size: 1.0625rem;
   font-family: var(--font-display);
   font-weight: 700;
-  color: var(--accent);
+  color: var(--text-primary);
   letter-spacing: -0.02em;
 }
 
@@ -55,7 +68,7 @@
   border-radius: var(--r-md);
   font-size: 0.8125rem;
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   position: relative;
   transition: color 0.15s ease;
@@ -65,11 +78,11 @@
   position: absolute;
   inset: 0;
   border-radius: var(--r-md);
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
+  background: color-mix(in srgb, var(--accent-bg) 82%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--copper) 36%, var(--accent-border));
 }
 
-.sidebar__link:hover { color: var(--text-secondary); }
+.sidebar__link:hover { color: var(--text-primary); }
 .sidebar__link--active { color: var(--accent); }
 
 .sidebar__link-icon { flex-shrink: 0; position: relative; z-index: 1; }
@@ -150,7 +163,7 @@
   transition: color 0.15s;
 }
 
-.sidebar__legal-link:hover { color: var(--text-secondary); }
+.sidebar__legal-link:hover { color: var(--copper); }
 
 .sidebar__legal-sep {
   font-size: 0.6875rem;
@@ -183,7 +196,7 @@
   cursor: pointer;
   transition: background 0.15s ease;
 }
-.sidebar__user:hover { background: var(--surface-2); }
+.sidebar__user:hover { background: color-mix(in srgb, var(--surface-2) 76%, var(--parchment)); }
 
 .sidebar__user-info { flex: 1; min-width: 0; }
 .sidebar__username {

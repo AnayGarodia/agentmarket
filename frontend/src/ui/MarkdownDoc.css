@@ -27,7 +27,7 @@
   letter-spacing: -0.01em;
   margin: 2em 0 0.5em;
   padding-bottom: 0.4em;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid color-mix(in srgb, var(--copper) 30%, var(--border));
 }
 
 .markdown-doc h3 {
@@ -75,9 +75,9 @@
 }
 
 .markdown-doc code {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface-2) 76%, var(--parchment));
+  border: 1px solid color-mix(in srgb, var(--copper) 22%, var(--border));
+  border-radius: 7px;
   padding: 0.12em 0.38em;
   font-family: var(--font-mono);
   font-size: 0.8em;
@@ -85,12 +85,14 @@
 }
 
 .markdown-doc pre {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  background: #123231;
+  color: #f4ede0;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 18px;
   padding: 1rem 1.2rem;
   overflow-x: auto;
   line-height: 1.6;
+  box-shadow: var(--shadow-sm);
 }
 
 .markdown-doc pre code {
@@ -98,6 +100,7 @@
   padding: 0;
   background: transparent;
   font-size: 0.8125rem;
+  color: inherit;
 }
 
 .markdown-doc .md-codeblock {
@@ -119,9 +122,9 @@
   padding: 4px 8px;
   font-size: 0.6875rem;
   font-weight: 600;
-  color: var(--text-secondary);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  color: rgba(244, 237, 224, 0.88);
+  background: rgba(244, 237, 224, 0.08);
+  border: 1px solid rgba(244, 237, 224, 0.18);
   border-radius: var(--r-sm);
   cursor: pointer;
   opacity: 0.6;
@@ -132,8 +135,8 @@
   opacity: 1;
 }
 .markdown-doc .md-codeblock__copy:hover {
-  background: var(--surface-2);
-  color: var(--text-primary);
+  background: rgba(244, 237, 224, 0.15);
+  color: #fff;
 }
 .markdown-doc .md-codeblock__copy.is-copied {
   opacity: 1;
@@ -153,7 +156,7 @@
 }
 
 .markdown-doc blockquote {
-  border-left: 3px solid var(--accent-border);
+  border-left: 3px solid color-mix(in srgb, var(--copper) 55%, var(--accent-border));
   padding-left: 1rem;
   color: var(--text-muted);
   font-style: italic;
@@ -177,7 +180,7 @@
 
 .markdown-doc th {
   color: var(--text-primary);
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--surface-2) 78%, var(--parchment));
   font-weight: 600;
   font-size: 0.8125rem;
   letter-spacing: 0.02em;

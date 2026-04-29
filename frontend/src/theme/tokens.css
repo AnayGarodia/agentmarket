@@ -72,58 +72,66 @@
   color-scheme: light;
 
   /* Surfaces */
-  --canvas:    #F2EFE8;
-  --surface:   #FAF8F3;
-  --surface-2: #ECEAE1;
-  --surface-3: #E2DED3;
-  --overlay:   rgba(250, 248, 243, 0.92);
+  --canvas:    #F6F0E3;
+  --surface:   #FCF8F0;
+  --surface-2: #F2E8D8;
+  --surface-3: #E7D7C0;
+  --overlay:   rgba(252, 248, 240, 0.92);
 
   /* Borders */
-  --border:        #D8D3C8;
-  --border-bright: #C4BDB0;
-  --divider:       rgba(0, 0, 0, 0.06);
+  --border:        #D7C7B0;
+  --border-bright: #C2A887;
+  --divider:       rgba(39, 54, 53, 0.1);
 
   /* Text */
-  --text-primary:   #18160F;
-  --text-secondary: #58524A;
-  --text-muted:     #98928A;
-  --text-inverse:   #FAF8F3;
+  --text-primary:   #173C3B;
+  --text-secondary: #49615E;
+  --text-muted:     #877868;
+  --text-inverse:   #F9F4EA;
 
-  /* Mineral gold accent */
-  --accent:        #8B7235;
-  --accent-hover:  #9B8245;
-  --accent-press:  #705C28;
-  --accent-bg:     rgba(139, 114, 53, 0.07);
-  --accent-border: rgba(139, 114, 53, 0.22);
-  --accent-glow:   rgba(139, 114, 53, 0.16);
-  --accent-glow-lg: rgba(139, 114, 53, 0.08);
-  --accent-ink:    #FAF8F3;
+  /* AZTEA brand accents */
+  --accent:         #165D63;
+  --accent-hover:   #0F4D52;
+  --accent-press:   #0B3E42;
+  --accent-bg:      rgba(22, 93, 99, 0.08);
+  --accent-border:  rgba(22, 93, 99, 0.24);
+  --accent-glow:    rgba(22, 93, 99, 0.18);
+  --accent-glow-lg: rgba(22, 93, 99, 0.1);
+  --accent-ink:     #F9F4EA;
   /* Legacy alias */
-  --accent-2:      #705C28;
+  --accent-2:       #B86B43;
+  --copper:         #B86B43;
+  --copper-strong:  #9E5634;
+  --copper-bg:      rgba(184, 107, 67, 0.1);
+  --sage:           #607B67;
+  --sage-bg:        rgba(96, 123, 103, 0.12);
+  --sage-border:    rgba(96, 123, 103, 0.26);
+  --parchment:      #F4ECDF;
+  --stone:          #B39C80;
 
   /* Signals - vivid, unmistakable */
-  --positive:        #16A34A;
-  --positive-bg:     rgba(22, 163, 74, 0.1);
-  --positive-border: rgba(22, 163, 74, 0.3);
+  --positive:        #607B67;
+  --positive-bg:     rgba(96, 123, 103, 0.12);
+  --positive-border: rgba(96, 123, 103, 0.28);
 
-  --negative:        #DC2626;
-  --negative-bg:     rgba(220, 38, 38, 0.1);
-  --negative-border: rgba(220, 38, 38, 0.3);
+  --negative:        #A25343;
+  --negative-bg:     rgba(162, 83, 67, 0.12);
+  --negative-border: rgba(162, 83, 67, 0.3);
 
-  --warn:        #B45309;
-  --warn-bg:     rgba(180, 83, 9, 0.1);
-  --warn-border: rgba(180, 83, 9, 0.3);
+  --warn:        #B86B43;
+  --warn-bg:     rgba(184, 107, 67, 0.12);
+  --warn-border: rgba(184, 107, 67, 0.3);
 
-  --info:        #2563EB;
-  --info-bg:     rgba(37, 99, 235, 0.08);
-  --info-border: rgba(37, 99, 235, 0.25);
+  --info:        #165D63;
+  --info-bg:     rgba(22, 93, 99, 0.08);
+  --info-border: rgba(22, 93, 99, 0.24);
 
   /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(0,0,0,.06);
-  --shadow-sm: 0 2px 8px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
-  --shadow-md: 0 4px 20px rgba(0,0,0,.09), 0 2px 6px rgba(0,0,0,.05);
-  --shadow-lg: 0 8px 40px rgba(0,0,0,.12), 0 4px 12px rgba(0,0,0,.06);
-  --shadow-accent: 0 4px 24px rgba(139,114,53,0.2), 0 0 0 1px var(--accent-border);
+  --shadow-xs: 0 1px 2px rgba(47, 39, 28, .05);
+  --shadow-sm: 0 2px 10px rgba(47, 39, 28, .07), 0 1px 2px rgba(47, 39, 28, .04);
+  --shadow-md: 0 8px 28px rgba(47, 39, 28, .1), 0 2px 8px rgba(47, 39, 28, .05);
+  --shadow-lg: 0 20px 48px rgba(47, 39, 28, .12), 0 6px 18px rgba(47, 39, 28, .08);
+  --shadow-accent: 0 6px 26px rgba(22, 93, 99, 0.18), 0 0 0 1px var(--accent-border);
   --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--accent);
 
   /* Legacy aliases */
@@ -145,58 +153,66 @@
   color-scheme: dark;
 
   /* Surfaces */
-  --canvas:    #070B14;
-  --surface:   #0D1424;
-  --surface-2: #121D33;
-  --surface-3: #1A2944;
-  --overlay:   rgba(13, 20, 36, 0.92);
+  --canvas:    #102222;
+  --surface:   #142A2A;
+  --surface-2: #1A3433;
+  --surface-3: #224140;
+  --overlay:   rgba(20, 42, 42, 0.92);
 
   /* Borders */
-  --border:        #24324D;
-  --border-bright: #324765;
-  --divider:       rgba(255, 255, 255, 0.05);
+  --border:        #2F4B4B;
+  --border-bright: #536E69;
+  --divider:       rgba(255, 245, 231, 0.08);
 
   /* Text */
-  --text-primary:   #E8F0FF;
-  --text-secondary: #A3B6D7;
-  --text-muted:     #6D84AA;
-  --text-inverse:   #070B14;
+  --text-primary:   #F5EEDF;
+  --text-secondary: #C4C0B4;
+  --text-muted:     #948D81;
+  --text-inverse:   #102222;
 
-  /* Cool electric accent */
-  --accent:        #61ADFF;
-  --accent-hover:  #7BBCFF;
-  --accent-press:  #4389D8;
-  --accent-bg:     rgba(97, 173, 255, 0.16);
-  --accent-border: rgba(97, 173, 255, 0.38);
-  --accent-glow:   rgba(97, 173, 255, 0.28);
-  --accent-glow-lg: rgba(97, 173, 255, 0.14);
-  --accent-ink:    #041024;
+  /* Dark-mode AZTEA accents */
+  --accent:         #7EB9B0;
+  --accent-hover:   #97C8C0;
+  --accent-press:   #5E9A92;
+  --accent-bg:      rgba(126, 185, 176, 0.14);
+  --accent-border:  rgba(126, 185, 176, 0.3);
+  --accent-glow:    rgba(126, 185, 176, 0.2);
+  --accent-glow-lg: rgba(126, 185, 176, 0.1);
+  --accent-ink:     #112020;
   /* Legacy alias */
-  --accent-2:      #4389D8;
+  --accent-2:       #D08E67;
+  --copper:         #D08E67;
+  --copper-strong:  #E5A47E;
+  --copper-bg:      rgba(208, 142, 103, 0.12);
+  --sage:           #8FB49A;
+  --sage-bg:        rgba(143, 180, 154, 0.12);
+  --sage-border:    rgba(143, 180, 154, 0.3);
+  --parchment:      #1C312F;
+  --stone:          #9B8B73;
 
   /* Signals - vivid, unmistakable */
-  --positive:        #22C55E;
-  --positive-bg:     rgba(34, 197, 94, 0.1);
-  --positive-border: rgba(34, 197, 94, 0.3);
+  --positive:        #8FB49A;
+  --positive-bg:     rgba(143, 180, 154, 0.12);
+  --positive-border: rgba(143, 180, 154, 0.3);
 
-  --negative:        #EF4444;
-  --negative-bg:     rgba(239, 68, 68, 0.1);
-  --negative-border: rgba(239, 68, 68, 0.3);
+  --negative:        #D08A76;
+  --negative-bg:     rgba(208, 138, 118, 0.12);
+  --negative-border: rgba(208, 138, 118, 0.28);
 
-  --warn:        #F7C35E;
-  --warn-bg:     rgba(247, 195, 94, 0.12);
-  --warn-border: rgba(247, 195, 94, 0.36);
+  --warn:        #D08E67;
+  --warn-bg:     rgba(208, 142, 103, 0.12);
+  --warn-border: rgba(208, 142, 103, 0.32);
 
-  --info:        #75BAFF;
-  --info-bg:     rgba(117, 186, 255, 0.13);
-  --info-border: rgba(117, 186, 255, 0.34);
+  --info:        #7EB9B0;
+  --info-bg:     rgba(126, 185, 176, 0.12);
+  --info-border: rgba(126, 185, 176, 0.3);
 
   /* Shadows */
-  --shadow-xs: 0 1px 3px rgba(0,0,0,.5);
-  --shadow-sm: 0 2px 8px rgba(0,0,0,.55), 0 1px 2px rgba(0,0,0,.35);
-  --shadow-md: 0 4px 20px rgba(0,0,0,.65), 0 2px 6px rgba(0,0,0,.4);
-  --shadow-lg: 0 12px 48px rgba(0,0,0,.75), 0 4px 12px rgba(0,0,0,.4);
-  --shadow-accent: 0 4px 24px rgba(97,173,255,0.26), 0 0 0 1px var(--accent-border);
+  --shadow-xs: 0 1px 3px rgba(0,0,0,.45);
+  --shadow-sm: 0 2px 10px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.32);
+  --shadow-md: 0 10px 26px rgba(0,0,0,.56), 0 2px 8px rgba(0,0,0,.35);
+  --shadow-lg: 0 22px 56px rgba(0,0,0,.64), 0 6px 18px rgba(0,0,0,.38);
+  --shadow-accent: 0 8px 26px rgba(126, 185, 176, 0.16), 0 0 0 1px var(--accent-border);
   --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--accent);
 
   /* Legacy aliases */

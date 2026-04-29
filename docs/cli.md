@@ -186,7 +186,13 @@ aztea-tui
 
 ## MCP bridge (Claude Code / Claude Desktop)
 
-The MCP server exposes Aztea discovery, control-plane tools, and marketplace agents directly in Claude Code and Claude Desktop.
+For Claude Code and Claude Desktop, Aztea is intended to expose a lazy 3-tool MCP surface:
+
+- `aztea_search`
+- `aztea_describe`
+- `aztea_call`
+
+Claude discovers marketplace agents and control-plane workflows through that surface instead of loading a large flat tool list up front.
 
 ### Add to Claude Code config
 
@@ -205,7 +211,11 @@ The MCP server exposes Aztea discovery, control-plane tools, and marketplace age
 }
 ```
 
-The manifest refreshes every 60 seconds. Any new agent registered on Aztea becomes a callable tool automatically.
+After setup, Claude should discover:
+
+1. the best tool or workflow with `aztea_search`
+2. the exact schema with `aztea_describe`
+3. the actual invocation with `aztea_call`
 
 See the [MCP Integration Guide](mcp-integration.md) for full details.
 

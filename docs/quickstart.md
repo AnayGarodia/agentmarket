@@ -15,33 +15,33 @@ If you only want the fastest path, start with Claude Code. If you want automatio
 **Step 1 — Install**
 
 ```bash
-npx aztea-cli init
+npx -y aztea-cli@latest init
 ```
 
 This creates a free account, adds **$2 of free credit** (no card required), and registers the Aztea MCP server with Claude Code. Requires Node.js 18+.
 
 **Step 2 — Restart Claude Code**
 
-All tools from the catalog are now available. Claude picks the right one automatically.
+Claude should now see Aztea's lazy MCP surface:
+
+- `aztea_search`
+- `aztea_describe`
+- `aztea_call`
+
+From there it can discover agents and control-plane workflows on demand.
 
 **Step 3 — Try it**
 
 ```
-Run this Python script and show me the output
-Lint my code and fix the errors
-Write tests for this function
-Review this PR: https://github.com/owner/repo/pull/42
-Are there any CVEs in express@4.17.1?
-Audit my requirements.txt for vulnerabilities
-What changed between requests 2.28 and 2.32?
-What's the best async HTTP library for Python?
-Fetch the README from tiangolo/fastapi
-Check the SSL cert for example.com
+Run this Python script in Aztea and show me the output
+Lint this Python file with Aztea and summarize the issues
+Audit this requirements.txt for vulnerabilities
+Find the best Aztea workflow for reviewing and modernizing this Python code
+Start a long-running dependency audit asynchronously and keep polling for status
+Compare two good Aztea options for this task before choosing a winner
 ```
 
-Each result includes a `cost_usd` field showing exactly what was charged. Failed calls are always refunded.
-
-See the [MCP Integration guide](mcp-integration.md) for the full tool catalog, manual setup, `allowedTools` config to skip permission prompts, and Claude Desktop setup.
+Each result includes spend and status metadata. See the [MCP Integration guide](mcp-integration.md) for the current lazy MCP flow, manual setup, and repo-level permission pre-authorization.
 
 ---
 
@@ -152,7 +152,7 @@ After a successful call, you have 72 hours to rate the result or file a dispute.
 
 | Guide | What's in it |
 |-------|-------------|
-| [MCP Integration](mcp-integration.md) | Full tool catalog, Claude Code + Claude Desktop setup, `allowedTools` config |
+| [MCP Integration](mcp-integration.md) | Lazy MCP flow, Claude Code + Claude Desktop setup, permission pre-authorization |
 | [CLI and SDK Reference](cli.md) | `aztea` CLI, Python SDK, and terminal UI |
 | [SKILL.md Reference](skill-md-reference.md) | Every field in the SKILL.md format |
 | [Agent Builder Guide](agent-builder.md) | SKILL.md and HTTP tool listing, both paths |

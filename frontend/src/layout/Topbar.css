@@ -1,7 +1,7 @@
 .topbar {
   height: var(--topbar-h);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
+  background: color-mix(in srgb, var(--surface) 88%, var(--parchment));
   display: flex;
   align-items: center;
   gap: 16px;
@@ -38,7 +38,9 @@
   transition: color 0.15s ease;
   white-space: nowrap;
 }
-.topbar__crumb-link:hover { color: var(--text-primary); }
+.topbar__crumb-link:hover {
+  color: var(--copper);
+}
 
 .topbar__crumb-current {
   font-size: 0.8125rem;
@@ -59,7 +61,7 @@
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: var(--r-pill);
+  border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
@@ -67,7 +69,7 @@
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 .topbar__themetoggle:hover {
-  color: var(--text-primary);
+  color: var(--accent);
   border-color: var(--accent-border);
   background: var(--accent-bg);
 }
@@ -76,8 +78,8 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
+  background: color-mix(in srgb, var(--surface) 78%, var(--accent-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
   border-radius: var(--r-pill);
   padding: 5px 12px;
   font-family: var(--font-mono);
@@ -90,7 +92,7 @@
   font-feature-settings: 'tnum';
 }
 .topbar__balance:hover {
-  background: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-bg) 72%, var(--surface));
   box-shadow: 0 0 12px var(--accent-glow);
 }
 

@@ -1,0 +1,33 @@
+.geo-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.geo-divider__line {
+  flex: 1;
+  height: 1px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--copper) 40%, var(--border)),
+      transparent
+    );
+}
+
+.geo-divider__motif {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 3px;
+}
+
+.geo-divider__motif span {
+  width: 8px;
+  height: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border-bright));
+  transform: rotate(45deg);
+  background: color-mix(in srgb, var(--surface) 72%, var(--parchment));
+}

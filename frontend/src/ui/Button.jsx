@@ -20,9 +20,9 @@ export default function Button({
     >
       {loading
         ? <Loader2 size={14} className="btn__spinner" />
-        : icon}
-      {children}
-      {!loading && iconRight}
+        : (icon ? <span className="btn__icon btn__icon--left">{icon}</span> : null)}
+      <span className="btn__label">{children}</span>
+      {!loading && iconRight ? <span className="btn__icon btn__icon--right">{iconRight}</span> : null}
     </button>
   )
 }

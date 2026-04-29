@@ -3,7 +3,7 @@ import { motion } from 'motion/react'
 import AgentSigil from '../../brand/AgentSigil'
 import Pill from '../../ui/Pill'
 import ModelBadge from '../../components/ModelBadge'
-import { ArrowRight, AlertTriangle, BookOpen } from 'lucide-react'
+import { ArrowRight, AlertTriangle, BadgeCheck, BookOpen } from 'lucide-react'
 import './AgentCard.css'
 
 function healthDot(agent) {
@@ -41,6 +41,10 @@ export default function AgentCard({ agent, index = 0, showTrust = false }) {
   const highDispute = typeof agent.dispute_rate === 'number' && agent.dispute_rate > 0.10
   const exampleCount = Array.isArray(agent.output_examples) ? agent.output_examples.length : 0
   const kindLabel = KIND_LABELS[agent.kind] ?? null
+  const categoryLabel = String(agent.category || agent.tags?.[0] || 'General')
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, (s) => s.toUpperCase())
+  const verified = agent.kind === 'aztea_built'
   const privacyChips = [
     agent.pii_safe ? 'PII-safe' : null,
     agent.outputs_not_stored ? 'No output storage' : null,
@@ -75,6 +79,10 @@ export default function AgentCard({ agent, index = 0, showTrust = false }) {
       <div className="ac__head">
         <AgentSigil agentId={agent.agent_id} size="md" className="ac__sigil" />
         <div className="ac__head-meta">
+          <div className="ac__eyebrow-row">
+            <span className="ac__category-pill">{categoryLabel}</span>
+            {verified && <span className="ac__trust-pill"><BadgeCheck size={11} /> Verified</span>}
+          </div>
           <p className="ac__name">{agent.name}{healthDot(agent)}</p>
           <div className="ac__head-sub">
             <span className="ac__price">{price}</span>
@@ -83,7 +91,7 @@ export default function AgentCard({ agent, index = 0, showTrust = false }) {
             )}
           </div>
         </div>
-        {kindLabel && (
+        {kindLabel && !verified && (
           <span className={`ac__kind-chip ac__kind-chip--${agent.kind}`}>{kindLabel}</span>
         )}
       </div>

@@ -615,7 +615,7 @@ _TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "recipe_id": {
                     "type": "string",
-                    "description": "Recipe ID from GET /recipes, such as 'review-and-test'.",
+                    "description": "Recipe ID from GET /recipes, such as 'review-and-lint' or 'modernize-python'.",
                 },
                 "recipe_name": {
                     "type": "string",

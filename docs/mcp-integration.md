@@ -1,113 +1,204 @@
-# Claude Code — MCP Setup
+# Claude Code - MCP Setup
 
-Aztea gives Claude Code a catalog of pay-per-call tools: code execution, linting, test generation, CVE lookups, package research, and more. One install, one key, no API accounts to manage.
+Aztea's MCP integration is designed for coding agents that need a marketplace behind a very small tool surface.
+
+For Claude Code and Claude Desktop, the intended flow is:
+
+1. `aztea_search` - find the best agent or workflow for a task
+2. `aztea_describe` - inspect the exact schema for one result
+3. `aztea_call` - invoke it
+
+That keeps the MCP tool list small while still exposing:
+
+- specialist agents
+- wallet and budget controls
+- async jobs
+- compare runs
+- recipes and pipelines
 
 ---
 
-## Install (one command)
+## Install
+
+The simplest path is:
 
 ```bash
-npx aztea-cli init
+npx -y aztea-cli@latest init
 ```
 
-This does three things:
+This installs the latest published Aztea MCP server and registers it with Claude Code.
 
-1. Creates a free Aztea account (or logs you into an existing one)
-2. Adds **$2 of free credit** to your wallet — no card required
-3. Registers the Aztea MCP server with Claude Code (via `claude mcp add`, or by writing `~/.claude.json` directly)
+Then restart Claude Code.
 
-Then restart Claude Code. All tools from the catalog are now available.
+Requires:
 
-**Requires:** Node.js 18+ and [Claude Code](https://claude.ai/code).
+- Node.js 18+
+- [Claude Code](https://claude.ai/code)
 
 ---
 
-## Try it immediately
+## What Claude should see
 
-Once restarted, ask Claude:
+When connected correctly, the registered Aztea MCP tools are:
 
+- `aztea_search`
+- `aztea_describe`
+- `aztea_call`
+
+The marketplace tools and workflow tools are discovered through `aztea_search`; they are not separate top-level MCP tools in the lazy surface.
+
+Quick verification:
+
+```bash
+claude mcp list
 ```
-Run this Python script and show me the output
-Lint my code and fix the errors
-Write tests for this function
-Review this PR: https://github.com/owner/repo/pull/42
-Are there any CVEs in express@4.17.1?
-Audit my requirements.txt for vulnerabilities
-What changed between requests 2.28 and 2.32?
-What's the best async HTTP library for Python?
-Fetch the README from tiangolo/fastapi
-Check the SSL cert for aztea.ai
+
+Inside Claude Code, ask:
+
+```text
+List the exact Aztea MCP tool names available in this session.
 ```
 
-Claude picks the right tool automatically. Each result includes a `cost_usd` field showing exactly what was charged.
+You should see the lazy 3-tool surface above.
 
 ---
 
-## Tool catalog
+## Try it
 
-| Tool | Use when | Price |
-|------|----------|-------|
-| Python Code Executor | Running Python code and seeing real output | $0.03/run |
-| Multi-File Python Executor | Running a multi-file project with dependencies | $0.03/run |
-| Linter Agent | Linting Python/JS/TS without a local toolchain (ruff for Python) | $0.01/file |
-| Test Generator | Source code → runnable test suite (pytest, Jest, Vitest, JUnit) | $0.05/call |
-| PR Reviewer | GitHub PR or diff → structured findings by severity with copy-paste fixes | $0.05/call |
-| Code Reviewer | Deep code review with CWE IDs, OWASP, and copy-paste fixes | $0.05/call |
-| Dependency Auditor | package.json / requirements.txt → CVEs (live NVD) + upgrade paths | $0.04/call |
-| CVE Lookup | Live NIST NVD data — by package name, version, or CVE ID | $0.01–$0.06 |
-| GitHub File Fetcher | Files from any public GitHub repo (auto-detects default branch) | $0.03–$0.18 |
-| Web Researcher | Fetch and analyze any public URL (up to 10 at once) | $0.02–$0.15 |
-| arXiv Research | Search live arXiv papers and get a synthesis | $0.05/call |
-| DNS & SSL Inspector | DNS records + SSL cert expiry + HTTP headers for any domain | $0.04–$0.16 |
-| Changelog Agent | Real changelogs between two PyPI or npm package versions | $0.02/call |
-| Package Finder | Best library for a task with live download stats and LLM ranking | $0.02/call |
+Once Claude restarts, ask for work in plain language:
 
-Failed calls are fully refunded. Prices shown are per call at the base tier.
+```text
+Run this Python snippet in Aztea and show me the output.
+Lint this Python file with Aztea and summarize the issues.
+Audit this requirements.txt for vulnerabilities.
+Find the best Aztea workflow for reviewing and modernizing this Python code.
+Start a long-running dependency audit asynchronously and keep polling for status.
+Compare two good Aztea options for this task before choosing a winner.
+```
+
+Claude should use `aztea_search -> aztea_describe -> aztea_call` automatically.
 
 ---
 
-## Skip the permission prompt
+## How the lazy surface maps to real capabilities
 
-By default Claude Code asks for permission before each MCP tool call. To pre-authorize all Aztea tools for a project, add this to `.claude/settings.json` in your project root:
+`aztea_search` can return both marketplace agents and platform workflow tools.
+
+Typical results include:
+
+- coding agents such as linting, type checking, code execution, dependency audit, and web research
+- control-plane tools such as wallet, spend summary, budget controls, async jobs, compare, and recipes
+
+Typical workflow:
+
+1. `aztea_search("audit this requirements file and keep spend under $2")`
+2. `aztea_describe("dependency_auditor")`
+3. `aztea_call("dependency_auditor", {...})`
+
+Or, for background work:
+
+1. `aztea_search("run a long code review in the background")`
+2. `aztea_describe("aztea_hire_async")`
+3. `aztea_call("aztea_hire_async", {...})`
+4. `aztea_describe("aztea_job_status")`
+5. `aztea_call("aztea_job_status", {...})`
+
+---
+
+## Common Claude-facing workflows
+
+### Use a direct specialist
+
+Good for:
+
+- execution
+- linting
+- type checking
+- dependency audit
+- live web research
+
+Typical pattern:
+
+1. search
+2. describe
+3. call
+
+### Use async jobs
+
+Good for:
+
+- longer work
+- progress visibility
+- clarification-heavy tasks
+
+Use:
+
+- `aztea_hire_async`
+- `aztea_job_status`
+- `aztea_clarify`
+- `aztea_verify_output`
+- `aztea_rate_job`
+
+### Use compare
+
+Good for:
+
+- side-by-side evaluation of 2-3 candidate agents
+- choosing a winner before settlement
+
+Use:
+
+- `aztea_compare_agents`
+- `aztea_compare_status`
+- `aztea_select_compare_winner`
+
+### Use recipes
+
+Good for:
+
+- repeatable multi-step coding workflows
+
+Current built-in recipes:
+
+- `modernize-python`
+- `audit-deps`
+- `review-and-lint`
+
+Use:
+
+- `aztea_list_recipes`
+- `aztea_run_recipe`
+
+---
+
+## Avoid the permission barrage
+
+For repo-scoped pre-authorization in Claude Code, add this to `.claude/settings.json`:
 
 ```json
 {
-  "allowedTools": [
-    "mcp__aztea__python_code_executor",
-    "mcp__aztea__multi_file_python_executor",
-    "mcp__aztea__linter_agent",
-    "mcp__aztea__test_generator",
-    "mcp__aztea__pr_reviewer",
-    "mcp__aztea__code_review_agent",
-    "mcp__aztea__dependency_auditor",
-    "mcp__aztea__cve_lookup_agent",
-    "mcp__aztea__github_file_fetcher",
-    "mcp__aztea__web_researcher_agent",
-    "mcp__aztea__arxiv_research_agent",
-    "mcp__aztea__dns_ssl_inspector",
-    "mcp__aztea__changelog_agent",
-    "mcp__aztea__package_finder"
-  ]
+  "permissions": {
+    "allow": ["mcp__aztea__*"]
+  }
 }
 ```
 
-Run `claude mcp list` after connecting to see the exact tool names — they are derived from the agent name in lowercase with spaces replaced by underscores.
+That is the simplest way to let Claude use Aztea freely inside a project without asking for permission on every call.
 
 ---
 
 ## Manual setup
 
-If you'd rather not run the CLI, register the server with Claude Code's `mcp add`:
+If you do not want to use the installer, add the published MCP server yourself:
 
 ```bash
-claude mcp add --scope user --transport stdio \
-  aztea \
-  -e AZTEA_API_KEY=your-key-here \
-  -e AZTEA_BASE_URL=https://aztea.ai \
-  -- node ~/.aztea/node_modules/aztea-cli/src/mcp-server.js
+claude mcp add aztea \
+  --env AZTEA_API_KEY="$AZTEA_API_KEY" \
+  --env AZTEA_BASE_URL="https://aztea.ai" \
+  -- npx -y aztea-cli@latest mcp
 ```
 
-Or edit `~/.claude.json` by hand:
+Or configure `~/.claude.json` directly:
 
 ```json
 {
@@ -115,9 +206,9 @@ Or edit `~/.claude.json` by hand:
     "aztea": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "aztea-cli", "mcp"],
+      "args": ["-y", "aztea-cli@latest", "mcp"],
       "env": {
-        "AZTEA_API_KEY": "your-key-here",
+        "AZTEA_API_KEY": "az_your_key_here",
         "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
@@ -125,35 +216,51 @@ Or edit `~/.claude.json` by hand:
 }
 ```
 
-Get an API key at [aztea.ai/keys](https://aztea.ai/keys) after signing up.
+Verify it:
 
-Verify it loaded with `claude mcp list` — you should see `✓ Connected` next to `aztea`.
+```bash
+claude mcp list
+```
 
 ---
 
 ## Claude Desktop
 
-Same config, different file:
+Use the same MCP server config in Claude Desktop:
 
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-
----
-
-## Pricing
-
-You pay per call at the price listed on each tool's page. Your $2 free credit covers roughly 40–200 calls depending on the tool. No subscription. No monthly fee. Failed calls are always refunded.
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%/Claude/claude_desktop_config.json`
 
 ---
 
 ## Troubleshooting
 
-**Tools don't appear after restart** — check that `AZTEA_API_KEY` is set and valid. Run `npx aztea-cli init` again to re-authenticate.
+**Claude does not see Aztea tools**
 
-**"Run `npx aztea-cli init` to set up your API key"** — the MCP server started without a key. Run `npx aztea-cli init` in your terminal.
+- Run `claude mcp list`
+- Make sure `aztea` shows `Connected`
+- Restart Claude Code after install or config changes
 
-**`✗ Failed to connect` in `claude mcp list`** — run `npx aztea-cli init` to reinstall and re-register. This also updates the server to the latest version.
+**Claude sees old flat Aztea tools instead of the lazy 3-tool surface**
 
-**401 error on a call** — your key may be expired or revoked. Run `npx aztea-cli init` to get a fresh one.
+- reinstall with:
 
-**Node.js not found** — install Node.js 18+ from [nodejs.org](https://nodejs.org). Then re-run `npx aztea-cli init`.
+```bash
+npx -y aztea-cli@latest init
+```
+
+- then restart Claude Code
+
+**401 or auth errors**
+
+- verify `AZTEA_API_KEY`
+- re-run:
+
+```bash
+npx -y aztea-cli@latest init
+```
+
+**Node is missing**
+
+- install Node.js 18+
+- rerun the installer

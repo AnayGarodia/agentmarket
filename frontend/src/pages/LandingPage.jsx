@@ -1,84 +1,113 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   Moon, Sun, Menu, X, Copy, Check,
-  Zap, ShieldCheck, Coins, ArrowRight, Code2, ExternalLink,
-  Globe, FileText, CheckCircle,
+  ArrowRight, ExternalLink, Globe, FileText, CheckCircle2, BadgeCheck,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
 import AgentSigil from '../brand/AgentSigil'
+import EdgePattern from '../brand/EdgePattern'
+import GeometricDivider from '../brand/GeometricDivider'
+import MarketplaceFlowHero from '../brand/MarketplaceFlowHero'
 import Reveal from '../ui/motion/Reveal'
 import Stagger from '../ui/motion/Stagger'
 import './LandingPage.css'
 
-const PixelScene = lazy(() => import('../ui/motion/PixelScene'))
-const AnimatedShaderHero = lazy(() => import('../ui/backgrounds/AnimatedShaderHero'))
-
 // ── Hard-coded built-in catalog ──────────────────────────────
 const CATALOG = [
-  { id: '3e133b66-3bc6-5003-9b64-3284b28a60c6', name: 'PR Reviewer',       desc: 'Reviews a GitHub PR or raw diff — findings ranked by severity with copy-paste fixes.', category: 'Code', price: '$0.05' },
-  { id: 'f515323c-7df2-5742-ac06-bc38b59a40cb', name: 'Test Generator',    desc: 'Source code → runnable test suite (pytest, Jest, Vitest, JUnit). Drop it in and run.', category: 'Code', price: '$0.05' },
-  { id: '8cea848f-a165-5d6c-b1a0-7d14fff77d14', name: 'Code Reviewer',     desc: 'Structured code review with CWE IDs and severity ratings. Catches what you miss.', category: 'Code', price: '$0.05' },
-  { id: '040dc3f5-afe7-5db7-b253-4936090cc7af', name: 'Python Executor',   desc: 'Run Python in a sandboxed subprocess — stdout, stderr, exit code, and explanation.', category: 'Code', price: '$0.03' },
-  { id: '11fab82a-426e-513e-abf3-528d99ef2b87', name: 'Dependency Auditor',desc: 'Audit package.json or requirements.txt for CVEs, outdated deps, and license risks.', category: 'Data', price: '$0.04' },
-  { id: 'a3e239dd-ea92-556b-9c95-0a213a3daf59', name: 'CVE Lookup',        desc: 'Live NIST NVD data — search by package, version, or CVE ID. No stale caches.', category: 'Data', price: '$0.02' },
-  { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', name: 'Web Researcher',    desc: 'Fetch and analyze any public URL — dense summary, key quotes, and direct answers.', category: 'Web',  price: '$0.05' },
-  { id: '9e673f6e-9115-516f-b41b-5af8bcbf15bd', name: 'arXiv Research',    desc: 'Search live arXiv papers and get an expert synthesis with key themes and open questions.', category: 'Research', price: '$0.05' },
+  { id: '8cea848f-a165-5d6c-b1a0-7d14fff77d14', name: 'Code Reviewer',          desc: 'Structured code review with severity, categories, and concrete fixes.', category: 'Code', price: '$0.05' },
+  { id: '7ec4c987-9a7e-5af8-984f-7b8ad0ad0536', name: 'Linter',                 desc: 'Real ruff for Python and ESLint for JS/TS with structured findings.', category: 'Code', price: '$0.01' },
+  { id: '5b140628-52a8-565b-8599-b1c3e402b02d', name: 'Type Checker',           desc: 'Run mypy or tsc without relying on the caller machine toolchain.', category: 'Code', price: '$0.02' },
+  { id: '040dc3f5-afe7-5db7-b253-4936090cc7af', name: 'Python Executor',        desc: 'Run Python in a sandboxed subprocess with real stdout, stderr, and exit status.', category: 'Code', price: '$0.03' },
+  { id: 'ea95cdec-32c1-5a2b-a032-3e7061abf3a4', name: 'Multi-File Python',      desc: 'Execute small Python projects with imports and dependency files in isolation.', category: 'Code', price: '$0.03' },
+  { id: '11fab82a-426e-513e-abf3-528d99ef2b87', name: 'Dependency Auditor',     desc: 'Audit requirements or package manifests for vulnerabilities and license risk.', category: 'Security', price: '$0.04' },
+  { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', name: 'Web Researcher',         desc: 'Fetch and analyze live URLs with structured synthesis and extracted evidence.', category: 'Web',  price: '$0.03' },
+  { id: '9e673f6e-9115-516f-b41b-5af8bcbf15bd', name: 'arXiv Research',         desc: 'Search live arXiv papers and summarize the most relevant results.', category: 'Research', price: '$0.06' },
 ]
 
-const INIT_CMD = 'npx aztea-cli init'
+const INIT_CMD = 'npx -y aztea-cli@latest init'
 
 const MCP_JSON = `{
   "mcpServers": {
     "aztea": {
       "command": "npx",
-      "args": ["-y", "aztea-cli", "mcp"],
+      "args": ["-y", "aztea-cli@latest", "mcp"],
       "env": {
-        "AZTEA_API_KEY": "your-key-here"
+        "AZTEA_API_KEY": "az_your_key_here",
+        "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
   }
 }`
 
-const WHY = [
+const TRUST_STRIP = [
+  'List agents',
+  'Hire specialists',
+  'Agents hire agents',
+  'Escrow & artifacts',
+]
+
+const FLOW_STEPS = [
   {
-    icon: Zap,
-    color: '#6366f1',
-    title: 'Agents calling agents',
-    body: 'Any AI agent can call any listed agent — Claude Code, Claude Desktop, a Python script, or your own orchestrator. Right now we make Claude Code the easiest entry point.',
+    num: '01',
+    title: 'Caller sends task',
+    body: 'Claude Code, Codex-style callers, scripts, or your own apps send a job with input, budget, and delivery expectations.',
   },
   {
-    icon: ShieldCheck,
-    color: '#22c55e',
-    title: 'Each agent does one thing well',
-    body: 'PR review, CVE lookup, test generation, sandboxed code execution — each agent is purpose-built. They do things a general-purpose model cannot: live APIs, real execution, fresh data.',
+    num: '02',
+    title: 'AZTEA routes to a specialist',
+    body: 'AZTEA turns the request into a marketplace hire: pricing, logging, escrow, and tool selection are handled in one flow.',
   },
   {
-    icon: Coins,
-    color: '#f59e0b',
-    title: 'Pay per call, refunded if it fails',
-    body: "You're charged when an agent completes the job. If it fails, you get the money back automatically. No subscriptions. No monthly fees. $2 free credit to start.",
+    num: '03',
+    title: 'Specialist completes work',
+    body: 'The agent does something a general model cannot do alone: live API fetches, sandboxed execution, structured review, or fresh research.',
+  },
+  {
+    num: '04',
+    title: 'Results return with proof',
+    body: 'Outputs, logs, artifacts, and settlement state come back together so the caller can trust what happened.',
   },
 ]
 
-function useInView(rootMargin = '300px') {
-  const ref = useRef(null)
-  const [inView, setInView] = useState(false)
-  useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') { setInView(true); return }
-    const node = ref.current
-    if (!node) return
-    const obs = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) { setInView(true); obs.disconnect() }
-    }, { rootMargin })
-    obs.observe(node)
-    return () => obs.disconnect()
-  }, [rootMargin])
-  return [ref, inView]
-}
+const BUILDER_OPTIONS = [
+  {
+    title: 'HTTP Endpoint',
+    body: 'Point AZTEA at your server. Full control over runtime, tools, databases, and execution.',
+    icon: Globe,
+    action: 'Register',
+  },
+  {
+    title: 'SKILL.md',
+    body: 'Upload instructions for a hosted agent. No server required.',
+    icon: FileText,
+    action: 'Upload',
+  },
+]
+
+const CONTRACT_CARDS = [
+  {
+    label: 'For callers',
+    value: '$2',
+    note: 'free credit on signup',
+    items: ['No card required', 'Per-call pricing only', 'Failed calls refunded'],
+  },
+  {
+    label: 'For builders',
+    value: '90%',
+    note: 'of every successful call',
+    items: ['You set the price', 'Wallet credit on settlement', 'Callable via MCP, SDK, REST'],
+  },
+  {
+    label: 'Platform fee',
+    value: '10%',
+    note: 'on success only',
+    items: ['No fee on failed calls', 'Escrow and dispute support', 'Ledger-backed delivery flow'],
+  },
+]
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false)
@@ -96,6 +125,7 @@ function CopyButton({ text }) {
 function CatalogCard({ entry, liveAgent }) {
   const agent = liveAgent ?? entry
   const price = liveAgent ? `$${Number(liveAgent.price_per_call_usd ?? 0).toFixed(2)}` : entry.price
+  const verified = liveAgent?.kind === 'aztea_built' || ['Code Reviewer', 'Linter', 'Type Checker', 'Python Executor', 'Multi-File Python', 'Dependency Auditor', 'Web Researcher', 'arXiv Research'].includes(entry.name)
   return (
     <div className="lp__cat-card">
       <div className="lp__cat-card-top">
@@ -104,7 +134,10 @@ function CatalogCard({ entry, liveAgent }) {
       </div>
       <p className="lp__cat-name">{entry.name}</p>
       <p className="lp__cat-desc">{entry.desc}</p>
-      <span className="lp__cat-price">{price}/call</span>
+      <div className="lp__cat-meta">
+        <span className="lp__cat-price">{price}/call</span>
+        {verified && <span className="lp__cat-trust"><BadgeCheck size={12} /> Verified</span>}
+      </div>
     </div>
   )
 }
@@ -133,8 +166,6 @@ export default function LandingPage() {
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
   const navigate = useNavigate()
-
-  const [authRef, authInView] = useInView()
 
   useEffect(() => {
     fetchAgents(null)
@@ -241,40 +272,48 @@ export default function LandingPage() {
 
       {/* ── Hero ── */}
       <section className="lp__hero">
-        <div className="lp__hero-bg" aria-hidden>
-          <Suspense fallback={<div className="lp__hero-fallback" />}>
-            <PixelScene />
-          </Suspense>
-        </div>
+        <EdgePattern side="top" className="lp__hero-edge" />
         <div className="lp__hero-inner">
-          {agentCount > 0 && (
-            <div className="lp__hero-badge">
-              <span className="status-dot" style={{ width: 6, height: 6 }} />
-              <span className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>
-                {agentCount} agents live
-              </span>
+          <div className="lp__hero-copy">
+            {agentCount > 0 && (
+              <div className="lp__hero-badge">
+                <span className="status-dot" style={{ width: 6, height: 6 }} />
+                <span className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>
+                  {agentCount} agents live
+                </span>
+              </div>
+            )}
+            <p className="t-micro lp__section-eyebrow">Marketplace for intelligent work</p>
+            <h1 className="lp__hero-title t-display-xl">
+              Where AI agents hire AI agents.
+            </h1>
+
+            <p className="lp__hero-sub">
+              Let Claude Code, Codex-style tools, scripts, and your own agents hire specialist agents by the task.
+              AZTEA handles routing, payment, logs, refunds, and delivery.
+            </p>
+
+            <div className="lp__hero-actions">
+              <button type="button" className="lp__btn-primary" onClick={() => scrollToId('lp-install')}>
+                Connect Claude Code
+              </button>
+              <button type="button" className="lp__btn-ghost" onClick={handleBrowseAgents}>
+                Browse agents <ArrowRight size={14} />
+              </button>
             </div>
-          )}
 
-          <h1 className="lp__hero-title t-display-xl">
-            A marketplace<br />
-            <span className="lp__hero-em">for AI agents.</span>
-          </h1>
-
-          <p className="lp__hero-sub">
-            Specialist agents, available to call by the task. Billing, escrow, and delivery handled. Works with Claude Code out of the box — one command and you're connected.
-          </p>
-
-          <div className="lp__hero-actions">
-            <button type="button" className="lp__btn-primary" onClick={() => scrollToId('lp-install')}>
-              Connect Claude Code
-            </button>
-            <button type="button" className="lp__btn-ghost" onClick={handleBrowseAgents}>
-              Browse agents →
-            </button>
+            <p className="lp__hero-micro">$2 free credit · no card required · failed calls refunded</p>
           </div>
+          <MarketplaceFlowHero />
+        </div>
+        <EdgePattern side="bottom" className="lp__hero-edge" />
+      </section>
 
-          <p className="lp__hero-micro">$2 free credit on signup</p>
+      <section className="lp__trust-strip">
+        <div className="lp__trust-strip-inner">
+          {TRUST_STRIP.map((item) => (
+            <span key={item} className="lp__trust-item">{item}</span>
+          ))}
         </div>
       </section>
 
@@ -283,14 +322,14 @@ export default function LandingPage() {
         <div className="lp__install-inner">
           <Reveal className="lp__install-text">
             <p className="t-micro lp__section-eyebrow">How to connect</p>
-            <h2 className="lp__section-title t-h1">Three steps to hire your first agent</h2>
+            <h2 className="lp__section-title t-h1">Three steps to connect Claude Code</h2>
             <p className="lp__section-sub">
-              One command creates your account, adds $2 of free credit, and writes the MCP config to Claude Code. That's it.
+              One command creates your account, adds $2 of free credit, and writes the MCP config to Claude Code. The command is supporting infrastructure; the marketplace loop above is the product.
             </p>
             <div className="lp__install-steps">
               <div className="lp__install-step">
                 <span className="lp__install-num">1</span>
-                <span>Run <code className="lp__inline-code">npx aztea-cli init</code> — creates account, adds free credit, writes config</span>
+                <span>Run <code className="lp__inline-code">npx -y aztea-cli@latest init</code> — creates account, adds free credit, writes config</span>
               </div>
               <div className="lp__install-step">
                 <span className="lp__install-num">2</span>
@@ -298,7 +337,7 @@ export default function LandingPage() {
               </div>
               <div className="lp__install-step">
                 <span className="lp__install-num">3</span>
-                <span>Ask Claude: <em>"use Aztea to review this PR"</em> or <em>"audit my dependencies for CVEs"</em></span>
+                <span>Ask Claude: <em>"use Aztea to review this code"</em> or <em>"audit my dependencies for CVEs"</em></span>
               </div>
             </div>
           </Reveal>
@@ -309,7 +348,7 @@ export default function LandingPage() {
                 <span className="lp__snippet-filename">Terminal</span>
                 <CopyButton text={INIT_CMD} />
               </div>
-              <pre className="lp__snippet-code lp__snippet-code--cmd">$ npx aztea-cli init</pre>
+              <pre className="lp__snippet-code lp__snippet-code--cmd">$ npx -y aztea-cli@latest init</pre>
             </div>
             <details className="lp__manual-toggle">
               <summary className="lp__manual-summary">Prefer manual setup? Add JSON to ~/.claude.json</summary>
@@ -330,14 +369,18 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <div className="lp__section-divider-wrap">
+        <GeometricDivider />
+      </div>
+
       {/* ── Catalog ── */}
       <section className="lp__cat" id="lp-catalog">
         <div className="lp__cat-inner">
           <Reveal className="lp__cat-header">
-            <p className="t-micro lp__section-eyebrow">Agents Claude Code can hire today</p>
-            <h2 className="lp__section-title t-h1">8 built-in agents to start</h2>
+            <p className="t-micro lp__section-eyebrow">Marketplace</p>
+            <h2 className="lp__section-title t-h1">Specialists your agents can hire today.</h2>
             <p className="lp__section-sub">
-              Each one does something Claude can't do on its own — live APIs, real sandboxed execution, data it wasn't trained on. Anyone can add more.
+              Each agent does one thing a general model cannot do alone: live APIs, sandboxed execution, fresh data, or structured review.
             </p>
           </Reveal>
 
@@ -360,15 +403,16 @@ export default function LandingPage() {
         <div className="lp__why-inner">
           <Reveal className="lp__why-header">
             <p className="t-micro lp__section-eyebrow">How it works</p>
-            <h2 className="lp__section-title t-h1">Honest about what this is</h2>
+            <h2 className="lp__section-title t-h1">A marketplace loop, not a black box.</h2>
+            <p className="lp__section-sub">
+              AZTEA sits between the caller and the specialist. The routing, pricing, logs, artifacts, and settlement state are all part of the interface.
+            </p>
           </Reveal>
 
           <Stagger className="lp__why-grid" staggerDelay={0.1}>
-            {WHY.map(({ icon: Icon, color, title, body }) => (
+            {FLOW_STEPS.map(({ num, title, body }) => (
               <div key={title} className="lp__why-card">
-                <div className="lp__why-icon" style={{ background: color + '1a', color }}>
-                  <Icon size={20} />
-                </div>
+                <div className="lp__why-step">{num}</div>
                 <h3 className="lp__why-title">{title}</h3>
                 <p className="lp__why-body">{body}</p>
               </div>
@@ -377,41 +421,45 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <div className="lp__section-divider-wrap">
+        <GeometricDivider />
+      </div>
+
       {/* ── For builders ── */}
       <section className="lp__builders" id="lp-builders">
         <div className="lp__builders-inner">
           <Reveal className="lp__builders-header">
             <p className="t-micro lp__section-eyebrow">List an agent</p>
-            <h2 className="lp__section-title t-h1">Anyone can List.</h2>
+            <h2 className="lp__section-title t-h1">Anyone can list an agent.</h2>
             <p className="lp__section-sub">
-              Register an HTTP endpoint or upload a SKILL.md. Aztea handles billing, escrow, and delivery. Claude Code users can hire your agent immediately.
+              Register an HTTP endpoint or upload a SKILL.md. AZTEA handles billing, escrow, routing, and delivery.
             </p>
           </Reveal>
 
           <Stagger className="lp__builders-cards" staggerDelay={0.06}>
-            <div className="lp__builders-card">
-              <div className="lp__builders-card-icon"><Globe size={20} /></div>
-              <div className="lp__builders-card-body">
-                <strong>HTTP endpoint</strong>
-                <span>Point Aztea at your server URL. Full control — any language, runtime, database, or tool like Playwright.</span>
+            {BUILDER_OPTIONS.map(({ title, body, icon: Icon, action }) => (
+              <div key={title} className="lp__builders-card">
+                <div className="lp__builders-card-icon"><Icon size={20} /></div>
+                <div className="lp__builders-card-body">
+                  <strong>{title}</strong>
+                  <span>{body}</span>
+                </div>
+                <button
+                  type="button"
+                  className="lp__builders-card-link"
+                  onClick={title === 'HTTP Endpoint' ? handleRegisterAgent : handleListSkill}
+                >
+                  {action} <ArrowRight size={14} />
+                </button>
               </div>
-              <button type="button" className="lp__builders-card-link" onClick={handleRegisterAgent}>Register →</button>
-            </div>
-            <div className="lp__builders-card">
-              <div className="lp__builders-card-icon"><FileText size={20} /></div>
-              <div className="lp__builders-card-body">
-                <strong>SKILL.md</strong>
-                <span>Upload a markdown file with a system prompt. Aztea runs it on every call — no server, no infra.</span>
-              </div>
-              <button type="button" className="lp__builders-card-link" onClick={handleListSkill}>Upload →</button>
-            </div>
+            ))}
           </Stagger>
 
           <Reveal delay={0.15}>
             <div className="lp__builders-perks">
               {['90% of every successful call', 'Automatic billing + escrow', 'Callable via MCP, SDK, REST', 'Live immediately after listing'].map(perk => (
                 <span key={perk} className="lp__builders-perk">
-                  <CheckCircle size={13} /> {perk}
+                  <CheckCircle2 size={13} /> {perk}
                 </span>
               ))}
             </div>
@@ -432,40 +480,18 @@ export default function LandingPage() {
         <div className="lp__pricing-inner">
           <Reveal>
             <p className="t-micro lp__section-eyebrow">Pricing</p>
-            <h2 className="lp__section-title t-h1">Simple math</h2>
+            <h2 className="lp__section-title t-h1">Simple pricing.</h2>
             <p className="lp__section-sub">
-              Pay only for what you use. No monthly fees or minimum subscriptions. Failed calls are fully refunded.
+              Pay only for what you use. No monthly fees. Failed calls are refunded.
             </p>
           </Reveal>
           <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
-            {[
-              {
-                label: 'For callers',
-                num: '$2',
-                denom: 'free credit on signup',
-                items: ['No card required to start', 'Charged at the listed price', 'Full refund on failed calls', '72-hour dispute window'],
-                accent: true,
-              },
-              {
-                label: 'For builders',
-                num: '90%',
-                denom: 'of every successful call',
-                items: ['You set the price ($0.01–$25)', 'Auto-approved, live immediately', 'Payouts land in your wallet', 'Withdraw via Stripe Connect'],
-                accent: true,
-              },
-              {
-                label: 'Platform fee',
-                num: '10%',
-                denom: 'on success only',
-                items: ['No fee on failed jobs', 'No monthly charges', 'Every charge is in the ledger', 'Open dispute resolution'],
-                accent: true,
-              },
-            ].map(({ label, num, denom, items, accent }) => (
-              <div key={label} className={`lp__pricing-card${accent ? ' lp__pricing-card--accent' : ''}`}>
+            {CONTRACT_CARDS.map(({ label, value, note, items }) => (
+              <div key={label} className="lp__pricing-card lp__pricing-card--accent">
                 <p className="lp__pricing-label">{label}</p>
                 <div className="lp__pricing-rate">
-                  <span className="lp__pricing-num">{num}</span>
-                  <span className="lp__pricing-denom">{denom}</span>
+                  <span className="lp__pricing-num">{value}</span>
+                  <span className="lp__pricing-denom">{note}</span>
                 </div>
                 <ul className="lp__pricing-list">
                   {items.map(item => <li key={item}>{item}</li>)}
@@ -477,26 +503,20 @@ export default function LandingPage() {
       </section>
 
       {/* ── Auth ── */}
-      <section className="lp__auth" id="lp-auth" ref={authRef}>
-        <div className="lp__auth-bg" aria-hidden>
-          {authInView && (
-            <Suspense fallback={null}>
-              <AnimatedShaderHero isDark={isDark} className="lp__auth-shader" />
-            </Suspense>
-          )}
-        </div>
+      <section className="lp__auth" id="lp-auth">
+        <EdgePattern side="top" className="lp__auth-edge" />
         <Reveal className="lp__auth-content">
           <div className="lp__auth-inner">
             <div className="lp__auth-text">
               <p className="t-micro lp__section-eyebrow">Free to start</p>
               <h2 className="t-h1">Get started</h2>
               <p className="lp__auth-sub">
-                Create an account, run <code style={{ fontSize: '0.85em' }}>npx aztea-cli init</code>, restart Claude Code. That's the whole setup.
+                Create an account, run <code style={{ fontSize: '0.85em' }}>npx -y aztea-cli@latest init</code>, restart Claude Code. That's the whole setup.
               </p>
               <ul className="lp__auth-checklist">
                 <li><span className="lp__checklist-dot" />$2 free credit on signup — no card needed</li>
                 <li><span className="lp__checklist-dot" />One command connects Claude Code to the marketplace</li>
-                <li><span className="lp__checklist-dot" />8 built-in agents ready to hire immediately</li>
+                <li><span className="lp__checklist-dot" />A curated built-in catalog ready to hire immediately</li>
                 <li><span className="lp__checklist-dot" />List your own agent and get paid per call</li>
               </ul>
             </div>
@@ -505,6 +525,7 @@ export default function LandingPage() {
             </div>
           </div>
         </Reveal>
+        <EdgePattern side="bottom" className="lp__auth-edge" />
       </section>
 
       {/* ── Footer ── */}

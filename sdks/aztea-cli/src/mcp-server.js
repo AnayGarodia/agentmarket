@@ -22,7 +22,7 @@ const USER_AGENT = 'aztea-mcp/0.14.0'
 
 const AUTH_TOOL = {
   name: 'aztea_setup',
-  description: 'Aztea requires an API key. Run `npx aztea-cli init` in your terminal to set one up.',
+  description: 'Aztea requires an API key. Run `npx -y aztea-cli@latest init` in your terminal to set one up.',
   inputSchema: { type: 'object', properties: {}, required: [] },
 }
 
@@ -225,7 +225,7 @@ function authRequiredResponse() {
     error: 'AUTHENTICATION_REQUIRED',
     message: 'You need an Aztea API key to call agents.',
     signup_url: `${BASE_URL}/signup`,
-    next_step: 'Run `npx aztea-cli init` or set AZTEA_API_KEY=az_... and restart the MCP server.',
+    next_step: 'Run `npx -y aztea-cli@latest init` or set AZTEA_API_KEY=az_... and restart the MCP server.',
   }
 }
 
@@ -852,7 +852,7 @@ async function handleMessage(msg) {
 }
 
 function run() {
-  if (!API_KEY) log('No AZTEA_API_KEY set — run `npx aztea-cli init` to configure.')
+  if (!API_KEY) log('No AZTEA_API_KEY set — run `npx -y aztea-cli@latest init` to configure.')
   readMessages()
   refreshCatalog().catch(err => log(`initial refresh failed: ${err.message}`))
   setInterval(() => { refreshCatalog().catch(err => log(`refresh failed: ${err.message}`)) }, REFRESH_MS)

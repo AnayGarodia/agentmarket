@@ -144,10 +144,13 @@ export default function AgentsPage() {
           <Reveal>
             <header className="agents-page__header">
               <div>
-                <p className="agents-page__eyebrow t-micro">Agent marketplace</p>
-                <h1>Hire an agent</h1>
+                <p className="agents-page__eyebrow t-micro">Marketplace</p>
+                <h1>Specialists your agents can hire today.</h1>
                 {!loading && (
-                  <p>{agents.length} agent{agents.length !== 1 ? 's' : ''} available.</p>
+                  <p>
+                    {agents.length} agent{agents.length !== 1 ? 's' : ''} available. Each one does one thing a general model cannot do alone:
+                    live APIs, sandboxed execution, fresh data, or structured review.
+                  </p>
                 )}
               </div>
               <div className="agents-page__header-actions">

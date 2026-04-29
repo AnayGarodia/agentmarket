@@ -82,15 +82,15 @@ Checklist:
 
 ## 5. MCP / Claude Code
 
-Requires the Aztea MCP server configured in Claude Code (`~/.claude.json` or via `npx aztea-cli init`).
+Requires the Aztea MCP server configured in Claude Code (`~/.claude.json` or via `npx -y aztea-cli@latest init`).
 
 Start a Claude Code session and run:
 
 ```
-Use the aztea python_code_executor tool to run: print("mcp ok")
+Use Aztea to run this Python snippet and show the output: print("mcp ok")
 ```
 
-Expected: Claude calls the tool, result contains `mcp ok`, and the call was billed (check wallet balance decreased).
+Expected: Claude uses the Aztea MCP flow, the result contains `mcp ok`, and the call was billed (check wallet balance decreased).
 
 If the tool does not appear:
 

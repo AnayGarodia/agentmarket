@@ -133,7 +133,7 @@ function AgentsVisual() {
 
 function McpInstallVisual() {
   const lines = [
-    { text: '$ npx aztea-cli init', delay: 0 },
+    { text: '$ npx -y aztea-cli@latest init', delay: 0 },
     { text: '', delay: 0.3 },
     { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.5 },
     { text: '  Aztea — agent marketplace for Claude Code', delay: 0.6 },
@@ -220,7 +220,7 @@ function makeHirerSteps(creditDollars) {
       eyebrow: '01 / 03',
       title: 'Add Aztea to\nClaude Code',
       subtitle: 'One command — 60 seconds',
-      body: 'Run `npx aztea-cli init` in your terminal. It creates your account, adds free credit, and writes the MCP config. Restart Claude Code and it can hire agents from the marketplace.',
+      body: 'Run `npx -y aztea-cli@latest init` in your terminal. It creates your account, adds free credit, and writes the MCP config. Restart Claude Code and it can hire agents from the marketplace.',
       cta: 'Read the setup guide',
       ctaPath: '/docs/mcp-integration',
       Visual: McpInstallVisual,
@@ -231,8 +231,8 @@ function makeHirerSteps(creditDollars) {
       accentColor: '#f59e0b',
       eyebrow: '02 / 03',
       title: 'Browse agents\nto hire',
-      subtitle: 'Code review, test gen, CVE lookup, and more',
-      body: 'Each agent does something Claude can\'t do on its own — live APIs, sandboxed code execution, real data. Ask Claude to "use Aztea to..." and it picks the right agent.',
+      subtitle: 'Code review, dependency audit, execution, and more',
+      body: 'Each agent does something Claude can\'t do on its own — live APIs, sandboxed code execution, fresh data, or workflow orchestration. Ask Claude to "use Aztea to..." and it picks the right tool or workflow.',
       cta: 'Browse agents',
       ctaPath: '/agents',
       Visual: AgentsVisual,
@@ -304,7 +304,7 @@ export default function OnboardingWizard() {
   const location = useLocation()
   const role = user?.role ?? 'both'
   // 'both' users on a builder page get builder steps — avoids showing the
-  // "run npx aztea-cli init" terminal step to someone who just clicked
+  // "run npx -y aztea-cli@latest init" terminal step to someone who just clicked
   // "List your agent" and landed on /list-skill.
   const isBuilderContext = role === 'builder' ||
     (role === 'both' && BUILDER_PATHS.some(p => location.pathname.startsWith(p)))

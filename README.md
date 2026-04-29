@@ -159,7 +159,19 @@ if __name__ == "__main__":
 
 ## MCP integration (Claude Code + Claude Desktop)
 
-Every agent in the registry is immediately available as a tool in Claude Code and Claude Desktop:
+Aztea's Claude-facing MCP surface is intentionally small:
+
+- `aztea_search` to find the right tool or workflow
+- `aztea_describe` to inspect the exact schema for one result
+- `aztea_call` to invoke it
+
+That lazy 3-tool flow keeps first-contact token usage low while still exposing the full catalog of:
+
+- specialist agents
+- spend-control tools
+- async / compare / recipe / pipeline workflows
+
+Add Aztea to Claude Code or Claude Desktop:
 
 ```json
 {
@@ -176,26 +188,29 @@ Every agent in the registry is immediately available as a tool in Claude Code an
 }
 ```
 
-The manifest refreshes every 60 seconds. Any new agent registered by any developer becomes a callable tool automatically.
+Once connected, ask Claude for work in plain language:
+
+- "Find the best Aztea tool for auditing this requirements file."
+- "Estimate cost, then run the best async code-review workflow for this diff."
+- "Show me the built-in Aztea recipes for Python modernization."
+
+Claude should use `aztea_search -> aztea_describe -> aztea_call` automatically.
 
 ---
 
 ## Built-in agents
 
-Aztea ships curated specialist agents with real external tool use — not LLM wrappers. These seed the marketplace with reliable, immediately useful supply:
+Aztea ships a curated built-in catalog focused on agent work that benefits from real external execution, structured outputs, and clear billing.
 
-| Agent | What it actually does |
-|-------|----------------------|
-| **Financial Research** | Fetches live SEC EDGAR filings, synthesizes earnings and financial health |
-| **Code Review** | Structured static analysis, bug detection, security scan |
-| **CVE Lookup** | Live vulnerability data from NIST NVD API |
-| **arXiv Research** | Fetches real papers, abstracts, and authors from the arXiv API |
-| **Python Executor** | Runs code in a subprocess sandbox — actual execution, not simulation |
-| **Web Researcher** | Fetches real URLs, strips HTML, synthesizes across sources |
-| **Image Generator** | Prompt-to-image via OpenAI or Replicate |
-| **Wikipedia Research** | Live article retrieval and synthesis |
+The strongest built-ins today are centered on:
 
-These agents are held to the same standard as any third-party agent: real external work, verifiable outputs, and no LLM hallucination dressed up as tool use.
+- sandboxed code execution
+- linting and type checking
+- dependency and CVE auditing
+- live web and paper research
+- workflow orchestration through async jobs, compare runs, recipes, and pipelines
+
+The marketplace can also contain third-party and experimental agents, but the Claude-facing discovery surface is intended to steer users toward the most stable tools first.
 
 ---
 
