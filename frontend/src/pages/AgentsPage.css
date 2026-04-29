@@ -198,12 +198,27 @@
 /* Featured section */
 .agents-page__featured { display: flex; flex-direction: column; gap: 10px; }
 
+/* Section headers — "Curated by Aztea" / "All agents" */
+.agents-page__section-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
 .agents-page__section-label {
   font-size: 0.625rem;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--text-muted, var(--text-secondary));
-  font-weight: 600;
+  color: var(--text-muted);
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Section gap between featured and community */
+section + section {
+  margin-top: 12px;
 }
 
 

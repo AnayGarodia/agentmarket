@@ -3,37 +3,66 @@
   display: flex;
   flex-direction: column;
   gap: 11px;
-  background: color-mix(in srgb, var(--surface) 86%, var(--parchment));
+  background: color-mix(in srgb, var(--surface) 88%, var(--parchment));
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 18px;
   cursor: pointer;
   height: 100%;
-  padding: 18px 18px 16px;
+  padding: 20px 20px 16px;
   will-change: transform;
   transition:
-    border-color 0.18s ease,
-    box-shadow   0.2s  ease,
-    transform    0.2s  ease;
+    border-color 0.2s ease,
+    box-shadow   0.2s ease,
+    transform    0.22s ease;
   position: relative;
+  overflow: hidden;
 }
 
+/* Subtle corner bracket — marks the card as a hireable listing */
 .ac::after {
   content: '';
   position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 28px;
-  height: 28px;
-  border-top: 1px solid color-mix(in srgb, var(--copper) 42%, transparent);
-  border-right: 1px solid color-mix(in srgb, var(--copper) 42%, transparent);
-  border-radius: 0 12px 0 0;
+  top: 14px;
+  right: 14px;
+  width: 22px;
+  height: 22px;
+  border-top: 1.5px solid color-mix(in srgb, var(--copper) 38%, transparent);
+  border-right: 1.5px solid color-mix(in srgb, var(--copper) 38%, transparent);
+  border-radius: 0 10px 0 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+/* Warm inner glow on hover — feels like the card is waking up */
+.ac::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  background: radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--copper-bg) 60%, transparent), transparent 65%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
   pointer-events: none;
 }
 
 .ac:hover {
-  border-color: color-mix(in srgb, var(--copper) 70%, var(--border));
-  box-shadow: var(--shadow-md);
-  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--copper) 65%, var(--border));
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 1px color-mix(in srgb, var(--copper) 20%, transparent) inset;
+  transform: translateY(-3px);
+}
+
+.ac:hover::before { opacity: 1; }
+.ac:hover::after { opacity: 0.7; }
+
+.ac--featured {
+  background: color-mix(in srgb, var(--surface) 80%, var(--parchment));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
+.ac--featured::after {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .ac:focus-visible {
@@ -51,7 +80,7 @@
 .ac__eyebrow-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -59,12 +88,12 @@
 .ac__trust-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
+  gap: 4px;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-size: 0.64rem;
+  font-size: 0.625rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
@@ -94,15 +123,37 @@
   padding-top: 1px;
 }
 
-.ac__head-sub {
+/* ── Price block — ledger-style, top-right of header ─────────── */
+.ac__price-block {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  gap: 1px;
+  padding-top: 2px;
+}
+
+.ac__price {
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  color: var(--accent);
+  font-weight: 700;
+  font-feature-settings: 'tnum';
+  white-space: nowrap;
+  line-height: 1.1;
+}
+
+.ac__price-label {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  line-height: 1;
 }
 
 .ac__name {
-  font-size: 1rem;
+  font-size: 0.9375rem;
   font-weight: 700;
   color: var(--text-primary);
   line-height: 1.25;
@@ -113,25 +164,17 @@
   white-space: nowrap;
 }
 
-.ac__price {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--accent);
-  font-weight: 700;
-  font-feature-settings: 'tnum';
-  white-space: nowrap;
-}
-
 /* ── Body ────────────────────────────────────────────────────── */
 .ac__desc {
   font-size: 0.84rem;
   color: var(--text-secondary);
-  line-height: 1.58;
+  line-height: 1.6;
   margin: 0;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  flex: 1;
 }
 
 .ac__match {
@@ -160,24 +203,26 @@
   align-items: center;
   gap: 8px;
   margin-top: auto;
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 }
 
 .ac__calls {
   flex: 1;
-  font-size: 0.75rem;
+  font-size: 0.71875rem;
   color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .ac__trust {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--accent);
+  font-size: 0.71875rem;
+  color: var(--sage);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
+/* "Hire →" — copper on hover, nudges right */
 .ac__cta {
   display: flex;
   align-items: center;
@@ -186,12 +231,15 @@
   font-weight: 700;
   color: var(--text-muted);
   white-space: nowrap;
-  transition: color 0.15s ease, gap 0.15s ease;
+  transition: color 0.15s ease, gap 0.15s ease, background 0.15s ease, padding 0.15s ease;
   flex-shrink: 0;
+  border-radius: 999px;
+  padding: 3px 0;
+  letter-spacing: 0.01em;
 }
 
 .ac:hover .ac__cta {
-  color: var(--accent);
+  color: var(--copper);
   gap: 5px;
 }
 
@@ -208,23 +256,23 @@
 }
 
 .ac__health-dot--healthy {
-  background: var(--positive, #22c55e);
+  background: var(--positive);
   animation: health-pulse 2.5s ease-in-out infinite;
 }
 
 .ac__health-dot--warn {
-  background: var(--warn, #f59e0b);
+  background: var(--warn);
 }
 
 @keyframes health-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--positive, #22c55e) 40%, transparent); }
-  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--positive, #22c55e) 0%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--positive) 40%, transparent); }
+  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--positive) 0%, transparent); }
 }
 
 /* Reliability stats */
 .ac__reliability {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   flex-wrap: wrap;
 }
 
@@ -232,7 +280,7 @@
   font-size: 0.625rem;
   font-weight: 600;
   color: var(--text-muted);
-  background: color-mix(in srgb, var(--surface-2) 76%, var(--parchment));
+  background: color-mix(in srgb, var(--surface-2) 70%, var(--parchment));
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
   padding: 2px 7px;
@@ -244,12 +292,11 @@
 .ac__kind-chip {
   font-size: 0.5625rem;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 2px 6px;
+  padding: 2px 7px;
   border-radius: var(--r-pill);
   white-space: nowrap;
-  flex-shrink: 0;
   align-self: flex-start;
 }
 .ac__kind-chip--aztea_built {

@@ -7,16 +7,16 @@ import Button from '../ui/Button'
 import Input from '../ui/Input'
 import Skeleton from '../ui/Skeleton'
 import Reveal from '../ui/motion/Reveal'
+import GeometricDivider from '../brand/GeometricDivider'
 import { searchAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Search, Zap } from 'lucide-react'
 import './AgentsPage.css'
 
 const SEARCH_SUGGESTIONS = [
-  'review pull request',
-  'audit npm dependencies',
-  'run Python code',
-  'browse a webpage',
+  'run Python code', 'audit npm dependencies', 'check SSL certificate',
+  'review pull request', 'scan for CVEs', 'browse a webpage',
+  'search arXiv papers', 'lint JavaScript', 'execute shell command',
 ]
 
 const CATEGORIES = [
@@ -58,7 +58,7 @@ export default function AgentsPage() {
   const [searchError, setSearchError] = useState('')
   const [isSemanticResult, setIsSemanticResult] = useState(false)
 
-  // Instant local text filter - runs synchronously so search feels immediate
+  // Instant local text filter
   const localMatched = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return agents
@@ -69,7 +69,7 @@ export default function AgentsPage() {
     )
   }, [agents, search])
 
-  // Debounced semantic search via API (supplements local with ranked results)
+  // Debounced semantic search via API
   useEffect(() => {
     const query = search.trim()
     setSearchError('')
@@ -107,7 +107,6 @@ export default function AgentsPage() {
   }, [apiKey, search])
 
   const filtered = useMemo(() => {
-    // Use API results when available, local results as instant fallback while API loads
     const source = search.trim()
       ? (searchResults.length > 0 ? searchResults : localMatched)
       : agents
@@ -145,14 +144,14 @@ export default function AgentsPage() {
           <Reveal>
             <header className="agents-page__header">
               <div>
-                <p className="agents-page__eyebrow t-micro">Marketplace</p>
-                <h1>Specialists your agents can hire today.</h1>
-                {!loading && (
-                  <p>
-                    {agents.length} agent{agents.length !== 1 ? 's' : ''} available. Each specialist adds a concrete capability:
-                    live APIs, sandboxed execution, fresh data, or structured review.
-                  </p>
-                )}
+                <p className="agents-page__eyebrow t-micro">Agent marketplace</p>
+                <h1>Hire an agent.</h1>
+                <p>
+                  {!loading
+                    ? `${agents.length} specialist agents`
+                    : 'Specialist agents'} for code, security, research, and the web.
+                  Pay per task — refunded on failure.
+                </p>
               </div>
               <div className="agents-page__header-actions">
                 <Link to="/jobs">
@@ -220,7 +219,7 @@ export default function AgentsPage() {
 
           {listLoading ? (
             <div className="agents-page__grid">
-              {[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} variant="rect" height={212} />)}
+              {[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} variant="rect" height={220} />)}
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
@@ -233,39 +232,67 @@ export default function AgentsPage() {
                 </div>
               }
             />
-          ) : (() => {
-              const featuredIds = new Set(featured.map(a => a.agent_id))
-              const merged = !isFiltered
-                ? [...featured, ...filtered.filter(a => !featuredIds.has(a.agent_id))]
-                : filtered
-              return (
-                <>
-                  {isFiltered && (
-                    <div className="agents-page__results-meta">
-                      <span className="agents-page__results-count t-micro">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
-                      {isSemanticResult && search.trim() && (
-                        <span className="agents-page__semantic-badge">
-                          <Zap size={10} />
-                          Semantic match
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  <div className="agents-page__grid">
-                    {merged.map((agent, index) => (
+          ) : isFiltered ? (
+            <>
+              <div className="agents-page__results-meta">
+                <span className="agents-page__results-count t-micro">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
+                {isSemanticResult && search.trim() && (
+                  <span className="agents-page__semantic-badge">
+                    <Zap size={10} />
+                    Semantic match
+                  </span>
+                )}
+              </div>
+              <div className="agents-page__grid">
+                {filtered.map((agent, index) => (
+                  <AgentCard key={agent.agent_id} agent={agent} index={index} showTrust={sortBy === 'trust'} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              {featured.length > 0 && (
+                <section>
+                  <div className="agents-page__section-header">
+                    <span className="agents-page__section-label">Curated by Aztea</span>
+                    <GeometricDivider />
+                  </div>
+                  <div className="agents-page__grid agents-page__grid--featured">
+                    {featured.map((agent, index) => (
                       <AgentCard
                         key={agent.agent_id}
                         agent={agent}
                         index={index}
-                        featured={featuredIds.has(agent.agent_id)}
+                        featured
                         showTrust={sortBy === 'trust'}
                       />
                     ))}
                   </div>
-                </>
-              )
-            })()
-          }
+                </section>
+              )}
+
+              {filtered.filter(a => !featured.some(f => f.agent_id === a.agent_id)).length > 0 && (
+                <section>
+                  <div className="agents-page__section-header">
+                    <span className="agents-page__section-label">All agents</span>
+                    <GeometricDivider />
+                  </div>
+                  <div className="agents-page__grid">
+                    {filtered
+                      .filter(a => !featured.some(f => f.agent_id === a.agent_id))
+                      .map((agent, index) => (
+                        <AgentCard
+                          key={agent.agent_id}
+                          agent={agent}
+                          index={index + featured.length}
+                          showTrust={sortBy === 'trust'}
+                        />
+                      ))}
+                  </div>
+                </section>
+              )}
+            </>
+          )}
         </div>
       </div>
     </main>
