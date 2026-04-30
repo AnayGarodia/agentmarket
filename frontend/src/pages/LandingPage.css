@@ -134,27 +134,27 @@
 .lp__nav-dropdown {
   position: absolute;
   top: 100%;
-  left: -8px;
-  min-width: 280px;
+  left: 50%;
+  min-width: 480px;
   margin-top: 10px;
-  padding: 8px;
-  background: color-mix(in srgb, var(--canvas) 92%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  padding: 10px;
+  background: color-mix(in srgb, var(--canvas) 96%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-soft);
-  border-radius: 14px;
-  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.18), 0 4px 10px -6px rgba(0, 0, 0, 0.12);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  border-radius: 16px;
+  box-shadow: 0 24px 48px -16px rgba(0, 0, 0, 0.22), 0 6px 14px -8px rgba(0, 0, 0, 0.14);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
   opacity: 0;
   visibility: hidden;
-  transform: translateY(-6px);
+  transform: translateX(-50%) translateY(-6px);
   pointer-events: none;
   transition: opacity var(--dur-sm) var(--ease),
               transform var(--dur-sm) var(--ease),
               visibility 0s linear var(--dur-sm);
-  z-index: var(--z-sticky);
+  z-index: calc(var(--z-sticky) + 2);
 }
 /* Invisible bridge so cursor can travel from trigger to panel without flicker */
 .lp__nav-dropdown::before {
@@ -169,13 +169,36 @@
 .lp__nav-item:focus-within .lp__nav-dropdown {
   opacity: 1;
   visibility: visible;
-  transform: translateY(0);
+  transform: translateX(-50%) translateY(0);
   pointer-events: auto;
   transition: opacity var(--dur-sm) var(--ease),
               transform var(--dur-sm) var(--ease),
               visibility 0s linear 0s;
 }
 .lp__nav-item--plain .lp__nav-dropdown { display: none; }
+
+/* Page scrim — dims/blurs everything below the nav while a dropdown is open */
+.lp__nav-scrim {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 64px;
+  bottom: 0;
+  background: color-mix(in srgb, var(--canvas) 30%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 180ms var(--ease), visibility 0s linear 180ms;
+  z-index: calc(var(--z-sticky) + 1);
+}
+.lp__nav-inner:has(.lp__nav-item:not(.lp__nav-item--plain):hover) .lp__nav-scrim,
+.lp__nav-inner:has(.lp__nav-item:not(.lp__nav-item--plain):focus-within) .lp__nav-scrim {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 180ms var(--ease), visibility 0s linear 0s;
+}
 
 .lp__nav-dropdown-item {
   display: grid;
@@ -974,6 +997,7 @@
 @media (max-width: 760px) {
   .lp__nav-links { display: none; }
   .lp__nav-dropdown { display: none; }
+  .lp__nav-scrim { display: none; }
   .lp__nav-signin { display: none; }
   .lp__nav-cta { display: none; }
   .lp__nav-menu { display: grid; place-items: center; }

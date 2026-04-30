@@ -218,6 +218,7 @@ export default function LandingPage() {
               <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
             </div>
           </nav>
+          <div className="lp__nav-scrim" aria-hidden="true" />
           <div className="lp__nav-right">
             <button type="button" className="lp__nav-icon"
               onClick={toggleTheme}
