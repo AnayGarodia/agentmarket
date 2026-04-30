@@ -226,10 +226,10 @@ export default function LandingPage() {
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>
             <button type="button" className="lp__nav-signin" onClick={handleSignIn}>
-              Sign in
+              <span>Sign in</span>
             </button>
-            <button type="button" className="lp__btn lp__btn--primary lp__nav-cta" onClick={handleGetStarted}>
-              Get started
+            <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
+              <span>Get started</span>
             </button>
             <button type="button" className="lp__nav-menu"
               onClick={() => setMenuOpen(v => !v)}

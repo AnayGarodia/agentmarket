@@ -54,23 +54,38 @@
 }
 
 /* ── NAV ─────────────────────────────────────────────────── */
+/* Floating pill-capsule nav (sarvam.ai style) */
 .lp__nav {
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
-  background: color-mix(in srgb, var(--canvas) 88%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border-soft);
+  background: transparent;
+  padding: 12px 32px 0;
+  pointer-events: none; /* let .lp__nav-inner own clicks; the gutter is just empty space */
 }
 .lp__nav-inner {
-  max-width: 1280px;
+  pointer-events: auto;
+  max-width: 1400px;
   margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 32px;
-  padding: 16px 32px;
+  gap: 24px;
+  padding: 10px 10px 10px 28px;
+  border-radius: 34px;
+  background: color-mix(in srgb, var(--canvas) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-soft) 80%, transparent);
+  backdrop-filter: blur(24px) saturate(1.3) brightness(1.04);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3) brightness(1.04);
+  box-shadow: 0 2px 24px rgba(0, 0, 0, 0.04),
+              inset 0 1px 3px rgba(255, 255, 255, 0.4);
+  transition: background var(--dur-md) var(--ease),
+              border-color var(--dur-md) var(--ease),
+              box-shadow var(--dur-md) var(--ease);
+}
+@media (max-width: 760px) {
+  .lp__nav { padding: 10px 12px 0; }
+  .lp__nav-inner { padding: 6px 12px 6px 18px; border-radius: 28px; }
 }
 
 .lp__brand {
@@ -98,16 +113,21 @@
   background: none;
   border: none;
   font-family: var(--font-sans);
-  font-size: 14px;
-  font-weight: 400;
-  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-primary);
   cursor: pointer;
   text-decoration: none;
-  padding: 6px 0;
+  padding: 8px 16px;
+  border-radius: 10px;
   position: relative;
-  transition: color var(--dur-sm) var(--ease);
+  transition: background var(--dur-sm) var(--ease), color var(--dur-sm) var(--ease);
 }
-.lp__nav-link:hover { color: var(--text-primary); }
+.lp__nav-link:hover {
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
 
 /* Hover-aware nav item with dropdown panel (sarvam.ai style) */
 .lp__nav-item {
@@ -182,7 +202,7 @@
   position: fixed;
   left: 0;
   right: 0;
-  top: 64px;
+  top: 80px;
   bottom: 0;
   background: color-mix(in srgb, var(--canvas) 30%, transparent);
   backdrop-filter: blur(6px);
@@ -250,17 +270,66 @@
   transition: background var(--dur-sm) var(--ease);
 }
 .lp__nav-icon:hover { background: var(--canvas-warm); color: var(--text-primary); }
-.lp__nav-signin {
-  background: none;
+
+/* Pill CTAs with gradient hover (sarvam.ai style) */
+.lp__nav-signin,
+.lp__nav-cta {
+  position: relative;
+  isolation: isolate;
   border: none;
+  cursor: pointer;
   font-family: var(--font-sans);
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-primary);
-  cursor: pointer;
-  padding: 6px 10px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  overflow: hidden;
+  transition: transform var(--dur-md) var(--ease), box-shadow var(--dur-md) var(--ease);
 }
-.lp__nav-cta { padding: 9px 18px; font-size: 13.5px; }
+.lp__nav-signin:active,
+.lp__nav-cta:active { transform: scale(0.97); }
+
+/* Secondary pill — soft surface */
+.lp__nav-signin {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--canvas-warm) 90%, transparent);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.06),
+              0 0 1px rgba(0, 0, 0, 0.18);
+}
+.lp__nav-signin::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #A5BBFC 0%, #D5E2FF 50%, #FFA133 100%);
+  opacity: 0;
+  z-index: -1;
+  transition: opacity 700ms var(--ease);
+  box-shadow: inset 0 0 12px 2px rgba(255, 255, 255, 1);
+}
+.lp__nav-signin:hover::before { opacity: 1; }
+
+/* Primary pill — dark surface with vibrant gradient hover */
+.lp__nav-cta {
+  color: #fff;
+  background: #131313;
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 1),
+              0 0 2px rgba(0, 0, 0, 0.1);
+}
+.lp__nav-cta::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #131313 0%, #0A2156 33%, #BED2FF 66%, #FF8717 100%);
+  opacity: 0;
+  z-index: -1;
+  transition: opacity 700ms var(--ease);
+  box-shadow: inset 0 0 12px 2px rgba(255, 255, 255, 0.5);
+}
+.lp__nav-cta:hover::before { opacity: 1; }
+.lp__nav-cta > * { position: relative; z-index: 1; }
+.lp__nav-signin > * { position: relative; z-index: 1; }
 .lp__nav-menu {
   display: none;
   width: 32px;
