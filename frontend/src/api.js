@@ -345,7 +345,11 @@ export async function deleteBillingPaymentMethod(key, paymentMethodId) {
 export async function authLogin(email, password) {
   const { body } = await request('/auth/login', {
     method: 'POST',
-    body: { email, password },
+    // rotate=true forces the backend to mint a fresh raw_api_key. Without
+    // it, the response reuses the most recent active session key but
+    // returns raw_api_key: null (the API assumes the client has cached it),
+    // which the web app does not — leaving sign-in dead.
+    body: { email, password, rotate: true },
   })
   return body
 }

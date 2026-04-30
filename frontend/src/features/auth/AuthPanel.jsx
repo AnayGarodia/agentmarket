@@ -215,11 +215,12 @@ export default function AuthPanel() {
     try {
       if (!registerMode) {
         const result = await authLogin(normalizedEmail, password)
-        if (!result?.raw_api_key) {
+        const apiKey = result?.raw_api_key ?? result?.api_key ?? result?.key
+        if (!apiKey) {
           throw new Error('Sign-in succeeded but no session token was returned.')
         }
         const userInfo = buildUserInfo(result, normalizedEmail, selectedRole)
-        connect(result.raw_api_key, userInfo)
+        connect(apiKey, userInfo)
         // Hard navigation: the previous react-router `navigate` could race with
         // RequireLegalAcceptance re-evaluating before apiKey propagated, which
         // bounced the user back to /welcome silently. A full-page replace is
@@ -228,14 +229,15 @@ export default function AuthPanel() {
         window.location.replace(redirectTo)
       } else {
         const result = await authRegister(normalizedUsername, normalizedEmail, password, selectedRole || 'both')
-        if (!result?.raw_api_key) {
+        const apiKey = result?.raw_api_key ?? result?.api_key ?? result?.key
+        if (!apiKey) {
           throw new Error('Account created but no session token was returned.')
         }
         const userInfo = buildUserInfo(result, normalizedEmail, selectedRole)
         if (result?.user_id) {
           localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
         }
-        connect(result.raw_api_key, userInfo)
+        connect(apiKey, userInfo)
         window.location.replace(redirectTo)
       }
     } catch (err) {
