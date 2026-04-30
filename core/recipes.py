@@ -52,15 +52,15 @@ BUILTIN_RECIPES: list[dict] = [
         "description": "Audit a dependency set for known vulnerabilities and summarize the highest-priority issues.",
         "default_input_schema": {
             "type": "object",
-            "properties": {"dependencies": {"type": "string"}},
-            "required": ["dependencies"],
+            "properties": {"manifest": {"type": "string", "description": "Contents of package.json or requirements.txt"}},
+            "required": ["manifest"],
         },
         "pipeline_definition": {
             "nodes": [
                 {
                     "id": "audit",
                     "agent_id": DEPENDENCY_AUDITOR_AGENT_ID,
-                    "input_map": {"dependencies": "$input.dependencies"},
+                    "input_map": {"manifest": "$input.manifest"},
                 },
             ]
         },

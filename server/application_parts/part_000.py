@@ -89,6 +89,11 @@ from agents import browser_agent as agent_browser_agent
 from agents import multi_language_executor as agent_multi_language_executor
 from agents import semantic_codebase_search as agent_semantic_codebase_search
 from agents import ai_red_teamer as agent_ai_red_teamer
+from agents import secret_scanner as agent_secret_scanner
+from agents import json_schema_validator as agent_json_schema_validator
+from agents import regex_tester as agent_regex_tester
+from agents import sql_explainer as agent_sql_explainer
+from agents import git_diff_analyzer as agent_git_diff_analyzer
 from core import auth as _auth
 from core import embeddings
 from core import onboarding
@@ -285,6 +290,11 @@ _BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
 _MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
 _SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
 _AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
+_SECRET_SCANNER_AGENT_ID = "1021c65c-d2bf-54ff-823a-897f9deb1029"
+_JSON_SCHEMA_VALIDATOR_AGENT_ID = "1b0b5820-b796-53cc-8d31-5e336d86d875"
+_REGEX_TESTER_AGENT_ID = "36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee"
+_SQL_EXPLAINER_AGENT_ID = "91258740-dd32-51b6-be91-a7638fae190f"
+_GIT_DIFF_ANALYZER_AGENT_ID = "8ac84144-4fd1-5883-bfad-e7b64d729b8f"
 _GITHUB_FETCHER_AGENT_ID = "5896576f-bbe6-59e4-83c1-5106002e7d10"
 _PR_REVIEWER_AGENT_ID = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
 _TEST_GENERATOR_AGENT_ID = "f515323c-7df2-5742-ac06-bc38b59a40cb"
@@ -331,6 +341,11 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
     _SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "internal://semantic_codebase_search",
     _AI_RED_TEAMER_AGENT_ID: "internal://ai_red_teamer",
+    _SECRET_SCANNER_AGENT_ID: "internal://secret_scanner",
+    _JSON_SCHEMA_VALIDATOR_AGENT_ID: "internal://json_schema_validator",
+    _REGEX_TESTER_AGENT_ID: "internal://regex_tester",
+    _SQL_EXPLAINER_AGENT_ID: "internal://sql_explainer",
+    _GIT_DIFF_ANALYZER_AGENT_ID: "internal://git_diff_analyzer",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -376,6 +391,11 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _SEMANTIC_CODEBASE_SEARCH_AGENT_ID, # embed + search a codebase
         _AI_RED_TEAMER_AGENT_ID,        # adversarial prompt tester
         _IMAGE_GENERATOR_AGENT_ID,      # real image generation model
+        _SECRET_SCANNER_AGENT_ID,           # entropy + regex credential scan
+        _JSON_SCHEMA_VALIDATOR_AGENT_ID,    # real jsonschema validation
+        _REGEX_TESTER_AGENT_ID,             # regex with backtracking timeout
+        _SQL_EXPLAINER_AGENT_ID,            # SQLite EXPLAIN QUERY PLAN
+        _GIT_DIFF_ANALYZER_AGENT_ID,        # diff parsing + risk classification
         # Benched (available via API/MCP but not shown in marketplace):
         # _FINANCIAL_AGENT_ID        — SEC EDGAR, narrow use case
         # _WIKI_AGENT_ID             — Claude can search Wikipedia natively

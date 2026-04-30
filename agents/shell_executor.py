@@ -45,6 +45,13 @@ _BLOCKLIST_PATTERNS = (
     "sudo ", "su ", "bash ", "sh ", "zsh ", "eval ", "exec ",
     "dd ", "mkfs", "mount ", "umount", "iptables", "nc ", "ncat",
     ">", ">>", "|",
+    # Shell control operators — without these, `cmd1 && cmd2` is silently
+    # truncated by shlex.split (the `&&` becomes a literal arg to cmd1 and
+    # cmd2 is never executed). Reject the whole input instead of producing
+    # misleading "exit_code 0 with no stderr" output.
+    "&&", "||", ";", "&",
+    # Command substitution and process substitution.
+    "$(", "`", "<(", ">(",
 )
 
 

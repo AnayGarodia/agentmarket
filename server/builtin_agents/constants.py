@@ -35,6 +35,11 @@ BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
 MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
 SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
 AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
+SECRET_SCANNER_AGENT_ID = "1021c65c-d2bf-54ff-823a-897f9deb1029"
+JSON_SCHEMA_VALIDATOR_AGENT_ID = "1b0b5820-b796-53cc-8d31-5e336d86d875"
+REGEX_TESTER_AGENT_ID = "36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee"
+SQL_EXPLAINER_AGENT_ID = "91258740-dd32-51b6-be91-a7638fae190f"
+GIT_DIFF_ANALYZER_AGENT_ID = "8ac84144-4fd1-5883-bfad-e7b64d729b8f"
 
 # Legacy LLM-only wrappers sunset on 2026-07-26. Keep the IDs here so startup
 # can force-hide any stale registry rows that predate the curated catalog.
@@ -81,6 +86,11 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "internal://semantic_codebase_search",
     AI_RED_TEAMER_AGENT_ID: "internal://ai_red_teamer",
+    SECRET_SCANNER_AGENT_ID: "internal://secret_scanner",
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: "internal://json_schema_validator",
+    REGEX_TESTER_AGENT_ID: "internal://regex_tester",
+    SQL_EXPLAINER_AGENT_ID: "internal://sql_explainer",
+    GIT_DIFF_ANALYZER_AGENT_ID: "internal://git_diff_analyzer",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -127,6 +137,11 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
         SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
         AI_RED_TEAMER_AGENT_ID,
+        SECRET_SCANNER_AGENT_ID,
+        JSON_SCHEMA_VALIDATOR_AGENT_ID,
+        REGEX_TESTER_AGENT_ID,
+        SQL_EXPLAINER_AGENT_ID,
+        GIT_DIFF_ANALYZER_AGENT_ID,
     }
 )
 CURATED_BUILTIN_AGENT_IDS = frozenset(set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID})

@@ -16,16 +16,21 @@ from server.builtin_agents.constants import (
     DEPENDENCY_AUDITOR_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
     FINANCIAL_AGENT_ID,
+    GIT_DIFF_ANALYZER_AGENT_ID,
     HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID,
+    JSON_SCHEMA_VALIDATOR_AGENT_ID,
     LINTER_AGENT_ID,
     LIVE_ENDPOINT_TESTER_AGENT_ID,
     MULTI_FILE_EXECUTOR_AGENT_ID,
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
     QUALITY_JUDGE_AGENT_ID,
+    REGEX_TESTER_AGENT_ID,
+    SECRET_SCANNER_AGENT_ID,
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
     SHELL_EXECUTOR_AGENT_ID,
+    SQL_EXPLAINER_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID,
     VISUAL_REGRESSION_AGENT_ID,
@@ -36,6 +41,7 @@ from server.builtin_agents.specs_part1 import load_builtin_specs_part1
 from server.builtin_agents.specs_part2 import load_builtin_specs_part2
 from server.builtin_agents.specs_part3 import load_builtin_specs_part3
 from server.builtin_agents.specs_part4 import load_builtin_specs_part4
+from server.builtin_agents.specs_part5 import load_builtin_specs_part5
 
 _DEFAULT_CATEGORY_BY_AGENT_ID = {
     FINANCIAL_AGENT_ID: "Finance",
@@ -56,6 +62,11 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     TYPE_CHECKER_AGENT_ID: "Code",
     LIVE_ENDPOINT_TESTER_AGENT_ID: "QA",
     BROWSER_AGENT_ID: "Web",
+    SECRET_SCANNER_AGENT_ID: "Security",
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: "Developer Tools",
+    REGEX_TESTER_AGENT_ID: "Developer Tools",
+    SQL_EXPLAINER_AGENT_ID: "Developer Tools",
+    GIT_DIFF_ANALYZER_AGENT_ID: "Developer Tools",
 }
 
 _DEFAULT_CACHEABLE_BY_AGENT_ID = {
@@ -76,6 +87,11 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     MULTI_FILE_EXECUTOR_AGENT_ID: False,
     SHELL_EXECUTOR_AGENT_ID: False,
     TYPE_CHECKER_AGENT_ID: False,
+    SECRET_SCANNER_AGENT_ID: True,
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: True,
+    REGEX_TESTER_AGENT_ID: True,
+    SQL_EXPLAINER_AGENT_ID: True,
+    GIT_DIFF_ANALYZER_AGENT_ID: True,
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
@@ -93,6 +109,11 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     TYPE_CHECKER_AGENT_ID: ["mypy"],
     LIVE_ENDPOINT_TESTER_AGENT_ID: ["requests"],
     BROWSER_AGENT_ID: ["playwright", "chromium"],
+    SECRET_SCANNER_AGENT_ID: [],
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: ["jsonschema"],
+    REGEX_TESTER_AGENT_ID: [],
+    SQL_EXPLAINER_AGENT_ID: ["sqlite3"],
+    GIT_DIFF_ANALYZER_AGENT_ID: [],
 }
 
 _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
@@ -118,6 +139,11 @@ _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "sandbox_execution",
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "hybrid_search",
     AI_RED_TEAMER_AGENT_ID: "agent_adversarial_testing",
+    SECRET_SCANNER_AGENT_ID: "tool_execution",
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: "tool_execution",
+    REGEX_TESTER_AGENT_ID: "sandbox_execution",
+    SQL_EXPLAINER_AGENT_ID: "sandbox_execution",
+    GIT_DIFF_ANALYZER_AGENT_ID: "tool_execution",
 }
 
 _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
@@ -143,6 +169,11 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "experimental",
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "experimental",
     AI_RED_TEAMER_AGENT_ID: "beta",
+    SECRET_SCANNER_AGENT_ID: "stable",
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: "stable",
+    REGEX_TESTER_AGENT_ID: "stable",
+    SQL_EXPLAINER_AGENT_ID: "stable",
+    GIT_DIFF_ANALYZER_AGENT_ID: "stable",
 }
 
 _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
@@ -168,6 +199,11 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: False,
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID: False,
     AI_RED_TEAMER_AGENT_ID: False,
+    SECRET_SCANNER_AGENT_ID: True,
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: True,
+    REGEX_TESTER_AGENT_ID: True,
+    SQL_EXPLAINER_AGENT_ID: True,
+    GIT_DIFF_ANALYZER_AGENT_ID: True,
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
@@ -188,6 +224,11 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
     BROWSER_AGENT_ID: ["render a page", "capture screenshot of SPA"],
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: ["run JS/TS", "run Go", "run Rust"],
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID: ["find implementation", "trace a feature across files"],
+    SECRET_SCANNER_AGENT_ID: ["scan a file for leaked keys", "audit .env for secrets", "pre-commit credential check"],
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: ["validate API payload", "check config file shape", "verify tool-call args"],
+    REGEX_TESTER_AGENT_ID: ["test a regex against samples", "detect catastrophic backtracking", "preview substitution"],
+    SQL_EXPLAINER_AGENT_ID: ["EXPLAIN a slow query", "find missing indexes", "spot full scans"],
+    GIT_DIFF_ANALYZER_AGENT_ID: ["pre-PR risk triage", "flag auth/money changes", "spot deleted tests"],
 }
 
 
@@ -233,6 +274,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
     specs.extend(load_builtin_specs_part2())
     specs.extend(load_builtin_specs_part3())
     specs.extend(load_builtin_specs_part4())
+    specs.extend(load_builtin_specs_part5())
     normalized = [_normalize_builtin_spec(spec) for spec in specs]
     seen_ids: set[str] = set()
     seen_endpoints: set[str] = set()

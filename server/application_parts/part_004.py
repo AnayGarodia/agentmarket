@@ -102,6 +102,16 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return _finalize(agent_semantic_codebase_search.run(payload))
     if agent_id == _AI_RED_TEAMER_AGENT_ID:
         return _finalize(agent_ai_red_teamer.run(payload))
+    if agent_id == _SECRET_SCANNER_AGENT_ID:
+        return _finalize(agent_secret_scanner.run(payload))
+    if agent_id == _JSON_SCHEMA_VALIDATOR_AGENT_ID:
+        return _finalize(agent_json_schema_validator.run(payload))
+    if agent_id == _REGEX_TESTER_AGENT_ID:
+        return _finalize(agent_regex_tester.run(payload))
+    if agent_id == _SQL_EXPLAINER_AGENT_ID:
+        return _finalize(agent_sql_explainer.run(payload))
+    if agent_id == _GIT_DIFF_ANALYZER_AGENT_ID:
+        return _finalize(agent_git_diff_analyzer.run(payload))
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

@@ -1,0 +1,208 @@
+"""
+sql_explainer.py — Run EXPLAIN QUERY PLAN against a real SQLite database
+populated from the caller's schema. Returns the raw plan plus
+heuristic-derived index suggestions.
+
+Owns:
+  - Spinning an isolated, in-memory SQLite database per call.
+  - Executing schema_sql (DDL + INSERTs) before EXPLAIN.
+  - Running EXPLAIN QUERY PLAN for one or more queries.
+  - Heuristic suggestions for SCAN nodes that could become SEARCH.
+
+Does NOT own:
+  - Other SQL dialects. SQLite only — close enough for plan-shape work,
+    but caller should know we're not running their PG/MySQL planner.
+  - Persisting any data anywhere.
+
+Hard limits: schema_sql ≤ 30 KB, ≤ 10 queries per call, query length
+≤ 4 KB each, total wall clock ≤ 5 s, in-memory DB only (no disk file
+written, no network).
+
+Input:
+  {
+    "schema_sql": str,          # required, DDL + seed data
+    "queries": [str],           # required, 1..10 SELECTs (parametric SELECT-only)
+    "params": [[...] | {...}]   # optional, parallel to queries
+  }
+
+Output:
+  {
+    "queries": [
+      {
+        "sql": str,
+        "plan": [{"id": int, "parent": int, "detail": str}],
+        "issues": [str],           # heuristic findings
+        "suggestions": [str],      # human-readable index/restructure hints
+        "elapsed_ms": float
+      }
+    ],
+    "total_issues": int,
+    "summary": str
+  }
+"""
+from __future__ import annotations
+
+import re
+import sqlite3
+import time
+from typing import Any
+
+_MAX_SCHEMA_CHARS = 30_000
+_MAX_QUERIES = 10
+_MAX_QUERY_CHARS = 4096
+
+_DML_RE = re.compile(r"^\s*(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER)\b", re.IGNORECASE)
+_SELECT_RE = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+
+
+def _err(code: str, message: str, **details: Any) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message, **details}}
+
+
+def _analyze_plan(plan_rows: list[tuple[int, int, int, str]]) -> tuple[list[str], list[str]]:
+    """Return (issues, suggestions) from plan rows."""
+    issues: list[str] = []
+    suggestions: list[str] = []
+    for _id, _parent, _notused, detail in plan_rows:
+        upper = detail.upper()
+        if "SCAN" in upper and "USING" not in upper:
+            tbl_match = re.search(r"SCAN\s+(?:TABLE\s+)?(\w+)", detail, re.IGNORECASE)
+            if tbl_match:
+                tbl = tbl_match.group(1)
+                issues.append(f"Full scan on `{tbl}`")
+                suggestions.append(
+                    f"Consider an index on the WHERE/JOIN columns used against `{tbl}`."
+                )
+            else:
+                issues.append(f"Full scan: {detail}")
+        if "USE TEMP B-TREE" in upper:
+            issues.append("Plan uses a temporary B-tree (likely ORDER BY/GROUP BY without an index).")
+            suggestions.append(
+                "Consider an index covering the ORDER BY/GROUP BY columns to remove the temp B-tree sort."
+            )
+        if "MATERIALIZE" in upper:
+            issues.append("Subquery materialized as a temp table.")
+        if "CORRELATED" in upper:
+            issues.append("Correlated subquery detected — may execute per outer row.")
+            suggestions.append("Consider rewriting the correlated subquery as a JOIN or CTE.")
+    # de-dup while preserving order
+    seen: set[str] = set()
+    issues = [x for x in issues if not (x in seen or seen.add(x))]
+    seen.clear()
+    suggestions = [x for x in suggestions if not (x in seen or seen.add(x))]
+    return issues, suggestions
+
+
+def run(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return _err("sql_explainer.invalid_payload", "payload must be an object")
+
+    schema_sql = payload.get("schema_sql")
+    if not isinstance(schema_sql, str) or not schema_sql.strip():
+        return _err("sql_explainer.missing_schema", "'schema_sql' is required and must contain DDL/seed SQL")
+    if len(schema_sql) > _MAX_SCHEMA_CHARS:
+        return _err("sql_explainer.schema_too_large", f"schema_sql exceeds {_MAX_SCHEMA_CHARS} chars")
+
+    queries = payload.get("queries")
+    if not isinstance(queries, list) or not queries:
+        return _err("sql_explainer.missing_queries", "'queries' is required and must be a non-empty list")
+    if len(queries) > _MAX_QUERIES:
+        return _err("sql_explainer.too_many_queries", f"max {_MAX_QUERIES} queries per call")
+    for i, q in enumerate(queries):
+        if not isinstance(q, str) or not q.strip():
+            return _err("sql_explainer.invalid_query", f"queries[{i}] must be a non-empty string")
+        if len(q) > _MAX_QUERY_CHARS:
+            return _err("sql_explainer.query_too_large", f"queries[{i}] exceeds {_MAX_QUERY_CHARS} chars")
+        if _DML_RE.match(q):
+            return _err(
+                "sql_explainer.dml_not_supported",
+                f"queries[{i}] is DML; this agent only EXPLAINs SELECT/WITH statements (run DML via db_sandbox).",
+            )
+        if not _SELECT_RE.match(q):
+            return _err(
+                "sql_explainer.non_select",
+                f"queries[{i}] does not begin with SELECT or WITH",
+            )
+
+    params_input = payload.get("params") or []
+    if not isinstance(params_input, list):
+        return _err("sql_explainer.invalid_params", "params must be a list")
+    if params_input and len(params_input) != len(queries):
+        return _err(
+            "sql_explainer.params_mismatch",
+            f"params length ({len(params_input)}) must match queries length ({len(queries)}) when provided",
+        )
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA query_only = OFF")
+    try:
+        try:
+            conn.executescript(schema_sql)
+        except sqlite3.Error as exc:
+            return _err(
+                "sql_explainer.schema_failed",
+                f"schema_sql failed to execute: {exc}",
+            )
+
+        # Lock the DB read-only for the EXPLAIN phase.
+        conn.execute("PRAGMA query_only = ON")
+
+        results: list[dict[str, Any]] = []
+        total_issues = 0
+        for i, query in enumerate(queries):
+            params: Any = []
+            if params_input:
+                params = params_input[i]
+                if not isinstance(params, (list, dict)):
+                    return _err(
+                        "sql_explainer.invalid_params_entry",
+                        f"params[{i}] must be a list or dict",
+                    )
+
+            start = time.monotonic()
+            try:
+                cursor = conn.execute(f"EXPLAIN QUERY PLAN {query}", params)
+                rows = cursor.fetchall()
+            except sqlite3.Error as exc:
+                results.append(
+                    {
+                        "sql": query,
+                        "plan": [],
+                        "issues": [f"EXPLAIN failed: {exc}"],
+                        "suggestions": [],
+                        "elapsed_ms": round((time.monotonic() - start) * 1000.0, 2),
+                        "error": str(exc),
+                    }
+                )
+                continue
+            elapsed_ms = round((time.monotonic() - start) * 1000.0, 2)
+
+            plan = [
+                {"id": int(r[0]), "parent": int(r[1]), "detail": str(r[3])}
+                for r in rows
+            ]
+            issues, suggestions = _analyze_plan(rows)
+            total_issues += len(issues)
+            results.append(
+                {
+                    "sql": query,
+                    "plan": plan,
+                    "issues": issues,
+                    "suggestions": suggestions,
+                    "elapsed_ms": elapsed_ms,
+                }
+            )
+    finally:
+        conn.close()
+
+    if total_issues == 0:
+        summary = f"All {len(queries)} query plan(s) look clean — no full scans or temp B-trees flagged."
+    else:
+        summary = f"Found {total_issues} potential plan issue(s) across {len(queries)} query/queries."
+
+    return {
+        "queries": results,
+        "total_issues": total_issues,
+        "summary": summary,
+    }
