@@ -43,7 +43,8 @@ You are a staff-level software engineer and application security reviewer.
 Review code or a diff like a production reviewer:
 - prefer correctness, security, performance, and maintainability over style trivia
 - name concrete failure modes
-- assign CWE IDs and OWASP categories when applicable
+- assign CWE IDs and OWASP categories only when the issue is genuinely security-relevant
+- do not classify plain crashes, exceptions, missing validation, or divide-by-zero paths as security issues unless attacker control and exploitable impact are explicit
 - suggest fixes that are specific and implementable
 - avoid filler, hedging, and generic praise
 
@@ -91,6 +92,8 @@ _MAX_CONTEXT_CHARS = 600
 _VALID_FOCUS = {"all", "security", "performance", "bugs", "style", "correctness", "maintainability"}
 _VALID_SEVERITY = {"critical", "high", "medium", "low", "info"}
 _VALID_CATEGORY = {"security", "performance", "bug", "style", "maintainability", "correctness"}
+_DIVIDE_BY_ZERO_RE = re.compile(r"\b(divide|division|denominator|divide-by-zero|division by zero|zero guard)\b", re.IGNORECASE)
+_SECURITY_EXPLOIT_RE = re.compile(r"\b(attacker|exploit|remote|dos|denial of service|privilege|bypass|arbitrary)\b", re.IGNORECASE)
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -127,7 +130,7 @@ def _normalize_issue(item: Any) -> dict[str, Any] | None:
     owasp_category = item.get("owasp_category")
     if owasp_category is not None:
         owasp_category = str(owasp_category).strip() or None
-    return {
+    normalized = {
         "line_hint": line_hint,
         "severity": _normalize_severity(item.get("severity")),
         "category": _normalize_category(item.get("category")),
@@ -136,6 +139,36 @@ def _normalize_issue(item: Any) -> dict[str, Any] | None:
         "description": description[:600],
         "fix": fix[:800],
     }
+    return _postprocess_issue(normalized)
+
+
+def _postprocess_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    description = str(issue.get("description") or "")
+    fix = str(issue.get("fix") or "")
+    line_hint = str(issue.get("line_hint") or "")
+    combined = " ".join(part for part in (description, fix, line_hint) if part)
+    cwe_id = str(issue.get("cwe_id") or "").strip().upper()
+
+    # The reviewer has been prone to labeling plain divide-by-zero bugs as
+    # critical security vulnerabilities with CWE/OWASP tags. Without explicit
+    # attacker-controlled exploitability, keep those as correctness bugs.
+    if (
+        cwe_id == "CWE-369"
+        or _DIVIDE_BY_ZERO_RE.search(combined)
+    ) and not _SECURITY_EXPLOIT_RE.search(combined):
+        issue["severity"] = "medium"
+        issue["category"] = "correctness"
+        issue["cwe_id"] = None
+        issue["owasp_category"] = None
+
+    if issue.get("category") == "security":
+        has_security_context = bool(issue.get("cwe_id") or issue.get("owasp_category"))
+        if not has_security_context and not _SECURITY_EXPLOIT_RE.search(combined):
+            issue["category"] = "correctness"
+            if issue.get("severity") == "critical":
+                issue["severity"] = "high"
+
+    return issue
 
 
 def _severity_counts(issues: list[dict[str, Any]]) -> dict[str, int]:

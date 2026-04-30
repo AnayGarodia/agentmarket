@@ -713,7 +713,17 @@ def call_meta_tool(
 
     # aztea_set_session_budget: pure client-side state change, no API call needed
     if tool_name == "aztea_set_session_budget":
-        budget = int(arguments.get("budget_cents") or 0)
+        if "budget_cents" not in arguments:
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": "budget_cents is required. Pass 0 explicitly to clear the session budget.",
+            }
+        try:
+            budget = int(arguments.get("budget_cents") or 0)
+        except (TypeError, ValueError):
+            return False, {"error": "INVALID_INPUT", "message": "budget_cents must be an integer."}
+        if budget < 0:
+            return False, {"error": "INVALID_INPUT", "message": "budget_cents must be >= 0."}
         session_state["budget_cents"] = budget if budget > 0 else None
         spent = int(session_state.get("spent_cents") or 0)
         msg = (
@@ -788,7 +798,10 @@ def call_meta_tool(
         if tool_name == "aztea_compare_status":
             return _compare_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_select_compare_winner":
-            return _select_compare_winner(session, base, hdrs, timeout, arguments)
+            ok, result = _select_compare_winner(session, base, hdrs, timeout, arguments)
+            if ok:
+                _refund(session_state, result.get("refund_amount_cents"))
+            return ok, result
         if tool_name == "aztea_run_pipeline":
             return _run_pipeline(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_pipeline_status":
@@ -806,6 +819,15 @@ def call_meta_tool(
 def _accrue(session_state: dict[str, Any], amount_cents: Any) -> None:
     if amount_cents is not None:
         session_state["spent_cents"] = int(session_state.get("spent_cents") or 0) + int(amount_cents)
+
+
+def _refund(session_state: dict[str, Any], amount_cents: Any) -> None:
+    if amount_cents is None:
+        return
+    session_state["spent_cents"] = max(
+        0,
+        int(session_state.get("spent_cents") or 0) - int(amount_cents),
+    )
 
 
 # ─── Handlers ────────────────────────────────────────────────────────────────

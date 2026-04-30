@@ -63,6 +63,21 @@ def test_meta_tools_include_annotations_for_permission_and_parallel_hints():
     assert by_name["aztea_hire_async"]["annotations"]["readOnlyHint"] is False
 
 
+def test_set_session_budget_requires_explicit_budget_cents():
+    ok, result = meta_tools.call_meta_tool(
+        session=None,
+        base_url="https://aztea.test",
+        api_key="az_test",
+        tool_name="aztea_set_session_budget",
+        arguments={},
+        session_state={"spent_cents": 0, "budget_cents": 500},
+        timeout=5,
+    )
+    assert ok is False
+    assert result["error"] == "INVALID_INPUT"
+    assert "budget_cents is required" in result["message"]
+
+
 def test_verify_output_uses_jobs_verification_route(monkeypatch):
     captured: dict[str, object] = {}
 

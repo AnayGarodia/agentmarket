@@ -109,6 +109,39 @@ def test_registry_bridge_lazy_search_and_describe(monkeypatch):
     assert described["codex_recommended"] is True
 
 
+def test_registry_bridge_describe_accepts_agent_suffix_alias(monkeypatch):
+    monkeypatch.setattr(_MODULE._feature_flags, "LAZY_MCP_SCHEMAS", True)
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    bridge._entries = [
+        {
+            "agent_id": "agent-review",
+            "tool_name": "code_review_agent",
+            "tool": {
+                "name": "code_review_agent",
+                "description": "Review code and diffs for correctness.",
+                "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}},
+                "output_schema": {"type": "object"},
+            },
+            "catalog_metadata": {
+                "name": "Code Review Agent",
+                "category": "Code Review",
+                "tooling_kind": "structured_review",
+                "stability_tier": "stable",
+                "codex_recommended": True,
+                "short_use_cases": ["review a diff"],
+                "price_per_call_usd": 0.01,
+                "success_rate": 0.9,
+                "trust_score": 60,
+                "avg_latency_ms": 1200,
+            },
+        }
+    ]
+
+    ok, described = bridge.call_tool("aztea_describe", {"slug": "code_review"})
+    assert ok is True
+    assert described["slug"] == "code_review_agent"
+
+
 def test_initialize_instructions_encourage_proactive_orchestration():
     server = _MODULE.MCPStdioServer(bridge=_DummyBridge(), refresh_seconds=60)
     instructions = server._initialize_result()["instructions"]

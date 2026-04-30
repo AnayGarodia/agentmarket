@@ -300,6 +300,40 @@ def _query_terms(query: str) -> list[str]:
     return result
 
 
+def _entry_aliases(slug: str, name: str, agent_id: str | None = None) -> list[str]:
+    aliases: list[str] = []
+    candidates = [
+        str(slug or "").strip(),
+        re.sub(r"[^a-z0-9]+", "_", str(name or "").lower()).strip("_"),
+    ]
+    for candidate in candidates:
+        if candidate and candidate not in aliases:
+            aliases.append(candidate)
+        if candidate.endswith("_agent"):
+            trimmed = candidate[:-6].rstrip("_")
+            if trimmed and trimmed not in aliases:
+                aliases.append(trimmed)
+        elif candidate:
+            expanded = f"{candidate}_agent"
+            if expanded not in aliases:
+                aliases.append(expanded)
+    if agent_id:
+        aliases.append(str(agent_id).strip())
+    return [alias for alias in aliases if alias]
+
+
+def _session_accrue(session_state: dict[str, Any], amount_cents: Any) -> None:
+    if amount_cents is None:
+        return
+    session_state["spent_cents"] = int(session_state.get("spent_cents") or 0) + int(amount_cents)
+
+
+def _session_refund(session_state: dict[str, Any], amount_cents: Any) -> None:
+    if amount_cents is None:
+        return
+    session_state["spent_cents"] = max(0, int(session_state.get("spent_cents") or 0) - int(amount_cents))
+
+
 def _workflow_hints(query: str) -> list[str]:
     lowered = str(query or "").lower()
     hints: list[str] = []
@@ -412,6 +446,7 @@ class RegistryBridge:
             entries.append(
                 {
                     "slug": str(tool.get("name") or "").strip(),
+                    "aliases": [str(tool.get("name") or "").strip()],
                     "kind": "meta_tool",
                     "name": str(tool.get("name") or "").strip(),
                     "description": str(tool.get("description") or "").strip(),
@@ -442,6 +477,11 @@ class RegistryBridge:
             entries.append(
                 {
                     "slug": str(entry.get("tool_name") or tool.get("name") or "").strip(),
+                    "aliases": _entry_aliases(
+                        str(entry.get("tool_name") or tool.get("name") or "").strip(),
+                        str(meta.get("name") or tool.get("name") or "").strip(),
+                        str(entry.get("agent_id") or "").strip() or None,
+                    ),
                     "kind": "registry_agent",
                     "name": str(tool.get("name") or "").strip(),
                     "description": str(tool.get("description") or "").strip(),
@@ -475,7 +515,7 @@ class RegistryBridge:
         if not normalized:
             return None
         for entry in self._catalog_entries():
-            if entry["slug"] == normalized:
+            if entry["slug"] == normalized or normalized in set(entry.get("aliases") or []):
                 return entry
         return None
 
@@ -485,6 +525,7 @@ class RegistryBridge:
         terms = _query_terms(normalized)
         matches: list[tuple[int, dict[str, Any]]] = []
         for entry in self._catalog_entries():
+            alias_text = " ".join(str(alias) for alias in entry.get("aliases") or [])
             haystack = "\n".join(
                 [
                     str(entry.get("name") or ""),
@@ -493,14 +534,16 @@ class RegistryBridge:
                     " ".join(str(tag) for tag in entry.get("tags") or []),
                     " ".join(str(item) for item in entry.get("short_use_cases") or []),
                     str(entry.get("tooling_kind") or ""),
+                    alias_text,
                 ]
             ).lower()
             score = 0.0
             reasons: list[str] = []
-            if entry["slug"].lower() == normalized:
+            aliases = {str(alias).lower() for alias in entry.get("aliases") or []}
+            if entry["slug"].lower() == normalized or normalized in aliases:
                 score += 100
                 reasons.append("exact slug match")
-            if normalized and normalized in entry["slug"].lower():
+            if normalized and (normalized in entry["slug"].lower() or any(normalized in alias for alias in aliases)):
                 score += 25
                 reasons.append("slug match")
             if normalized and normalized in haystack:
@@ -508,6 +551,14 @@ class RegistryBridge:
             if normalized and normalized in str(entry.get("description") or "").lower():
                 reasons.append("description match")
             score += sum(3 for term in terms if term in haystack)
+            if {"security", "vulnerability", "vulnerabilities", "cve", "npm", "dependency", "dependencies", "audit"} & set(terms):
+                if any(token in haystack for token in ("cve", "nvd", "osv", "dependency", "dependencies", "audit")):
+                    score += 12
+                if "package_finder" in entry["slug"] or "changelog" in entry["slug"]:
+                    score -= 8
+            if {"review", "diff", "bugs", "correctness"} & set(terms):
+                if "code_review" in alias_text or "code review" in haystack:
+                    score += 10
             if entry.get("codex_recommended"):
                 score += 8
             if entry.get("is_featured"):
@@ -700,10 +751,13 @@ class RegistryBridge:
                 return False, {"error": "INVALID_INPUT", "message": "arguments must be an object."}
             return self.call_tool(slug, tool_arguments)
 
+        resolved_entry = self._catalog_entry(tool_name)
+        resolved_tool_name = str(resolved_entry.get("slug") or tool_name) if resolved_entry else tool_name
+
         # Route platform meta-tools directly to Aztea API
-        if tool_name in meta_tools.META_TOOL_NAMES:
+        if resolved_tool_name in meta_tools.META_TOOL_NAMES:
             return meta_tools.call_meta_tool(
-                tool_name,
+                resolved_tool_name,
                 arguments,
                 base_url=self.base_url,
                 api_key=self.api_key,
@@ -712,7 +766,7 @@ class RegistryBridge:
                 session_state=self._session_state,
             )
 
-        agent_id = self._agent_id_for_tool(tool_name)
+        agent_id = self._agent_id_for_tool(resolved_tool_name)
         if not agent_id:
             return False, {"error": "TOOL_NOT_FOUND", "message": f"Unknown tool '{tool_name}'."}
 
@@ -743,6 +797,11 @@ class RegistryBridge:
 
         if response.ok:
             if isinstance(parsed_body, dict):
+                entry = resolved_entry or self._catalog_entry(resolved_tool_name)
+                if entry is not None:
+                    price_usd = entry.get("price_per_call_usd")
+                    if price_usd is not None:
+                        _session_accrue(self._session_state, round(float(price_usd) * 100))
                 return True, parsed_body
             return True, {"result": parsed_body}
 
@@ -770,6 +829,8 @@ class RegistryBridge:
                         error_payload[key] = inner_data[key]
             elif isinstance(detail, str) and detail:
                 error_payload["charge_message"] = detail
+        if bool(error_payload.get("refunded")):
+            _session_refund(self._session_state, error_payload.get("refund_amount_cents"))
         return False, error_payload
 
 

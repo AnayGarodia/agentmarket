@@ -535,6 +535,26 @@ def test_registry_hides_deprecated_builtin_agents(client):
     assert "Visual Regression" not in names
 
 
+def test_startup_suspends_sunset_deprecated_agents(client):
+    legacy_agent_id = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
+    registry.register_agent(
+        agent_id=legacy_agent_id,
+        name="Changelog Agent",
+        description="legacy changelog wrapper",
+        endpoint_url="https://agents.example.com/changelog",
+        price_per_call_usd=0.02,
+        tags=["deprecated", "legacy"],
+        input_schema={"type": "object", "properties": {"package": {"type": "string"}}},
+        review_status="approved",
+        status="active",
+    )
+    assert registry.get_agent(legacy_agent_id, include_unapproved=True)["status"] == "active"
+
+    server.ensure_builtin_agents_registered()
+
+    assert registry.get_agent(legacy_agent_id, include_unapproved=True)["status"] == "suspended"
+
+
 def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(client):
     with auth._conn() as conn:
         system_row = conn.execute(
@@ -571,6 +591,38 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         agent = registry.get_agent(non_curated_id, include_unapproved=True)
         if agent is not None:
             assert str(agent["endpoint_url"]).startswith("internal://")
+
+
+def test_registry_call_rejects_wrong_type_before_charge(client):
+    caller = _register_user()
+    _fund_user_wallet(caller, 100)
+    me = client.get("/auth/me", headers=_auth_headers(caller["raw_api_key"]))
+    assert me.status_code == 200, me.text
+    accepted = client.post(
+        "/auth/legal/accept",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "terms_version": me.json()["terms_version_current"],
+            "privacy_version": me.json()["privacy_version_current"],
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+    before = client.get("/wallets/me", headers=_auth_headers(caller["raw_api_key"]))
+    assert before.status_code == 200, before.text
+    before_balance = before.json()["balance_cents"]
+
+    response = client.post(
+        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"code": 12345, "language": "python"},
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["error"] == "request.input_schema_violation"
+
+    after = client.get("/wallets/me", headers=_auth_headers(caller["raw_api_key"]))
+    assert after.status_code == 200, after.text
+    assert after.json()["balance_cents"] == before_balance
 
 
 def test_suspended_internal_builtin_is_reactivated_at_call_gate(client):

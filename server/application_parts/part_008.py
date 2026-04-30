@@ -79,6 +79,142 @@ def _coerce_payload_to_schema(payload: dict, schema: dict) -> dict:
     return out
 
 
+def _allow_schema_string_coercion(request: Request) -> bool:
+    content_type = str(request.headers.get("Content-Type") or "").lower()
+    return content_type.startswith("application/x-www-form-urlencoded") or content_type.startswith("multipart/form-data")
+
+
+class _SchemaValidationError(ValueError):
+    def __init__(self, message: str, path: list[Any] | None = None):
+        super().__init__(message)
+        self.message = message
+        self.absolute_path = list(path or [])
+
+
+def _raise_schema_error(message: str, path: list[Any] | None = None) -> None:
+    raise _SchemaValidationError(message, path)
+
+
+def _validate_schema_subset(instance: Any, schema: dict[str, Any], path: list[Any] | None = None) -> None:
+    current_path = list(path or [])
+    declared_type = schema.get("type")
+    if isinstance(declared_type, list):
+        if not any(_schema_type_matches(instance, candidate) for candidate in declared_type):
+            _raise_schema_error(
+                f"Expected one of {', '.join(str(candidate) for candidate in declared_type)}.",
+                current_path,
+            )
+    elif declared_type is not None and not _schema_type_matches(instance, declared_type):
+        _raise_schema_error(f"Expected {declared_type}.", current_path)
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and instance not in enum_values:
+        _raise_schema_error(
+            f"Value must be one of: {', '.join(repr(item) for item in enum_values)}.",
+            current_path,
+        )
+
+    if isinstance(instance, dict):
+        required = schema.get("required")
+        if isinstance(required, list):
+            for key in required:
+                if key not in instance:
+                    _raise_schema_error(f"Missing required field '{key}'.", current_path + [key])
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for key, prop_schema in properties.items():
+                if key in instance and isinstance(prop_schema, dict):
+                    _validate_schema_subset(instance[key], prop_schema, current_path + [key])
+        additional = schema.get("additionalProperties", True)
+        if additional is False and isinstance(properties, dict):
+            allowed = set(properties.keys())
+            for key in instance:
+                if key not in allowed:
+                    _raise_schema_error(f"Unexpected field '{key}'.", current_path + [key])
+        return
+
+    if isinstance(instance, list):
+        min_items = schema.get("minItems")
+        if isinstance(min_items, int) and len(instance) < min_items:
+            _raise_schema_error(f"Array must contain at least {min_items} item(s).", current_path)
+        max_items = schema.get("maxItems")
+        if isinstance(max_items, int) and len(instance) > max_items:
+            _raise_schema_error(f"Array must contain at most {max_items} item(s).", current_path)
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(instance):
+                _validate_schema_subset(item, item_schema, current_path + [index])
+        return
+
+    if isinstance(instance, str):
+        min_length = schema.get("minLength")
+        if isinstance(min_length, int) and len(instance) < min_length:
+            _raise_schema_error(f"String must be at least {min_length} character(s).", current_path)
+        max_length = schema.get("maxLength")
+        if isinstance(max_length, int) and len(instance) > max_length:
+            _raise_schema_error(f"String must be at most {max_length} character(s).", current_path)
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str):
+            try:
+                if re.search(pattern, instance) is None:
+                    _raise_schema_error("String does not match the required pattern.", current_path)
+            except re.error:
+                pass
+        return
+
+    if isinstance(instance, bool):
+        return
+
+    if isinstance(instance, (int, float)) and not isinstance(instance, bool):
+        minimum = schema.get("minimum")
+        if isinstance(minimum, (int, float)) and instance < minimum:
+            _raise_schema_error(f"Value must be >= {minimum}.", current_path)
+        maximum = schema.get("maximum")
+        if isinstance(maximum, (int, float)) and instance > maximum:
+            _raise_schema_error(f"Value must be <= {maximum}.", current_path)
+        exclusive_minimum = schema.get("exclusiveMinimum")
+        if isinstance(exclusive_minimum, (int, float)) and instance <= exclusive_minimum:
+            _raise_schema_error(f"Value must be > {exclusive_minimum}.", current_path)
+        exclusive_maximum = schema.get("exclusiveMaximum")
+        if isinstance(exclusive_maximum, (int, float)) and instance >= exclusive_maximum:
+            _raise_schema_error(f"Value must be < {exclusive_maximum}.", current_path)
+
+
+def _schema_type_matches(value: Any, declared_type: Any) -> bool:
+    if declared_type == "object":
+        return isinstance(value, dict)
+    if declared_type == "array":
+        return isinstance(value, list)
+    if declared_type == "string":
+        return isinstance(value, str)
+    if declared_type == "boolean":
+        return isinstance(value, bool)
+    if declared_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if declared_type == "number":
+        return (isinstance(value, int) or isinstance(value, float)) and not isinstance(value, bool)
+    if declared_type == "null":
+        return value is None
+    return True
+
+
+def _validate_payload_against_schema(
+    *,
+    payload: dict[str, Any],
+    schema: dict[str, Any] | None,
+    allow_string_coercion: bool,
+) -> dict[str, Any]:
+    if not isinstance(schema, dict) or not schema:
+        return payload
+    normalized_payload = _coerce_payload_to_schema(payload, schema) if allow_string_coercion else dict(payload)
+    try:
+        import jsonschema as _jsc
+        _jsc.validate(instance=normalized_payload, schema=schema)
+    except ImportError:
+        _validate_schema_subset(normalized_payload, schema, [])
+    return normalized_payload
+
+
 @app.post(
     "/registry/search",
     response_model=core_models.RegistrySearchResponse,
@@ -634,6 +770,23 @@ def registry_call(
                     {"agent_id": agent_id},
                 ),
             )
+    agent_input_schema = agent.get("input_schema")
+    if isinstance(agent_input_schema, dict) and agent_input_schema:
+        try:
+            payload = _validate_payload_against_schema(
+                payload=payload,
+                schema=agent_input_schema,
+                allow_string_coercion=_allow_schema_string_coercion(request),
+            )
+        except Exception as _schema_exc:
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INPUT_SCHEMA_VIOLATION,
+                    f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                    {"path": list(getattr(_schema_exc, "absolute_path", [])), "agent_id": agent_id},
+                ),
+            )
 
     pricing_estimate = _estimate_variable_charge(
         agent=agent,
@@ -934,30 +1087,6 @@ def registry_call(
                 {"size_bytes": payload_bytes, "limit_bytes": 256 * 1024},
             ),
         )
-
-    # --- Input schema validation (if agent declared one) ---
-    agent_input_schema = agent.get("input_schema")
-    if isinstance(agent_input_schema, dict) and agent_input_schema:
-        # Coerce string values from HTML form inputs to the types declared in the schema.
-        # e.g. "8" → 8 for fields with "type": "integer".
-        payload = _coerce_payload_to_schema(payload, agent_input_schema)
-        try:
-            import jsonschema as _jsc
-            _jsc.validate(instance=payload, schema=agent_input_schema)
-        except ImportError:
-            pass
-        except Exception as _schema_exc:
-            payments.post_call_refund(
-                caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
-            )
-            raise HTTPException(
-                status_code=422,
-                detail=error_codes.make_error(
-                    error_codes.INPUT_SCHEMA_VIOLATION,
-                    f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
-                    {"path": list(getattr(_schema_exc, "absolute_path", []))},
-                ),
-            )
 
     try:
         job = jobs.create_job(
@@ -1276,6 +1405,23 @@ def jobs_create(
                         "required_min_caller_trust": round(min_caller_trust, 6),
                         "agent_id": agent["agent_id"],
                     },
+                ),
+            )
+    agent_input_schema = agent.get("input_schema")
+    if isinstance(agent_input_schema, dict) and agent_input_schema:
+        try:
+            body.input_payload = _validate_payload_against_schema(
+                payload=dict(body.input_payload or {}),
+                schema=agent_input_schema,
+                allow_string_coercion=_allow_schema_string_coercion(request),
+            )
+        except Exception as _schema_exc:
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INPUT_SCHEMA_VIOLATION,
+                    f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                    {"path": list(getattr(_schema_exc, "absolute_path", [])), "agent_id": agent["agent_id"]},
                 ),
             )
 

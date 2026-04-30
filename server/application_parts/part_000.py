@@ -285,6 +285,22 @@ _BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
 _MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
 _SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
 _AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
+_GITHUB_FETCHER_AGENT_ID = "5896576f-bbe6-59e4-83c1-5106002e7d10"
+_PR_REVIEWER_AGENT_ID = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
+_TEST_GENERATOR_AGENT_ID = "f515323c-7df2-5742-ac06-bc38b59a40cb"
+_SPEC_WRITER_AGENT_ID = "ce9504a3-74c8-51a5-913e-6ae55787abc8"
+_CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
+_PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
+_SUNSET_DEPRECATED_AGENT_IDS = frozenset(
+    {
+        _GITHUB_FETCHER_AGENT_ID,
+        _PR_REVIEWER_AGENT_ID,
+        _TEST_GENERATOR_AGENT_ID,
+        _SPEC_WRITER_AGENT_ID,
+        _CHANGELOG_AGENT_ID,
+        _PACKAGE_FINDER_AGENT_ID,
+    }
+)
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")

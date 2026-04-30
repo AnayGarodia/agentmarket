@@ -196,6 +196,41 @@ def test_code_review_requires_code_or_diff():
     assert result["error"]["code"] == "code_review_agent.missing_input"
 
 
+def test_code_review_downgrades_plain_divide_by_zero_from_security(monkeypatch):
+    monkeypatch.setattr(
+        codereview,
+        "run_with_fallback",
+        lambda req: SimpleNamespace(
+            text=json.dumps(
+                {
+                    "language_detected": "python",
+                    "score": 3,
+                    "complexity_score": 2,
+                    "issues": [
+                        {
+                            "line_hint": "return a / b",
+                            "severity": "critical",
+                            "category": "security",
+                            "cwe_id": "CWE-369",
+                            "owasp_category": "A03 Injection",
+                            "description": "Potential divide-by-zero if b is 0.",
+                            "fix": "Validate b before division.",
+                        }
+                    ],
+                    "summary": "One critical security issue found.",
+                }
+            )
+        ),
+    )
+    result = codereview.run(code="def divide(a, b):\n    return a / b\n", language="python")
+    issue = result["issues"][0]
+    assert issue["severity"] == "medium"
+    assert issue["category"] == "correctness"
+    assert issue["cwe_id"] is None
+    assert issue["owasp_category"] is None
+    assert result["security_critical"] is False
+
+
 def test_type_checker_returns_structured_error_for_missing_code():
     result = type_checker.run({"language": "python"})
     assert result["error"]["code"] == "type_checker.missing_code"

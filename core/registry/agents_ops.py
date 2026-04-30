@@ -74,9 +74,9 @@ from .pricing import (
     validate_pricing_config,
 )
 
-LEXICAL_SCORE_WEIGHT = 0.35
+LEXICAL_SCORE_WEIGHT = 0.45
 SEMANTIC_SCORE_WEIGHT = 0.30
-TRUST_SCORE_WEIGHT_HYBRID = 0.25
+TRUST_SCORE_WEIGHT_HYBRID = 0.15
 INVERSE_PRICE_WEIGHT_HYBRID = 0.10
 
 
@@ -1068,6 +1068,38 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
     return max(0.0, min(1.0, score))
 
 
+def _intent_match_bonus(query: str, agent: dict) -> float:
+    terms = _query_terms(query)
+    if not terms:
+        return 0.0
+
+    name = str(agent.get("name") or "").lower()
+    description = str(agent.get("description") or "").lower()
+    tags = {str(tag).strip().lower() for tag in _parse_tags(agent.get("tags"))}
+    combined = " ".join([name, description, " ".join(sorted(tags))])
+    bonus = 0.0
+
+    security_terms = {"security", "vulnerability", "vulnerabilities", "cve", "cves", "npm", "package", "dependency", "dependencies", "audit"}
+    review_terms = {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
+
+    if security_terms & set(terms):
+        if {"cve", "cves"} & set(terms) and any(token in combined for token in ("cve", "nvd", "osv")):
+            bonus += 0.30
+        if {"vulnerability", "vulnerabilities", "audit", "dependency", "dependencies", "package", "npm"} & set(terms):
+            if any(token in combined for token in ("dependency", "dependencies", "audit", "package", "npm", "license")):
+                bonus += 0.25
+        if "package_finder" in name or "changelog" in name:
+            bonus -= 0.20
+
+    if review_terms & set(terms):
+        if any(token in combined for token in ("code review", "review", "diff", "correctness", "maintainability")):
+            bonus += 0.20
+        if any(token in combined for token in ("linter", "ruff", "eslint", "type checker", "mypy")):
+            bonus -= 0.05
+
+    return max(-0.25, min(0.40, bonus))
+
+
 def _matched_phrase(query: str, haystack: str) -> str | None:
     terms = _query_terms(query)
     if not terms:
@@ -1237,11 +1269,13 @@ def search_agents(
             agent,
             supported_fields,
         )
+        intent_bonus = _intent_match_bonus(normalized_query, agent)
         candidates.append(
             {
                 "agent": agent,
                 "similarity": semantic_similarity,  # 0.0 when embeddings disabled
                 "lexical_score": lexical_score,
+                "intent_bonus": intent_bonus,
                 "trust": trust,
                 "price_cents": price_cents,
                 "supported_fields": supported_fields,
@@ -1283,6 +1317,7 @@ def search_agents(
                 + SEMANTIC_SCORE_WEIGHT * candidate["similarity"]
                 + TRUST_SCORE_WEIGHT_HYBRID * candidate["trust"]
                 + INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
+                + candidate["intent_bonus"]
             )
         else:
             # Embeddings disabled: lexical matching becomes the primary routing
@@ -1293,6 +1328,7 @@ def search_agents(
                 LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
                 + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining)) * candidate["trust"]
                 + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining)) * inverse_price
+                + candidate["intent_bonus"]
             )
         candidate["blended_score"] = blended_score
         candidate["match_reasons"] = _match_reasons(

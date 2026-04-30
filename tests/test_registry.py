@@ -211,11 +211,13 @@ def test_semantic_search_applies_filters_and_weighting(isolated_db):
             inverse_price = 1.0
         else:
             inverse_price = 1.0 - ((price_cents - min_price) / (max_price - min_price))
+        intent_bonus = registry._intent_match_bonus("find bugs in python code", item["agent"])
         expected = (
             registry.LEXICAL_SCORE_WEIGHT * item["lexical_score"]
             + registry.SEMANTIC_SCORE_WEIGHT * item["similarity"]
             + registry.TRUST_SCORE_WEIGHT_HYBRID * item["trust"]
             + registry.INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
+            + intent_bonus
         )
         assert item["blended_score"] == pytest.approx(round(expected, 6), abs=1e-5)
 
@@ -296,3 +298,32 @@ def test_registry_search_endpoint_returns_ranked_results(isolated_db):
     )
     review_result = next(r for r in body["results"] if r["agent"]["agent_id"] == server._CODEREVIEW_AGENT_ID)
     assert isinstance(review_result["match_reasons"], list) and review_result["match_reasons"]
+
+
+def test_security_queries_prefer_dependency_audit_over_package_finder(isolated_db):
+    registry.init_db()
+    reputation.init_reputation_db()
+
+    dependency_auditor = registry.register_agent(
+        name="Dependency Auditor",
+        description="Find vulnerabilities, CVEs, and outdated packages in npm and Python manifests.",
+        endpoint_url="https://agents.example.com/dependency-auditor",
+        price_per_call_usd=0.04,
+        tags=["dependency-audit", "security", "npm", "cve"],
+        input_schema={"type": "object", "properties": {"manifest": {"type": "string"}}},
+    )
+    package_finder = registry.register_agent(
+        name="Package Finder",
+        description="Suggest npm and PyPI packages based on a natural-language description.",
+        endpoint_url="https://agents.example.com/package-finder",
+        price_per_call_usd=0.02,
+        tags=["packages", "discovery"],
+        input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+    )
+
+    _set_agent_stats(isolated_db, dependency_auditor, total_calls=8, successful_calls=8, avg_latency_ms=600)
+    _set_agent_stats(isolated_db, package_finder, total_calls=30, successful_calls=30, avg_latency_ms=300)
+
+    results = registry.search_agents("find security vulnerabilities in npm package", limit=5)
+    assert results[0]["agent"]["agent_id"] == dependency_auditor
+    assert all(item["agent"]["agent_id"] != package_finder or idx > 0 for idx, item in enumerate(results))

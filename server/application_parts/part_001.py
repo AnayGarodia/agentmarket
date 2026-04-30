@@ -357,6 +357,10 @@ def ensure_builtin_agents_registered() -> None:
         stale = registry.get_agent(agent_id, include_unapproved=True)
         if stale is not None and str(stale.get("status") or "").strip().lower() != "suspended":
             registry.set_agent_status(agent_id, "suspended")
+    for agent_id in _SUNSET_DEPRECATED_AGENT_IDS:
+        stale = registry.get_agent(agent_id, include_unapproved=True)
+        if stale is not None and str(stale.get("status") or "").strip().lower() != "suspended":
+            registry.set_agent_status(agent_id, "suspended")
 
 
 @asynccontextmanager

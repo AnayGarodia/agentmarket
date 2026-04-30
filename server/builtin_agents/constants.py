@@ -36,6 +36,26 @@ MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
 SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
 AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
 
+# Legacy LLM-only wrappers sunset on 2026-07-26. Keep the IDs here so startup
+# can force-hide any stale registry rows that predate the curated catalog.
+GITHUB_FETCHER_AGENT_ID = "5896576f-bbe6-59e4-83c1-5106002e7d10"
+PR_REVIEWER_AGENT_ID = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
+TEST_GENERATOR_AGENT_ID = "f515323c-7df2-5742-ac06-bc38b59a40cb"
+SPEC_WRITER_AGENT_ID = "ce9504a3-74c8-51a5-913e-6ae55787abc8"
+CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
+PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
+
+SUNSET_DEPRECATED_AGENT_IDS = frozenset(
+    {
+        GITHUB_FETCHER_AGENT_ID,
+        PR_REVIEWER_AGENT_ID,
+        TEST_GENERATOR_AGENT_ID,
+        SPEC_WRITER_AGENT_ID,
+        CHANGELOG_AGENT_ID,
+        PACKAGE_FINDER_AGENT_ID,
+    }
+)
+
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: "internal://financial",
     CODEREVIEW_AGENT_ID: "internal://code-review",
