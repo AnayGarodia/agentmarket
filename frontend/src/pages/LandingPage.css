@@ -58,7 +58,7 @@
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
-  background: rgba(251, 247, 239, 0.88);
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border-soft);
@@ -160,7 +160,7 @@
 .lp__mobile-bg {
   position: absolute;
   inset: 0;
-  background: rgba(16, 43, 47, 0.4);
+  background: color-mix(in srgb, var(--text-primary) 40%, transparent);
   border: none;
   cursor: pointer;
 }
@@ -201,38 +201,29 @@
 
 .lp__edge {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 80px;
+  top: 40px;
+  bottom: 40px;
+  width: 64px;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 18px;
-  padding: 80px 14px;
+  align-items: center;
   pointer-events: none;
-  opacity: 0.45;
+  color: var(--terracotta);
+  z-index: 0;
 }
-.lp__edge--left { left: 0; }
-.lp__edge-row {
-  display: flex;
-  justify-content: space-between;
-}
-.lp__edge-mark {
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--terracotta);
-  transform: rotate(45deg);
-  display: block;
-}
+.lp__edge--left  { left: 0; }
+.lp__edge--right { right: 0; transform: scaleX(-1); }
+.lp__edge svg { height: 100%; width: 64px; }
 
 .lp__hero-inner {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 0 32px;
+  padding: 0 96px;
   display: grid;
   grid-template-columns: 1fr 1.05fr;
   gap: 80px;
   align-items: center;
+  position: relative;
+  z-index: 1;
 }
 
 .lp__hero-copy { max-width: 540px; }
@@ -351,7 +342,17 @@
   background: var(--canvas-warm);
   border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
+  position: relative;
+  overflow: hidden;
 }
+.lp__how-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.lp__sec--how .lp__sec-inner { position: relative; z-index: 1; }
 
 .lp__steps {
   display: grid;
@@ -359,58 +360,100 @@
   gap: 32px;
   position: relative;
 }
+/* Architectural connecting line through the step circles */
+.lp__steps::before {
+  content: '';
+  position: absolute;
+  top: 40px;
+  left: 12.5%;
+  right: 12.5%;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--copper) 8%,
+    var(--copper) 92%,
+    transparent 100%
+  );
+  opacity: 0.35;
+  z-index: 0;
+}
 
 .lp__step {
   position: relative;
   text-align: center;
   padding: 0 12px;
+  z-index: 1;
 }
 
 .lp__step-circle {
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 22px;
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 28px;
   border: 1px solid var(--border-bright);
   border-radius: 50%;
   display: grid;
   place-items: center;
   background: var(--surface);
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 28px;
   color: var(--text-primary);
   position: relative;
+  box-shadow: var(--shadow-xs);
 }
 .lp__step-circle::before {
   content: '';
   position: absolute;
-  inset: -6px;
-  border: 1px dashed var(--border);
+  inset: -8px;
+  border: 1px dashed var(--copper);
   border-radius: 50%;
-  opacity: 0.4;
+  opacity: 0.35;
+}
+.lp__step-circle::after {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
 }
 
 .lp__step-title {
   font-family: var(--font-sans);
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0 0 8px;
+  margin: 0 0 10px;
+  letter-spacing: -0.005em;
 }
 
 .lp__step-body {
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text-secondary);
   margin: 0;
+  max-width: 220px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .lp__step-arrow {
   position: absolute;
-  top: 22px;
-  right: -22px;
+  top: 32px;
+  right: -8px;
   color: var(--terracotta);
-  opacity: 0.6;
+  opacity: 0.7;
+  z-index: 2;
+  background: var(--canvas-warm);
+  padding: 0 4px;
+}
+
+.lp__how-band {
+  display: block;
+  width: 100%;
+  margin-top: 60px;
+  color: var(--copper);
+  opacity: 0.7;
 }
 
 /* ── MARKETPLACE LISTINGS ────────────────────────────────── */
@@ -516,7 +559,19 @@
 .lp__list:hover .lp__list-arrow { color: var(--terracotta); transform: translateX(2px); }
 
 /* ── FOR BUILDERS ────────────────────────────────────────── */
-.lp__sec--builders { background: var(--surface-3); }
+.lp__sec--builders {
+  background: var(--surface-3);
+  position: relative;
+  overflow: hidden;
+}
+.lp__build-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.lp__sec--builders .lp__sec-inner { position: relative; z-index: 1; }
 
 .lp__build-grid {
   display: grid;
@@ -669,7 +724,7 @@
 
 .lp__cmd {
   background: var(--accent);
-  color: var(--canvas);
+  color: var(--accent-ink);
   border-radius: 18px;
   padding: 36px 40px;
   display: grid;
@@ -693,7 +748,7 @@
   font-family: var(--font-display);
   font-size: 24px;
   font-weight: 500;
-  color: var(--canvas);
+  color: var(--accent-ink);
   margin: 8px 0 0;
 }
 
@@ -703,8 +758,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-ink) 14%, transparent);
   border-radius: 10px;
   padding: 12px 14px 12px 18px;
 }
@@ -712,7 +767,7 @@
   flex: 1;
   font-family: var(--font-mono);
   font-size: 14px;
-  color: var(--canvas);
+  color: var(--accent-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -723,17 +778,17 @@
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--accent-ink) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-ink) 18%, transparent);
   border-radius: 8px;
-  color: var(--canvas);
+  color: var(--accent-ink);
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background var(--dur-sm) var(--ease);
 }
-.lp__copy:hover { background: rgba(255, 255, 255, 0.16); }
+.lp__copy:hover { background: color-mix(in srgb, var(--accent-ink) 22%, transparent); }
 
 /* ── FOOTER ──────────────────────────────────────────────── */
 .lp__footer {
@@ -806,8 +861,9 @@
 
 /* ── RESPONSIVE ──────────────────────────────────────────── */
 @media (max-width: 1080px) {
-  .lp__hero-inner { grid-template-columns: 1fr; gap: 60px; }
-  .lp__steps { grid-template-columns: repeat(2, 1fr); gap: 40px 24px; }
+  .lp__hero-inner { grid-template-columns: 1fr; gap: 60px; padding: 0 64px; }
+  .lp__steps { grid-template-columns: repeat(2, 1fr); gap: 48px 24px; }
+  .lp__steps::before { display: none; }
   .lp__step-arrow { display: none; }
   .lp__listings { grid-template-columns: repeat(2, 1fr); }
   .lp__price-grid { grid-template-columns: 1fr; }

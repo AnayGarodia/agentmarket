@@ -178,7 +178,6 @@ export default function DocsPage() {
               className={`docs-nav__link${doc.slug === selectedSlug ? ' docs-nav__link--active' : ''}`}
             >
               <span className="docs-nav__link-title">{doc.title}</span>
-              {doc.summary ? <span className="docs-nav__link-summary">{doc.summary}</span> : null}
             </Link>
           ))}
         </div>
@@ -247,9 +246,6 @@ export default function DocsPage() {
                 <X size={12} />
               </button>
             )}
-          </div>
-          <div className="docs-page__placeholder-note" aria-hidden>
-            Tip: values wrapped in angle brackets like <code>&lt;YOUR_API_KEY&gt;</code> are placeholders — replace them with your own values.
           </div>
           {loadingList && (
             <div className="docs-page__sidebar-skeletons" aria-hidden>

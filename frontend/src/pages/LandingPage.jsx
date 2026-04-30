@@ -9,6 +9,8 @@ import {
 import { fetchAgents } from '../api'
 import AzteaMark from '../brand/AzteaMark'
 import MarketplacePanel from '../brand/MarketplacePanel'
+import { JaaliColumn, JaaliLattice, JaaliBand } from '../brand/JaaliPattern'
+import AuthDialog from '../features/auth/AuthDialog'
 import './LandingPage.css'
 
 // Marketplace listings shown in the agents section.
@@ -63,12 +65,6 @@ function ListingCard({ entry, liveAgent }) {
   )
 }
 
-function focusAuthTab(tab, redirect) {
-  window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab, redirect } }))
-  const el = document.getElementById('lp-auth')
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
-
 function scrollToId(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
@@ -76,9 +72,13 @@ function scrollToId(id) {
 export default function LandingPage() {
   const [liveAgents, setLiveAgents] = useState({})
   const [menuOpen, setMenuOpen] = useState(false)
+  const [auth, setAuth] = useState({ open: false, tab: 'signin', redirect: null })
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
   const navigate = useNavigate()
+
+  const openAuth = (tab = 'signin', redirect = null) => setAuth({ open: true, tab, redirect })
+  const closeAuth = () => setAuth(a => ({ ...a, open: false }))
 
   useEffect(() => {
     fetchAgents(null).then(r => {
@@ -97,9 +97,10 @@ export default function LandingPage() {
   }, [menuOpen])
 
   const closeMenu = () => setMenuOpen(false)
-  const handleListSkill   = () => apiKey ? navigate('/list-skill') : focusAuthTab('register', '/list-skill')
-  const handleGetStarted  = () => apiKey ? navigate('/overview')   : focusAuthTab('register', '/overview')
-  const handleBrowseAgents = () => apiKey ? navigate('/agents')    : scrollToId('lp-agents')
+  const handleListSkill    = () => apiKey ? navigate('/list-skill') : openAuth('register', '/list-skill')
+  const handleGetStarted   = () => apiKey ? navigate('/overview')   : openAuth('register', '/overview')
+  const handleSignIn       = () => apiKey ? navigate('/overview')   : openAuth('signin')
+  const handleBrowseAgents = () => apiKey ? navigate('/agents')     : scrollToId('lp-agents')
 
   return (
     <div className="lp">
@@ -124,8 +125,7 @@ export default function LandingPage() {
               aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>
-            <button type="button" className="lp__nav-signin"
-              onClick={() => apiKey ? navigate('/overview') : focusAuthTab('signin')}>
+            <button type="button" className="lp__nav-signin" onClick={handleSignIn}>
               Sign in
             </button>
             <button type="button" className="lp__btn lp__btn--primary lp__nav-cta" onClick={handleGetStarted}>
@@ -150,7 +150,7 @@ export default function LandingPage() {
             <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-pricing') }}>Pricing</button>
             <div className="lp__mobile-sep" />
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); apiKey ? navigate('/overview') : focusAuthTab('signin') }}>Sign in</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleSignIn() }}>Sign in</button>
             <button type="button" className="lp__btn lp__btn--primary" onClick={() => { closeMenu(); handleGetStarted() }}>Get started</button>
           </div>
         </div>
@@ -160,13 +160,8 @@ export default function LandingPage() {
           HERO — only headline, subcopy, CTAs, and one panel.
          ───────────────────────────────────────────────────── */}
       <section className="lp__hero">
-        <div className="lp__edge lp__edge--left" aria-hidden>
-          {[...Array(7)].map((_, r) => (
-            <div key={r} className="lp__edge-row">
-              {[...Array(2)].map((_, c) => <span key={c} className="lp__edge-mark" />)}
-            </div>
-          ))}
-        </div>
+        <JaaliColumn className="lp__edge lp__edge--left" rows={9} />
+        <JaaliColumn className="lp__edge lp__edge--right" rows={9} />
 
         <div className="lp__hero-inner">
           <div className="lp__hero-copy">
@@ -205,6 +200,7 @@ export default function LandingPage() {
           HOW IT WORKS — simple 4-step flow, lots of breathing room.
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--how" id="lp-how">
+        <JaaliLattice className="lp__how-bg" size={64} opacity={0.18} color="var(--copper)" />
         <div className="lp__sec-inner">
           <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">How it works</span>
@@ -226,6 +222,7 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
+          <JaaliBand className="lp__how-band" count={9} />
         </div>
       </section>
 
@@ -259,6 +256,7 @@ export default function LandingPage() {
           FOR BUILDERS — two large listing options. Nothing else.
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--builders" id="lp-builders">
+        <JaaliLattice className="lp__build-bg" size={72} opacity={0.16} color="var(--terracotta)" />
         <div className="lp__sec-inner">
           <header className="lp__sec-head">
             <span className="lp__eyebrow">For builders</span>
@@ -393,8 +391,12 @@ export default function LandingPage() {
         </div>
       </footer>
 
-      {/* ── Hidden anchor for AuthPanel scroll ── */}
-      <div id="lp-auth" aria-hidden style={{ position: 'absolute', height: 0, width: 0 }} />
+      <AuthDialog
+        open={auth.open}
+        tab={auth.tab}
+        redirect={auth.redirect}
+        onClose={closeAuth}
+      />
     </div>
   )
 }

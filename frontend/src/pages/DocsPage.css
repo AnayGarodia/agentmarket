@@ -146,18 +146,20 @@
 }
 
 .docs-page__sidebar-title {
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--copper);
-  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-primary);
+  margin: 0 0 4px;
 }
 
 .docs-page__sidebar-sub {
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
+  font-size: 0.75rem;
+  color: var(--text-muted);
   margin: 0;
+  line-height: 1.45;
 }
 
 .docs-page__sidebar-skeletons {
@@ -181,47 +183,41 @@
 }
 
 .docs-nav__group-title {
-  margin: 0;
-  padding: 0 10px 4px;
+  margin: 0 0 4px;
+  padding: 0 14px 4px;
   font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--sage);
+  color: var(--text-muted);
 }
 
 .docs-nav__link {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+  display: block;
   text-decoration: none;
   color: var(--text-secondary);
-  border-radius: var(--r-sm);
-  padding: 8px 12px;
-  font-size: 0.8125rem;
-  font-weight: 500;
-  transition: background 0.12s ease, color 0.12s ease;
-  border: 1px solid transparent;
+  border-radius: 0;
+  padding: 7px 14px 7px 14px;
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.4;
+  transition: color 0.12s ease, border-color 0.12s ease;
+  border-left: 2px solid transparent;
 }
 .docs-nav__link:hover {
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--surface) 74%, var(--parchment));
+  border-left-color: var(--border);
 }
 .docs-nav__link--active {
-  color: var(--text-primary);
-  background: var(--canvas-warm);
-  border-color: color-mix(in srgb, var(--terracotta) 40%, var(--border));
-  box-shadow: inset 3px 0 0 var(--terracotta);
+  color: var(--terracotta);
+  font-weight: 500;
+  border-left-color: var(--terracotta);
+  background: transparent;
+  box-shadow: none;
 }
-.docs-nav__link--active .docs-nav__link-title { color: var(--text-primary); }
+.docs-nav__link--active .docs-nav__link-title { color: var(--terracotta); }
 
 .docs-nav__link-title { color: inherit; }
-
-.docs-nav__link-summary {
-  font-size: 0.75rem;
-  line-height: 1.35;
-  color: var(--text-muted);
-}
 
 .docs-page__api-links {
   padding-top: 16px;
