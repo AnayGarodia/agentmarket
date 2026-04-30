@@ -28,7 +28,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.14.1',
+        'User-Agent': 'aztea-cli/0.14.3',
       },
     }, (res) => {
       let data = ''
@@ -91,40 +91,66 @@ function prompt(rl, question) {
 
 function promptPassword(question) {
   return new Promise(resolve => {
-    process.stdout.write(question)
-    const stdin = process.stdin
-    const wasRaw = stdin.isRaw
-    if (stdin.setRawMode) {
-      stdin.setRawMode(true)
-      stdin.resume()
-      let password = ''
-      const onData = (ch) => {
-        ch = ch.toString()
-        if (ch === '\n' || ch === '\r' || ch === '') {
-          stdin.setRawMode(wasRaw || false)
-          stdin.pause()
-          stdin.removeListener('data', onData)
-          process.stdout.write('\n')
-          if (ch === '') process.exit(1)
-          resolve(password)
-        } else if (ch === '') {
-          if (password.length > 0) {
-            password = password.slice(0, -1)
-            process.stdout.clearLine(0)
-            process.stdout.cursorTo(0)
-            process.stdout.write(question + '•'.repeat(password.length))
-          }
-        } else {
-          password += ch
-          process.stdout.write('•')
-        }
-      }
-      stdin.on('data', onData)
-    } else {
-      // fallback (no TTY): read normally
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
       const rl2 = readline.createInterface({ input: process.stdin, output: null, terminal: false })
       rl2.once('line', (line) => { rl2.close(); resolve(line) })
+      return
     }
+
+    const mutable = { prompt: question, value: '' }
+    const maskedOutput = {
+      write(chunk) {
+        const text = String(chunk)
+        if (text.startsWith(mutable.prompt)) {
+          process.stdout.write(mutable.prompt)
+          return
+        }
+        if (text.includes('\u0015')) {
+          mutable.value = ''
+        }
+        process.stdout.write('*'.repeat(mutable.value.length))
+      },
+    }
+
+    const rl2 = readline.createInterface({
+      input: process.stdin,
+      output: maskedOutput,
+      terminal: true,
+    })
+
+    rl2.question(question, (value) => {
+      mutable.value = ''
+      rl2.close()
+      process.stdout.write('\n')
+      resolve(value)
+    })
+
+    rl2.input.on('keypress', (_char, key) => {
+      if (key && key.ctrl && key.name === 'c') {
+        rl2.close()
+        process.stdout.write('\n')
+        process.exit(1)
+      }
+    })
+
+    rl2._writeToOutput = function _writeToOutput() {
+      process.stdout.write(`\r${mutable.prompt}${'*'.repeat(mutable.value.length)}`)
+    }
+
+    rl2.input.on('data', (chunk) => {
+      const text = chunk.toString('utf8')
+      if (text === '\r' || text === '\n') return
+      if (text === '\u0003') return
+      if (text === '\u007f') {
+        mutable.value = mutable.value.slice(0, -1)
+        return
+      }
+      if (text === '\u0015') {
+        mutable.value = ''
+        return
+      }
+      mutable.value += text
+    })
   })
 }
 
