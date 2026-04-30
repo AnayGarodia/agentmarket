@@ -59,9 +59,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
@@ -77,11 +77,11 @@
 .topbar__balance {
   display: flex;
   align-items: center;
-  gap: 7px;
-  background: color-mix(in srgb, var(--surface) 78%, var(--accent-bg));
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: var(--r-pill);
-  padding: 5px 12px;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 12px;
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   font-weight: 500;

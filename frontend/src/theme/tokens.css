@@ -6,7 +6,7 @@
 
 :root {
   /* ── Typography ───────────────────────────────────────────── */
-  --font-display: 'Playfair Display', 'Cormorant Garamond', Georgia, serif;
+  --font-display: 'Cormorant Garamond', 'Playfair Display', Georgia, serif;
   --font-sans:    'Geist', 'Inter', system-ui, sans-serif;
   --font-mono:    'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
 
