@@ -8,7 +8,6 @@ import {
 } from 'lucide-react'
 import { fetchAgents } from '../api'
 import AzteaMark from '../brand/AzteaMark'
-import MarketplacePanel from '../brand/MarketplacePanel'
 import { JaaliColumn, JaaliLattice, JaaliBand } from '../brand/JaaliPattern'
 import AuthDialog from '../features/auth/AuthDialog'
 import './LandingPage.css'
@@ -182,7 +181,16 @@ export default function LandingPage() {
           </div>
 
           <div className="lp__hero-panel">
-            <MarketplacePanel />
+            <video
+              className="lp__hero-video"
+              src="/landing-hero.mp4"
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="auto"
+              aria-label="Aztea marketplace flow"
+            />
           </div>
         </div>
       </section>
