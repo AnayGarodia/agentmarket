@@ -430,12 +430,12 @@
 .lp__edge svg { height: 100%; width: 64px; }
 
 .lp__hero-inner {
-  max-width: 1280px;
+  max-width: 1700px;
   margin: 0 auto;
-  padding: 0 96px;
+  padding: 0 64px;
   display: grid;
-  grid-template-columns: 1fr 1.05fr;
-  gap: 80px;
+  grid-template-columns: 1fr 2fr;
+  gap: 56px;
   align-items: center;
   position: relative;
   z-index: 1;
@@ -494,7 +494,7 @@
 }
 .lp__hero-video {
   width: 100%;
-  max-width: 760px;
+  max-width: 1500px;
   height: auto;
   border-radius: 16px;
   display: block;
