@@ -10,8 +10,8 @@
 #
 # DECISIONS:
 # - correlation-id bookkeeping lives here (not messaging.py) because correlations
-#   are scoped to the lease window — they expire when the lease expires
-"""
+#   are scoped to the lease window -- they expire when the lease expires
+
 from __future__ import annotations
 
 import json
@@ -73,7 +73,7 @@ def claim_job(
 
     The claim token is a UUID4 embedded in the updated job row. The worker
     must present it on every subsequent heartbeat/complete/fail to prove it
-    still holds the lease — preventing split-brain when a lease has been
+    still holds the lease -- preventing split-brain when a lease has been
     reclaimed by the sweeper before the original worker's network call arrives.
 
     Returns the updated job dict on success, or ``None`` if the job is not in
