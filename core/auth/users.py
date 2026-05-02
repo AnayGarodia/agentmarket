@@ -11,7 +11,6 @@
 # - legal acceptance state (terms_version, privacy_version) is returned on every auth response
 #   so the frontend can prompt re-acceptance when server constants bump — don't move it to a
 #   separate endpoint or the frontend will miss the prompt
-"""
 
 from __future__ import annotations
 
