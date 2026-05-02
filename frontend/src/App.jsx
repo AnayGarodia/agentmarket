@@ -116,22 +116,33 @@ function AuthedApp() {
 
 // Docs is a special-case route. For signed-out visitors we render the
 // standalone DocsPage so they can read the docs without an account; for
-// signed-in users we render nothing here and let the catch-all route below
-// hand the request off to AuthedApp, which mounts DocsPage inside AppShell
-// (with sidebar + topbar). This way authed users always keep their nav.
+// signed-in users we render the same page but wrapped by AppShell so
+// the sidebar + topbar stay visible — exactly like every other authed
+// page. We mount AppShell directly here (instead of bouncing through
+// AuthedApp) to avoid an extra remount + redirect loop.
 function DocsRoute() {
-  const { apiKey, booting } = useAuth()
+  const { apiKey, booting, user } = useAuth()
   const location = useLocation()
   if (booting) return <AppBoot />
-  if (apiKey) {
-    // Re-render under the AuthedApp tree so DocsPage is wrapped by AppShell.
-    return (
-      <RequireLegalAcceptance>
-        <AuthedApp />
-      </RequireLegalAcceptance>
-    )
+  if (!apiKey) return <DocsPage />
+  if (user?.legal_acceptance_required) {
+    const target = `/legal/accept?redirect=${encodeURIComponent(location.pathname)}`
+    return <Navigate to={target} replace />
   }
-  return <DocsPage />
+  return (
+    <MarketProvider apiKey={apiKey}>
+      <ErrorBoundary>
+        <Suspense fallback={<AppBoot />}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route path="/docs" element={<DocsPage />} />
+              <Route path="/docs/:docSlug" element={<DocsPage />} />
+            </Route>
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
+    </MarketProvider>
+  )
 }
 
 function RootRedirect() {
