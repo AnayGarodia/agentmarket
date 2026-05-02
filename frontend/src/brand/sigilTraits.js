@@ -1,3 +1,7 @@
+// Traits for AgentSigil. The component itself owns the visual rendering;
+// this file just exposes the deterministic primary colour so other surfaces
+// (hero accent on AgentDetailPage, etc.) can pick it up to stay coherent.
+
 function djb2(str) {
   let h = 5381
   for (let i = 0; i < str.length; i++) {
@@ -16,29 +20,27 @@ function mulberry32(seed) {
   }
 }
 
+// Mirror of AgentSigil PALETTE — keep these two arrays in sync.
+const PALETTE = [
+  { bg: '#063F43', fg: '#F4DDC3' },
+  { bg: '#102B2F', fg: '#E8B89A' },
+  { bg: '#C65F3F', fg: '#F8EFE0' },
+  { bg: '#7A4F30', fg: '#F4DDC3' },
+  { bg: '#6C8D6E', fg: '#0F1F1B' },
+  { bg: '#3F4D8A', fg: '#F4EDDC' },
+  { bg: '#C2342A', fg: '#FFFDF8' },
+  { bg: '#1F1A14', fg: '#D9A661' },
+]
+
 export function getSigilTraits(agentId) {
   const seed = djb2(String(agentId))
   const rand = mulberry32(seed)
-
-  const baseHue = Math.floor(rand() * 360)
-
-  const colors = [
-    `hsl(${baseHue}, 68%, 44%)`,
-    `hsl(${(baseHue + 55)  % 360}, 64%, 56%)`,
-    `hsl(${(baseHue + 170) % 360}, 58%, 52%)`,
-    `hsl(${(baseHue + 220) % 360}, 52%, 62%)`,
-    `hsl(${baseHue}, 78%, 32%)`,
-  ]
-
+  const palette = PALETTE[Math.floor(rand() * PALETTE.length)]
   return {
     seed,
-    colors,
-    primaryColor: colors[0],
-    // Legacy compat
-    shape:    'bauhaus',
-    rotation: 0,
-    strokeW:  2,
-    gradId:   `sigil-grad-${seed}`,
+    primaryColor: palette.bg,
+    accentColor:  palette.fg,
+    colors: [palette.bg, palette.fg],
   }
 }
 

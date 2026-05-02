@@ -866,6 +866,8 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+  box-sizing: border-box;
   transition: border-color var(--dur-md) var(--ease), transform var(--dur-md) var(--ease);
 }
 .lp__door:hover {
