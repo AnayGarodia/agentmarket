@@ -97,7 +97,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return _err("live_endpoint_tester.invalid_headers", "headers must be an object.")
 
     body = payload.get("body")
-    requests_count = max(1, min(int(payload.get("requests") or 50), _MAX_REQUESTS))
+    requests_count = max(1, min(int(payload.get("requests") or payload.get("n_requests") or 50), _MAX_REQUESTS))
     concurrency = max(1, min(int(payload.get("concurrency") or 5), requests_count))
     timeout_seconds = max(0.1, min(float(payload.get("timeout_seconds") or 5.0), _MAX_TIMEOUT_SECONDS))
 

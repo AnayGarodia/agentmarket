@@ -43,6 +43,9 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
             "is_featured": True,
             "cacheable": True,
             "examples_sensitive": True,
+            "pii_safe": True,
+            "outputs_not_stored": True,
+            "data_retention_policy": "Input is never stored. Scan results (redacted previews only) are held in memory for the duration of the API call and discarded immediately after. No input content or full secret values are written to disk or logs. Aztea platform audit logs record job metadata (agent_id, timestamp, cost) only — not the scanned content.",
             "input_schema": _output_schema_object(
                 {
                     "content": {

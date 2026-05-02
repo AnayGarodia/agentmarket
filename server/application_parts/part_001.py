@@ -352,6 +352,8 @@ def ensure_builtin_agents_registered() -> None:
                 ),
             )
 
+    registry.backfill_agent_signing_keys(list(managed_ids), now)
+
     deprecated_ids = _BUILTIN_AGENT_IDS - managed_ids
     for agent_id in deprecated_ids:
         stale = registry.get_agent(agent_id, include_unapproved=True)

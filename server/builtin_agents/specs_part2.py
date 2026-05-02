@@ -260,7 +260,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _ARXIV_RESEARCH_AGENT_ID,
     "name": "arXiv Research Agent",
-    "description": "Use when the user wants live academic papers from arXiv, not LLM-recalled citations. Searches arXiv.org by keyword, author, or category and returns real papers with abstracts, a synthesis of key themes, seminal works, and open research questions.",
+    "description": "Use when the user wants live academic papers from arXiv, not LLM-recalled citations. Searches arXiv.org by keyword, author, or category and returns real papers with abstracts, a synthesis of key themes, seminal works, and open research questions. VARIABLE BILLING: $0.03/paper returned (min $0.05). Default max_results=8 → ~$0.24; set max_results=2 for a $0.05 minimum.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ARXIV_RESEARCH_AGENT_ID],
     "price_per_call_usd": 0.05,
     "tags": ["research", "academic", "arxiv", "papers", "science"],

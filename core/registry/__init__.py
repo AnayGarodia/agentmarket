@@ -23,11 +23,12 @@ from core import embeddings
 from . import agents_ops
 from . import call_history
 from . import core_schema
+from . import identity_backfill
 from . import pricing
 
 _SKIP = frozenset({"embeddings"})
 
-for _mod in (core_schema, agents_ops, pricing, call_history):
+for _mod in (core_schema, agents_ops, pricing, call_history, identity_backfill):
     for _name in dir(_mod):
         if _name.startswith("__"):
             continue

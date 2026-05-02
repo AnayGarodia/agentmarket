@@ -113,6 +113,11 @@ const META_TOOL_NAMES = new Set([
   'aztea_run_pipeline',
   'aztea_pipeline_status',
   'aztea_run_recipe',
+  'aztea_cancel_job',
+  'aztea_follow_job',
+  'aztea_batch_status',
+  'aztea_data_retention_policy',
+  'aztea_verify_job',
 ])
 
 let _catalog = []
@@ -204,6 +209,25 @@ function accumulate(amountCents) {
   SESSION_STATE.spentCents += Number(amountCents) || 0
 }
 
+// Resolve a slug or UUID to an agent UUID. Checks the in-memory catalog first,
+// then falls back to a registry search so callers can use friendly slugs.
+async function resolveAgentId(agentIdOrSlug) {
+  const val = String(agentIdOrSlug || '').trim()
+  if (!val) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) return { ok: true, id: val }
+  const entry = _catalog.find(item => item.slug === val)
+  if (entry && entry.agent_id) return { ok: true, id: entry.agent_id }
+  const res = parseApiResponse(await postJson('/registry/search', { query: val, limit: 1 }))
+  if (!res.ok) return { ok: false, body: res.body }
+  const results = Array.isArray(res.body.results) ? res.body.results : []
+  if (!results.length) return { ok: false, body: { error: 'AGENT_NOT_FOUND', message: `No agent found for '${val}'.`, hint: 'Use aztea_search to find the correct slug.' } }
+  const found = results[0]
+  const agent = found.agent || found
+  const id = agent.agent_id || found.agent_id
+  if (!id) return { ok: false, body: { error: 'AGENT_NOT_FOUND', message: `Agent found but has no agent_id.` } }
+  return { ok: true, id }
+}
+
 function budgetGuard() {
   if (SESSION_STATE.budgetCents == null) return null
   if (SESSION_STATE.spentCents < SESSION_STATE.budgetCents) return null
@@ -275,6 +299,9 @@ function searchCatalog(query, limit) {
   const terms = normalized.split(/\s+/).filter(Boolean)
   const scored = []
   for (const entry of _catalog) {
+    // Skip platform meta-tools from agent-intent searches — they confuse results
+    // when a buyer is searching for a capability agent.
+    if (META_TOOL_NAMES.has(entry.slug)) continue
     const haystack = `${entry.slug}\n${entry.description}`.toLowerCase()
     let score = 0
     if (entry.slug.toLowerCase() === normalized) score += 100
@@ -376,13 +403,15 @@ async function sessionSummary() {
 }
 
 async function estimateCost(args) {
-  const agentId = String(args.agent_id || '').trim()
-  if (!agentId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id is required.' } }
+  const agentIdOrSlug = String(args.agent_id || args.slug || '').trim()
+  if (!agentIdOrSlug) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
+  const resolved = await resolveAgentId(agentIdOrSlug)
+  if (!resolved.ok) return resolved
   const input = args.input_payload == null ? {} : args.input_payload
   if (typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, body: { error: 'INVALID_INPUT', message: 'input_payload must be an object.' } }
   }
-  const res = parseApiResponse(await postJson(`/agents/${agentId}/estimate`, input))
+  const res = parseApiResponse(await postJson(`/agents/${resolved.id}/estimate`, input))
   if (res.ok && !res.body.note) res.body.note = 'This is a preview only. No charge has been applied.'
   return res
 }
@@ -408,8 +437,11 @@ async function listPipelines() {
 }
 
 async function hireAsync(args) {
-  const agentId = String(args.agent_id || '').trim()
-  if (!agentId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id is required.' } }
+  const agentIdOrSlug = String(args.agent_id || args.slug || '').trim()
+  if (!agentIdOrSlug) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
+  const resolved = await resolveAgentId(agentIdOrSlug)
+  if (!resolved.ok) return resolved
+  const agentId = resolved.id
   const body = { agent_id: agentId, input_payload: args.input_payload || {} }
   if (args.callback_url) body.callback_url = String(args.callback_url)
   if (args.max_attempts != null) body.max_attempts = Number(args.max_attempts)
@@ -450,6 +482,26 @@ async function jobStatus(args) {
     result.note = 'Agent is awaiting clarification. Call aztea_clarify(job_id=..., message=...).'
   }
   return { ok: true, body: result }
+}
+
+async function followJob(args) {
+  const jobId = String(args.job_id || '').trim()
+  if (!jobId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_id is required.' } }
+  const timeoutSecs = Math.min(Number(args.timeout_seconds || 180), 300)
+  const deadline = Date.now() + timeoutSecs * 1000
+  const POLL_MS = 4000
+  const TERMINAL = new Set(['complete', 'failed', 'cancelled'])
+  while (true) {
+    const res = await jobStatus({ job_id: jobId })
+    if (!res.ok) return res
+    if (TERMINAL.has(res.body.status)) return res
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      if (!res.body.note) res.body.note = `Timeout after ${timeoutSecs}s — job still running. Call aztea_follow_job again or use aztea_job_status to poll manually.`
+      return res
+    }
+    await new Promise(resolve => setTimeout(resolve, Math.min(POLL_MS, remaining)))
+  }
 }
 
 async function clarify(args) {
@@ -530,8 +582,11 @@ async function discover(args) {
 }
 
 async function getExamples(args) {
-  const agentId = String(args.agent_id || '').trim()
-  if (!agentId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id is required.' } }
+  const agentIdOrSlug = String(args.agent_id || args.slug || '').trim()
+  if (!agentIdOrSlug) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
+  const resolved = await resolveAgentId(agentIdOrSlug)
+  if (!resolved.ok) return resolved
+  const agentId = resolved.id
   const res = parseApiResponse(await getJson(`/registry/agents/${agentId}`))
   if (!res.ok) return res
   const examples = Array.isArray(res.body.output_examples) ? res.body.output_examples : []
@@ -553,9 +608,13 @@ async function hireBatch(args) {
   const jobs = args.jobs
   if (!Array.isArray(jobs) || !jobs.length) return { ok: false, body: { error: 'INVALID_INPUT', message: 'jobs must be a non-empty array.' } }
   if (jobs.length > 50) return { ok: false, body: { error: 'INVALID_INPUT', message: 'Batch size is limited to 50 jobs.' } }
+  const resolvedIds = await Promise.all(jobs.map(spec => resolveAgentId(spec.agent_id || spec.slug || '')))
+  for (let i = 0; i < resolvedIds.length; i++) {
+    if (!resolvedIds[i].ok) return { ok: false, body: { ...resolvedIds[i].body, job_index: i } }
+  }
   const body = {
-    jobs: jobs.map(spec => ({
-      agent_id: String(spec.agent_id || ''),
+    jobs: jobs.map((spec, i) => ({
+      agent_id: resolvedIds[i].id,
       input_payload: spec.input_payload || {},
       ...(spec.budget_cents != null ? { budget_cents: Number(spec.budget_cents) } : {}),
       ...(spec.private_task != null ? { private_task: Boolean(spec.private_task) } : {}),
@@ -585,12 +644,17 @@ function sleep(ms) {
 }
 
 async function compareAgents(args) {
-  const agentIds = Array.isArray(args.agent_ids) ? args.agent_ids.map(x => String(x || '').trim()).filter(Boolean) : null
-  if (!agentIds) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_ids must be an array.' } }
-  if (agentIds.length < 2 || agentIds.length > 3) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_ids must contain 2 or 3 values.' } }
+  const rawIds = Array.isArray(args.agent_ids) ? args.agent_ids.map(x => String(x || '').trim()).filter(Boolean) : null
+  if (!rawIds) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_ids must be an array.' } }
+  if (rawIds.length < 2 || rawIds.length > 3) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_ids must contain 2 or 3 values.' } }
   if (!args.input_payload || typeof args.input_payload !== 'object' || Array.isArray(args.input_payload)) {
     return { ok: false, body: { error: 'INVALID_INPUT', message: 'input_payload must be an object.' } }
   }
+  const resolvedIds = await Promise.all(rawIds.map(resolveAgentId))
+  for (let i = 0; i < resolvedIds.length; i++) {
+    if (!resolvedIds[i].ok) return { ok: false, body: { ...resolvedIds[i].body, agent_index: i } }
+  }
+  const agentIds = resolvedIds.map(r => r.id)
   const body = { agent_ids: agentIds, input_payload: args.input_payload }
   if (args.max_attempts != null) body.max_attempts = Number(args.max_attempts)
   if (args.private_task != null) body.private_task = Boolean(args.private_task)
@@ -687,6 +751,89 @@ async function runRecipe(args) {
   return status
 }
 
+async function cancelJob(args) {
+  const jobId = String(args.job_id || '').trim()
+  if (!jobId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_id is required.' } }
+  const res = parseApiResponse(await postJson(`/jobs/${jobId}/cancel`, {}))
+  if (res.ok && !res.body.note) res.body.note = 'Job cancelled. Any pending charge will be refunded automatically.'
+  return res
+}
+
+async function batchStatus(args) {
+  const jobIds = Array.isArray(args.job_ids) ? args.job_ids.map(id => String(id || '').trim()).filter(Boolean) : []
+  if (!jobIds.length) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_ids must be a non-empty array.' } }
+  const results = await Promise.all(jobIds.map(id => jobStatus({ job_id: id })))
+  return {
+    ok: true,
+    body: {
+      jobs: results.map((res, i) => ({ job_id: jobIds[i], ...(res.ok ? res.body : { error: res.body }) })),
+      count: results.length,
+    },
+  }
+}
+
+async function dataRetentionPolicy(args) {
+  const agentIdOrSlug = String(args.agent_id || args.slug || '').trim()
+  if (!agentIdOrSlug) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
+  const resolved = await resolveAgentId(agentIdOrSlug)
+  if (!resolved.ok) return resolved
+  const res = parseApiResponse(await getJson(`/registry/agents/${resolved.id}`))
+  if (!res.ok) return res
+  const agent = res.body
+  const policy = agent.data_retention_policy || null
+  const piiSafe = agent.pii_safe === true || agent.pii_safe === 1
+  const outputsNotStored = agent.outputs_not_stored === true || agent.outputs_not_stored === 1
+  const auditLogged = agent.audit_logged === true || agent.audit_logged === 1
+  return {
+    ok: true,
+    body: {
+      agent_id: agent.agent_id,
+      name: agent.name,
+      category: agent.category || null,
+      pii_safe: piiSafe,
+      outputs_not_stored: outputsNotStored,
+      audit_logged: auditLogged,
+      data_retention_policy: policy || (
+        piiSafe && outputsNotStored
+          ? 'Input is processed in-memory only and not retained after the call completes.'
+          : 'Retention policy not explicitly specified. Pass private_task=true to opt out of work-example storage.'
+      ),
+      privacy_policy_url: agent.privacy_policy_url || null,
+      private_task_supported: true,
+      note: 'Pass private_task=true when hiring this agent to opt out of work-example storage on the Aztea platform.',
+    },
+  }
+}
+
+async function verifyJobSignature(args) {
+  const jobId = String(args.job_id || '').trim()
+  if (!jobId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_id is required.' } }
+  const res = parseApiResponse(await getJson(`/jobs/${jobId}/signature`))
+  if (!res.ok) return res
+  if (!res.body || !res.body.signature) {
+    return {
+      ok: true,
+      body: {
+        job_id: jobId,
+        signed: false,
+        note: 'No signature found for this job. Some legacy or in-flight jobs do not produce receipts.',
+      },
+    }
+  }
+  return {
+    ok: true,
+    body: {
+      job_id: jobId,
+      signed: true,
+      agent_did: res.body.agent_did,
+      output_hash: res.body.output_hash,
+      signed_at: res.body.signed_at,
+      signature: res.body.signature,
+      note: 'Verify locally: `aztea jobs verify <job_id>` (Python CLI) or `client.verify_job(job_id)` (Python SDK). The browser UI verifies automatically on JobDetailPage.',
+    },
+  }
+}
+
 async function callMetaTool(name, args) {
   if (name === 'aztea_set_session_budget') {
     const budget = Number(args.budget_cents || 0)
@@ -730,6 +877,11 @@ async function callMetaTool(name, args) {
     case 'aztea_run_pipeline': return runPipeline(args)
     case 'aztea_pipeline_status': return pipelineStatus(args)
     case 'aztea_run_recipe': return runRecipe(args)
+    case 'aztea_cancel_job': return cancelJob(args)
+    case 'aztea_follow_job': return followJob(args)
+    case 'aztea_batch_status': return batchStatus(args)
+    case 'aztea_data_retention_policy': return dataRetentionPolicy(args)
+    case 'aztea_verify_job': return verifyJobSignature(args)
     default: return { ok: false, body: { error: 'UNKNOWN_META_TOOL', tool: name } }
   }
 }
@@ -796,7 +948,10 @@ async function callTool(name, args) {
       return { ok: res.ok, payload: res.body }
     }
     if (!entry.agent_id) return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Tool '${slug}' has no agent_id.` } }
+    const blocked = budgetGuard()
+    if (blocked) return { ok: false, payload: blocked }
     const res = await callRegistryTool(entry, args.arguments)
+    if (res.ok) accumulate(res.body && (res.body.caller_charge_cents ?? res.body.price_cents))
     return { ok: res.ok, payload: res.body }
   }
   return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Unknown tool: ${name}` } }

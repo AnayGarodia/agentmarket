@@ -170,14 +170,22 @@ export default function WalletPage() {
     setActivityVisible(ACTIVITY_PAGE_SIZE)
   }, [transactions.length, withdrawalHistory?.length])
 
+  const agentMap = useMemo(
+    () => Object.fromEntries((agents ?? []).map(a => [a.agent_id, a.name])),
+    [agents]
+  )
+
   // Merged, sorted activity timeline (transactions + withdrawals)
   const activity = useMemo(() => {
     const items = []
     for (const tx of transactions) {
+      const memo = tx.memo || tx.type
+      const name = tx.agent_id ? agentMap[tx.agent_id] : null
+      const label = name ? memo.replace(tx.agent_id, name) : memo
       items.push({
         id: `tx-${tx.tx_id}`,
         kind: CREDIT_TYPES.has(tx.type) ? 'credit' : 'debit',
-        label: tx.memo || tx.type,
+        label,
         badge: tx.type,
         amount_cents: tx.amount_cents,
         created_at: tx.created_at,
@@ -195,7 +203,7 @@ export default function WalletPage() {
     }
     items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     return items
-  }, [transactions, withdrawalHistory])
+  }, [transactions, withdrawalHistory, agentMap])
 
   const totalEarnedCents = (agentEarnings ?? []).reduce((s, r) => s + (r.total_earned_cents ?? 0), 0)
   const heldCents = (agentEarnings ?? []).reduce((s, r) => s + (r.current_balance_cents ?? 0), 0)

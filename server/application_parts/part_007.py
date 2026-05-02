@@ -512,10 +512,9 @@ def a2a_tasks_get(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     job = jobs.get_job(task_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to view this task.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Task not found or not authorized.")
     a2a_status_map = {
         "pending": "submitted", "claimed": "working", "complete": "completed",
         "failed": "failed", "awaiting_clarification": "input-required",
@@ -545,10 +544,9 @@ def a2a_tasks_cancel(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     job = jobs.get_job(task_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to cancel this task.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Task not found or not authorized.")
     if job.get("status") not in {"pending"}:
         raise HTTPException(status_code=409, detail=f"Cannot cancel task in status '{job.get('status')}'.")
     cancelled = jobs.update_job_status(task_id, "failed", error_message="Cancelled by caller.", completed=True)
@@ -581,10 +579,9 @@ def jobs_cancel(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobResponse:
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to cancel this job.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     current_status = str(job.get("status") or "").strip().lower()
     if current_status not in _CANCELLABLE_JOB_STATUSES:
         raise HTTPException(

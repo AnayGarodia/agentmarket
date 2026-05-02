@@ -348,6 +348,14 @@ def _agent_response(agent: dict, caller: core_models.CallerContext | None, stats
     builtin_meta = _builtin_specs.builtin_catalog_metadata(str(agent.get("agent_id") or ""))
     if builtin_meta:
         out.update({key: value for key, value in builtin_meta.items() if value is not None})
+    # Strip stored work examples for sensitive agents — privacy gate applies to reads, not just writes.
+    _SENSITIVE_IDS = frozenset({"1021c65c-d2bf-54ff-823a-897f9deb1029"})  # secret_scanner
+    if (
+        str(out.get("agent_id") or "") in _SENSITIVE_IDS
+        or bool(out.get("examples_sensitive"))
+        or str(out.get("category") or "").strip().lower() == "security"
+    ):
+        out.pop("output_examples", None)
     if is_internal:
         out["last_health_status"] = "healthy"
         out["last_health_check_at"] = _utc_now_iso()

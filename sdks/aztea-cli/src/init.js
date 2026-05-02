@@ -416,4 +416,44 @@ async function run() {
   console.log()
 }
 
-module.exports = { run }
+async function loginWithKey(apiKey) {
+  if (!apiKey || !apiKey.startsWith('az_')) {
+    console.error('Invalid API key — expected an az_... key.')
+    process.exit(1)
+  }
+  removeLegacyMcpEntry()
+  let result
+  try {
+    result = injectMcpConfig(apiKey)
+  } catch (err) {
+    console.error(`Could not register MCP server: ${err.message}`)
+    process.exit(1)
+  }
+  console.log(`\n${'─'.repeat(52)}`)
+  console.log('  Aztea — logged in')
+  console.log('─'.repeat(52))
+  console.log(`\n✓ API key configured (${result.method})`)
+  console.log('\nRestart Claude Code to apply the new key.')
+  console.log(`Browse agents: ${BASE_URL}/agents`)
+  console.log()
+}
+
+async function whoami() {
+  const cfgPath = path.join(os.homedir(), '.claude.json')
+  try {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'))
+    const env = cfg.mcpServers && cfg.mcpServers.aztea && cfg.mcpServers.aztea.env
+    const key = env && env.AZTEA_API_KEY
+    if (!key) {
+      console.log('No Aztea API key configured. Run: npx -y aztea-cli@latest init')
+      return
+    }
+    const prefix = key.slice(0, 10) + '...'
+    console.log(`API key: ${prefix}`)
+    console.log(`Server:  ${(env.AZTEA_BASE_URL || 'https://aztea.ai')}`)
+  } catch {
+    console.log('No Aztea config found. Run: npx -y aztea-cli@latest init')
+  }
+}
+
+module.exports = { run, loginWithKey, whoami }

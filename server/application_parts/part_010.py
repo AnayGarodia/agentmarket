@@ -163,10 +163,9 @@ def jobs_message_create(
     """
     _require_any_scope(caller, "caller", "worker")
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to post to this job.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
 
     raw_type = body.type
     raw_payload = dict(body.payload or {})
@@ -333,10 +332,9 @@ def jobs_message_list(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobMessagesResponse:
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to view messages.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     filters = _extract_job_message_filters(
         msg_type=msg_type,
         from_id=from_id,
@@ -374,10 +372,9 @@ def jobs_message_stream(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> StreamingResponse:
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to view messages.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     filters = _extract_job_message_filters(
         msg_type=msg_type,
         from_id=from_id,
@@ -458,10 +455,9 @@ def jobs_rate(
     _require_scope(caller, "caller")
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-        if job["caller_owner_id"] != caller["owner_id"]:
-            raise HTTPException(status_code=403, detail="Only the original caller can rate this job.")
+        # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+        if job is None or (caller["type"] != "master" and job["caller_owner_id"] != caller["owner_id"]):
+            raise HTTPException(status_code=403, detail="Job not found or not authorized.")
 
         # Block rating on non-terminal jobs (prevents trust farming)
         if job["status"] not in ("complete", "verified"):
@@ -634,12 +630,12 @@ def jobs_get_dispute(
 ) -> core_models.DisputeResponse:
     """Fetch the dispute for a job, if one exists."""
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if caller["type"] != "master":
-        owner_id = caller["owner_id"]
-        if owner_id not in (job.get("caller_owner_id"), job.get("agent_owner_id")):
-            raise HTTPException(status_code=403, detail="Not authorized to view this dispute.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or (
+        caller["type"] != "master"
+        and caller["owner_id"] not in (job.get("caller_owner_id"), job.get("agent_owner_id"))
+    ):
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     dispute_row = disputes.get_dispute_by_job(job_id)
     if dispute_row is None:
         raise HTTPException(status_code=404, detail="No dispute found for this job.")
@@ -763,8 +759,9 @@ def jobs_dispute(
     if not (_caller_has_scope(caller, "caller") or _caller_has_scope(caller, "worker")):
         raise HTTPException(status_code=403, detail="This endpoint requires caller or worker scope.")
     job = jobs.get_job(job_id)
+    # Return 403 for missing jobs to prevent job-ID enumeration; ownership is validated below.
     if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     if job.get("status") != "complete" or not job.get("completed_at"):
         raise HTTPException(status_code=400, detail="Disputes can only be filed for completed jobs.")
 

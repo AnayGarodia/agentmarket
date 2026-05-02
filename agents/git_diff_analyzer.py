@@ -106,6 +106,12 @@ _SECRET_INLINE_RE = re.compile(
     r"\b(?:AKIA[A-Z0-9]{16}|ghp_[A-Za-z0-9]{36}|sk_(?:live|test)_[A-Za-z0-9]{16,}|"
     r"AIza[0-9A-Za-z_\-]{35}|sk-ant-[A-Za-z0-9_\-]{32,})\b"
 )
+# Catches assignments like  SECRET_KEY = 'abc123'  or  api_key: "value"
+_SECRET_ASSIGN_RE = re.compile(
+    r"(?:password|passwd|secret(?:_key)?|api[_\-]?key|auth[_\-]?token|access[_\-]?token|"
+    r"private[_\-]?key|client[_\-]?secret)\s*[=:]\s*['\"][^'\"]{6,}['\"]",
+    re.IGNORECASE,
+)
 _ERROR_HANDLING_RE = re.compile(r"^\s*(try:|except\b|raise\b|catch\s*\(|throw\s+)", re.MULTILINE)
 _TODO_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b")
 _DIFF_FILE_HEADER_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
@@ -221,7 +227,7 @@ def _classify_file(file_lines: list[str], extra_risk_paths: list[str] | None = N
     added_text = "\n".join(added_blob)
     removed_text = "\n".join(removed_blob)
 
-    if _SECRET_INLINE_RE.search(added_text):
+    if _SECRET_INLINE_RE.search(added_text) or _SECRET_ASSIGN_RE.search(added_text):
         warnings.append("Possible credential pattern added in this diff.")
 
     added_eh = len(_ERROR_HANDLING_RE.findall(added_text))

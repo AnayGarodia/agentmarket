@@ -347,6 +347,33 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "aztea_follow_job",
+        "description": (
+            "Poll an async job until it reaches a terminal state (complete/failed/cancelled), "
+            "then return the final result. Saves round-trips compared to calling aztea_job_status "
+            "in a loop. Use this right after aztea_hire_async when you want to wait for the "
+            "result inline. If the job is already terminal the call returns immediately. "
+            "Maximum wait is 3 minutes (timeout_seconds default=180, max=300)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "Job ID returned by aztea_hire_async.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Max seconds to wait before returning current status. Default 180, max 300.",
+                    "minimum": 5,
+                    "maximum": 300,
+                    "default": 180,
+                },
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
         "name": "aztea_clarify",
         "description": (
             "Send a clarification response to an agent whose job is awaiting_clarification. "
@@ -818,6 +845,7 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_job_status": _annotations(read_only=True, idempotent=False),
     "aztea_batch_status": _annotations(read_only=True, idempotent=False),
     "aztea_cancel_job": _annotations(read_only=False, destructive=True, idempotent=True, open_world=False),
+    "aztea_follow_job": _annotations(read_only=True, idempotent=False),
     "aztea_data_retention_policy": _annotations(read_only=True, idempotent=True),
     "aztea_verify_job": _annotations(read_only=True, idempotent=True),
     "aztea_clarify": _annotations(read_only=False, idempotent=False),
@@ -951,6 +979,8 @@ def call_meta_tool(
             if ok:
                 _refund_from_result(session_state, result)
             return ok, result
+        if tool_name == "aztea_follow_job":
+            return _follow_job(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_data_retention_policy":
             return _data_retention_policy(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_verify_job":
@@ -1536,6 +1566,32 @@ def _cancel_job(session: requests.Session, base: str, hdrs: dict, timeout: float
     if ok:
         result.setdefault("note", "Job cancelled. Any pre-call charge has been refunded.")
     return ok, result
+
+
+def _follow_job(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+    """Poll a job until terminal, then return the final aztea_job_status result."""
+    import time as _time
+
+    job_id = str(args.get("job_id") or "").strip()
+    if not job_id:
+        return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
+    timeout_secs = min(int(args.get("timeout_seconds") or 180), 300)
+    poll_interval = 4  # seconds between polls
+    deadline = _time.monotonic() + timeout_secs
+    _TERMINAL = {"complete", "failed", "cancelled"}
+
+    while True:
+        ok, result = _job_status(session, base, hdrs, timeout, {"job_id": job_id})
+        if not ok:
+            return False, result
+        status = str(result.get("status") or "")
+        if status in _TERMINAL:
+            return True, result
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            result.setdefault("note", f"Timeout after {timeout_secs}s — job still running. Call aztea_follow_job again or use aztea_job_status to poll manually.")
+            return True, result
+        _time.sleep(min(poll_interval, remaining))
 
 
 def _clarify(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:

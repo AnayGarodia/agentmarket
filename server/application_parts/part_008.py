@@ -307,6 +307,13 @@ def registry_agent_work_history(
     agent = registry.get_agent(agent_id)
     if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    # Privacy gate: never return work examples for sensitive or security-category agents.
+    if (
+        bool(agent.get("examples_sensitive"))
+        or str(agent.get("category") or "").strip().lower() == "security"
+        or str(agent.get("agent_id") or "") in {"1021c65c-d2bf-54ff-823a-897f9deb1029"}
+    ):
+        return JSONResponse(content={"items": [], "total": 0, "limit": capped_limit, "offset": capped_offset, "note": "Work examples are not published for this agent."})
     examples: list = agent.get("output_examples") or []
     page = examples[capped_offset: capped_offset + capped_limit]
     return JSONResponse(content={"items": page, "total": len(examples), "limit": capped_limit, "offset": capped_offset})

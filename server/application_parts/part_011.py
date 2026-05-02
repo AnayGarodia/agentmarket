@@ -450,14 +450,23 @@ def wallet_spend_summary(
             (caller_owner_id, since_iso),
         ).fetchone()
 
-    by_agent = [
-        {
-            "agent_id": row["agent_id"],
+    by_agent = []
+    for row in rows:
+        agent_id = row["agent_id"]
+        agent_name = agent_id
+        if agent_id:
+            try:
+                ag = registry.get_agent(agent_id, include_unapproved=True)
+                if ag:
+                    agent_name = ag.get("name") or agent_id
+            except Exception:
+                pass
+        by_agent.append({
+            "agent_id": agent_id,
+            "agent_name": agent_name,
             "total_cents": int(row["total_cents"] or 0),
             "job_count": int(row["job_count"] or 0),
-        }
-        for row in rows
-    ]
+        })
     return JSONResponse(content={
         "period": period,
         "days": days,

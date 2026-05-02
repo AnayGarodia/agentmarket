@@ -737,10 +737,9 @@ def jobs_get(
 ) -> core_models.JobResponse:
     _require_scope(caller, "caller")
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to view this job.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     output_mode = (
         request.query_params.get("mode")
         or request.headers.get("X-Aztea-Output-Mode")
@@ -766,10 +765,9 @@ def jobs_get_full_output(
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "caller")
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized to view this job.")
+    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     return JSONResponse(
         content={
             "job_id": job_id,
@@ -1225,10 +1223,9 @@ def jobs_output_verification_decide(
 
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-        if caller["type"] != "master" and caller["owner_id"] != job.get("caller_owner_id"):
-            raise HTTPException(status_code=403, detail="Only the job caller can decide output verification.")
+        # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
+        if job is None or (caller["type"] != "master" and caller["owner_id"] != job.get("caller_owner_id")):
+            raise HTTPException(status_code=403, detail="Job not found or not authorized.")
         if job.get("status") != "complete" or not job.get("completed_at"):
             raise HTTPException(status_code=400, detail="Output verification is only available for completed jobs.")
         if job.get("settled_at"):
