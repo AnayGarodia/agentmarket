@@ -430,18 +430,23 @@
 .lp__edge svg { height: 100%; width: 64px; }
 
 .lp__hero-inner {
-  max-width: 1700px;
+  max-width: 900px;
   margin: 0 auto;
   padding: 0 64px;
-  display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: 56px;
+  display: flex;
+  flex-direction: column;
   align-items: center;
+  text-align: center;
   position: relative;
   z-index: 1;
 }
 
-.lp__hero-copy { max-width: 540px; }
+.lp__hero-copy {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
 
 .lp__h1 {
   font-family: var(--font-display);
@@ -460,7 +465,8 @@
   line-height: 1.6;
   color: var(--text-secondary);
   margin: 0 0 36px;
-  max-width: 460px;
+  max-width: 520px;
+  text-align: center;
 }
 
 .lp__cta-row {
@@ -468,6 +474,7 @@
   gap: 12px;
   margin-bottom: 22px;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
 .lp__trust {
@@ -488,20 +495,6 @@
   opacity: 0.6;
 }
 
-.lp__hero-panel {
-  display: flex;
-  justify-content: center;
-}
-.lp__hero-video {
-  width: 100%;
-  max-width: 1500px;
-  height: auto;
-  border-radius: 16px;
-  display: block;
-  background: var(--surface, #000);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-lg);
-}
 
 /* ── SECTION SHELL ───────────────────────────────────────── */
 .lp__sec {
@@ -858,20 +851,7 @@
   box-shadow: var(--shadow-md);
 }
 .lp__price--featured::before {
-  content: 'Most popular';
-  position: absolute;
-  top: -12px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--terracotta);
-  color: var(--canvas);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 3px 10px;
-  border-radius: var(--r-pill);
-  white-space: nowrap;
+  display: none;
 }
 
 .lp__price-label {
@@ -1076,7 +1056,7 @@
 
 /* ── RESPONSIVE ──────────────────────────────────────────── */
 @media (max-width: 1080px) {
-  .lp__hero-inner { grid-template-columns: 1fr; gap: 60px; padding: 0 64px; }
+  .lp__hero-inner { padding: 0 40px; }
   .lp__steps { grid-template-columns: repeat(2, 1fr); gap: 16px; }
   .lp__listings { grid-template-columns: repeat(2, 1fr); }
   .lp__price-grid { grid-template-columns: 1fr; }
@@ -1093,7 +1073,7 @@
   .lp__nav-menu { display: grid; place-items: center; }
 
   .lp__hero { padding: 56px 0 72px; }
-  .lp__hero-inner { padding: 0 22px; gap: 48px; }
+  .lp__hero-inner { padding: 0 22px; }
   .lp__edge { display: none; }
 
   .lp__sec { padding: 72px 0; }

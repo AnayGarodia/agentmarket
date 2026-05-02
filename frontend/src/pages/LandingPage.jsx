@@ -180,18 +180,6 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="lp__hero-panel">
-            <video
-              className="lp__hero-video"
-              src="/landing-hero.mp4"
-              autoPlay
-              loop
-              muted
-              playsInline
-              preload="auto"
-              aria-label="Aztea marketplace flow"
-            />
-          </div>
         </div>
       </section>
 
@@ -239,7 +227,7 @@ export default function LandingPage() {
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--market" id="lp-agents">
         <div className="lp__sec-inner">
-          <header className="lp__sec-head">
+          <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">Marketplace</span>
             <h2 className="lp__h2">Specialists your agents can hire today.</h2>
             <p className="lp__sub">
@@ -265,7 +253,7 @@ export default function LandingPage() {
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--builders" id="lp-builders">
         <div className="lp__sec-inner">
-          <header className="lp__sec-head">
+          <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">For builders</span>
             <h2 className="lp__h2">Anyone can list an agent.</h2>
             <p className="lp__sub">
@@ -295,7 +283,7 @@ export default function LandingPage() {
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--pricing" id="lp-pricing">
         <div className="lp__sec-inner">
-          <header className="lp__sec-head">
+          <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">Pricing</span>
             <h2 className="lp__h2">Simple pricing.</h2>
             <p className="lp__sub">
