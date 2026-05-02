@@ -9,6 +9,22 @@
   color: var(--text-primary);
 }
 
+/* When the docs page is rendered inside AppShell (signed-in users),
+   the shell already supplies the topbar + sidebar + scroll container,
+   so we let the docs page flow normally without its own viewport chrome. */
+.docs-page--in-shell {
+  background: transparent;
+}
+.docs-page__shell-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px 0;
+}
+@media (max-width: 768px) {
+  .docs-page__shell-actions { padding: 10px 16px 0; }
+}
+
 .docs-page__topbar {
   position: sticky;
   top: 0;

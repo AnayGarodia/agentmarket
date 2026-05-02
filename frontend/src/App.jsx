@@ -101,6 +101,8 @@ function AuthedApp() {
               <Route path="/list-skill" element={<SkillUploadPage />} />
               <Route path="/platform" element={<PlatformPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
+              <Route path="/docs" element={<DocsPage />} />
+              <Route path="/docs/:docSlug" element={<DocsPage />} />
               <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
               <Route path="/admin/earnings" element={<RequireAdmin><AdminEarningsPage /></RequireAdmin>} />
               <Route path="*"         element={<Navigate to="/overview" replace />} />
@@ -110,6 +112,26 @@ function AuthedApp() {
       </ErrorBoundary>
     </MarketProvider>
   )
+}
+
+// Docs is a special-case route. For signed-out visitors we render the
+// standalone DocsPage so they can read the docs without an account; for
+// signed-in users we render nothing here and let the catch-all route below
+// hand the request off to AuthedApp, which mounts DocsPage inside AppShell
+// (with sidebar + topbar). This way authed users always keep their nav.
+function DocsRoute() {
+  const { apiKey, booting } = useAuth()
+  const location = useLocation()
+  if (booting) return <AppBoot />
+  if (apiKey) {
+    // Re-render under the AuthedApp tree so DocsPage is wrapped by AppShell.
+    return (
+      <RequireLegalAcceptance>
+        <AuthedApp />
+      </RequireLegalAcceptance>
+    )
+  }
+  return <DocsPage />
 }
 
 function RootRedirect() {
@@ -130,8 +152,8 @@ export default function App() {
                 <Route path="/welcome" element={<LandingPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
-                <Route path="/docs" element={<DocsPage />} />
-                <Route path="/docs/:docSlug" element={<DocsPage />} />
+                <Route path="/docs" element={<DocsRoute />} />
+                <Route path="/docs/:docSlug" element={<DocsRoute />} />
                 <Route
                   path="/legal/accept"
                   element={
