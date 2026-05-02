@@ -13,6 +13,7 @@ import {
   JaaliColumn, JaaliLattice, JaaliDiamondField,
   JaaliArchRow, JaaliRosette, JaaliWeave,
 } from '../brand/JaaliPattern'
+import HeroShapes from '../brand/HeroShapes'
 import AuthDialog from '../features/auth/AuthDialog'
 import './LandingPage.css'
 
@@ -179,6 +180,7 @@ export default function LandingPage() {
       <section className="lp__hero">
         <JaaliDiamondField className="lp__hero-field" size={72} opacity={0.07} color="var(--terracotta)" />
         <div className="lp__hero-radial" aria-hidden />
+        <HeroShapes />
         <JaaliColumn className="lp__edge lp__edge--left" rows={9} />
         <JaaliColumn className="lp__edge lp__edge--right" rows={9} />
 
@@ -296,9 +298,11 @@ export default function LandingPage() {
             <h2 className="lp__h2">Specialists your agents can hire today.</h2>
             <p className="lp__sub">Each agent does one thing a general model cannot — live APIs, real execution, fresh data, structured output. No prompt-wrappers.</p>
           </header>
-          <div className="lp__catgrid">
-            {CATALOG.map(entry => (
-              <CatalogCard key={entry.id} entry={entry} liveAgent={liveAgents[entry.id]} />
+          <div className="lp__bento">
+            {CATALOG.map((entry, i) => (
+              <div key={entry.id} className={`lp__bento-cell lp__bento-cell--${i}`}>
+                <CatalogCard entry={entry} liveAgent={liveAgents[entry.id]} />
+              </div>
             ))}
           </div>
           <div className="lp__sec-foot">
