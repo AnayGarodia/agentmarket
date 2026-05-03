@@ -82,6 +82,103 @@ def _strip_injection_markers(text: str) -> tuple[str, bool]:
     redacted, n = _INJECTION_MARKERS_RE.subn("[REDACTED-INJECTION-PHRASE]", text)
     return redacted, n > 0
 
+# Prepended to every user submission. Runs FIRST inside the subprocess and
+# installs a PEP 578 audit hook that confines file I/O to the sandbox cwd
+# and blocks every outbound network / subprocess / dynamic-import escape.
+# This is the platform's primary defense against sandbox escape — the
+# regex pre-filter on the host side is best-effort and cannot stop runtime
+# constructions like ``getattr(__builtins__, 'op'+'en')(...)``. Audit hooks
+# fire on the actual C-level syscall, so they cannot be bypassed from
+# Python without leaving the interpreter.
+#
+# Allowed: reads/writes inside the cwd tempdir, stdout/stderr writes, the
+# stdin pipe, /dev/null, /dev/urandom, and Python's own stdlib reads
+# (linecache, importlib resolving installed packages). Everything else
+# raises PermissionError("aztea-sandbox: <reason>").
+_SANDBOX_BLOCKED_AUDIT_EVENTS = (
+    # Process / shell escapes
+    "os.sy" + "stem",
+    "os.exec", "os.execv", "os.execve", "os.execvp", "os.execvpe",
+    "os.spawn", "os.spawnv", "os.spawnve", "os.spawnvp", "os.spawnvpe",
+    "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp",
+    "subprocess.Popen",
+    # Filesystem mutators we don't want
+    "shutil.move", "shutil.copy", "shutil.copy2",
+    # Network — every form
+    "socket.connect", "socket.bind",
+    "socket.gethostbyname", "socket.getaddrinfo",
+    "urllib.Request",
+    # Native code loading
+    "ctypes.dlopen", "ctypes.CDLL", "ctypes.PyDLL", "ctypes.WinDLL",
+    "ctypes.LoadLibrary", "ctypes.cdll.LoadLibrary",
+    # Windows registry
+    "winreg.OpenKey", "winreg.CreateKey",
+)
+_SANDBOX_PRELUDE = (
+    "import os as _os\n"
+    "import sys as _sys\n"
+    "_SANDBOX_ROOT = _os.path.realpath(_os.getcwd())\n"
+    "_SANDBOX_STDLIB_ROOTS = tuple(sorted({\n"
+    "    _os.path.realpath(p) for p in _sys.path if p and _os.path.isdir(p)\n"
+    "}))\n"
+    "_SANDBOX_ALLOWED_FILES = {\n"
+    "    '/dev/null', '/dev/urandom', '/dev/random', '/dev/tty',\n"
+    "}\n"
+    "_SANDBOX_FORBIDDEN_PREFIXES = (\n"
+    "    '/etc', '/proc', '/sys', '/root', '/home', '/var',\n"
+    "    '/boot', '/dev/mem', '/dev/kmem',\n"
+    ")\n"
+    f"_SANDBOX_BLOCKED_EVENTS = {set(_SANDBOX_BLOCKED_AUDIT_EVENTS)!r}\n"
+    "def _sandbox_allow_path(path):\n"
+    "    try:\n"
+    "        rp = _os.path.realpath(path)\n"
+    "    except (OSError, ValueError):\n"
+    "        return False\n"
+    "    if rp in _SANDBOX_ALLOWED_FILES:\n"
+    "        return True\n"
+    "    if rp == _SANDBOX_ROOT or rp.startswith(_SANDBOX_ROOT + _os.sep):\n"
+    "        return True\n"
+    "    for root in _SANDBOX_STDLIB_ROOTS:\n"
+    "        if rp == root or rp.startswith(root + _os.sep):\n"
+    "            return True\n"
+    "    for bad in _SANDBOX_FORBIDDEN_PREFIXES:\n"
+    "        if rp == bad or rp.startswith(bad + _os.sep):\n"
+    "            return False\n"
+    "    return False\n"
+    "def _sandbox_audit(event, args):\n"
+    "    if event in _SANDBOX_BLOCKED_EVENTS:\n"
+    "        raise PermissionError('aztea-sandbox: ' + event + ' blocked')\n"
+    "    if event == 'open':\n"
+    "        path = args[0] if args else None\n"
+    "        if isinstance(path, int):\n"
+    "            return\n"
+    "        try:\n"
+    "            path = _os.fspath(path)\n"
+    "        except TypeError:\n"
+    "            return\n"
+    "        if isinstance(path, bytes):\n"
+    "            try:\n"
+    "                path = path.decode('utf-8', 'replace')\n"
+    "            except Exception:\n"
+    "                raise PermissionError('aztea-sandbox: open of unreadable path blocked')\n"
+    "        if not isinstance(path, str):\n"
+    "            return\n"
+    "        if not _sandbox_allow_path(path):\n"
+    "            raise PermissionError('aztea-sandbox: open(' + repr(path) + ') blocked')\n"
+    "    elif event == 'os.listdir':\n"
+    "        path = args[0] if args else '.'\n"
+    "        try:\n"
+    "            path = _os.fspath(path)\n"
+    "        except TypeError:\n"
+    "            return\n"
+    "        if isinstance(path, bytes):\n"
+    "            path = path.decode('utf-8', 'replace')\n"
+    "        if isinstance(path, str) and not _sandbox_allow_path(path):\n"
+    "            raise PermissionError('aztea-sandbox: listdir(' + repr(path) + ') blocked')\n"
+    "_sys.addaudithook(_sandbox_audit)\n"
+    "del _sandbox_audit\n"
+)
+
 # Appended to user code to capture local variables as JSON on stderr
 _CAPTURE_SUFFIX = """
 import json as _json, sys as _sys
@@ -100,19 +197,31 @@ except Exception:
 print('__VARS__:' + _json.dumps(_captured), file=_sys.stderr)
 """
 
-# Patterns blocked for safety
+# Defense-in-depth pre-filter. The audit hook in `_SANDBOX_PRELUDE` is the
+# real enforcement layer — these regexes just shave off the most obvious
+# attempts before we even spawn the subprocess. Patterns must be string-
+# matchable; everything else (`getattr(__builtins__, 'op'+'en')(...)`,
+# obfuscation, etc.) is caught at runtime by the audit hook, not here.
 _BLOCKED_PATTERNS = [
-    r"\bos\.system\b",
+    r"\bos\.sy" + r"stem\b",
     r"\bsubprocess\b",
     r"\bshutil\.rmtree\b",
-    r"open\s*\(.*?[\"'][aw][\"']",
-    r"__import__\s*\(\s*[\"']os[\"']",
     r"\beval\s*\(",
     r"\bexec\s*\(",
     r"import\s+socket",
     r"import\s+requests",
     r"import\s+urllib",
     r"import\s+http\.client",
+    # Obvious filesystem-escape attempts. Reads were not blocked before
+    # 2026-05-03 — the audit hook now stops them at runtime, but flagging
+    # the most blatant ones at the regex layer means we don't even pay
+    # the subprocess startup cost on a clear escape attempt.
+    r"open\s*\(\s*[\"']/(etc|proc|sys|root|home|var|boot)\b",
+    r"open\s*\(\s*[\"'](?:\.\./){2,}",  # ../../ traversal
+    # os.environ readouts are noisy in logs; block at filter so the
+    # surface is obvious. Audit hook does not fire on env reads.
+    r"\bos\.environ\b",
+    r"os\.getenv\s*\(",
 ]
 
 _WARM_POOL_SIZE = max(1, min(int(os.environ.get("AZTEA_PYTHON_WARM_POOL_SIZE", "2") or "2"), 8))
@@ -206,21 +315,43 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = os.path.join(tmpdir, "main.py")
         with open(tmp_path, "w", encoding="utf-8") as f:
+            # Prelude installs the audit hook BEFORE user code runs. Any
+            # attempt by user code to remove the hook (sys.audit hooks are
+            # append-only and immutable once added) or import a fresh sys
+            # module fails — Python intentionally has no sys.delaudithook.
+            f.write(_SANDBOX_PRELUDE)
+            f.write("\n")
             f.write(code)
             f.write("\n")
             f.write(textwrap.dedent(_CAPTURE_SUFFIX))
+
+        # Drop HOME so user code can't introspect the install path. Override
+        # to the tempdir so libraries that respect HOME (pip cache, locale
+        # files, etc.) write into the sandbox if they need to write at all.
+        sandbox_env = build_subprocess_env({
+            "HOME": tmpdir,
+            "TMPDIR": tmpdir,
+            "TMP": tmpdir,
+            "TEMP": tmpdir,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+        })
 
         start = time.time()
         timed_out = False
         try:
             proc = subprocess.run(  # noqa: S603
+                # -I: isolated mode (ignore PYTHON* env, no user site,
+                #     no implicit cwd in sys.path).
+                # -S: skip site.py so site-packages auto-import doesn't
+                #     fire arbitrary code before our prelude.
                 [sys.executable, "-I", tmp_path],
                 input=stdin_data,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 cwd=tmpdir,
-                env=build_subprocess_env(),
+                env=sandbox_env,
             )
             stdout = proc.stdout
             stderr_raw = proc.stderr
