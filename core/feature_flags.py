@@ -103,10 +103,11 @@ def auto_invoke_confidence_floor() -> float:
     """Minimum normalised confidence score (0.0–1.0) to auto-fire a hire.
 
     Below this floor the endpoint returns a search-style response with
-    candidates, no charge. Default 0.55 — requires both raw signal strength
-    and clear dominance over the runner-up.
+    candidates, no charge. Default 0.45 — requires real signal strength but
+    not full dominance over the runner-up. Raised back toward 0.55 once the
+    catalog has more high-trust agents.
     """
-    return flag_float("AZTEA_AUTO_INVOKE_CONFIDENCE", default=0.55)
+    return flag_float("AZTEA_AUTO_INVOKE_CONFIDENCE", default=0.45)
 
 
 def auto_invoke_server_cap_usd() -> float:
@@ -120,10 +121,21 @@ def auto_invoke_server_cap_usd() -> float:
 
 
 def auto_invoke_trust_floor() -> float:
-    """Minimum trust score (0–100) to be eligible for auto-invoke."""
-    return flag_float("AZTEA_AUTO_INVOKE_TRUST_FLOOR", default=70.0)
+    """Minimum trust score (0–100) to be eligible for auto-invoke.
+
+    Default 50 — the entire current catalog clusters at 52–65 because few
+    agents have accumulated enough completed jobs for reputation to mature.
+    With the floor at 70 the gate fired 100% of the time and aztea_do never
+    auto-invoked. We raise this back toward 70 once the curated catalog has
+    at least 10 calls of history per agent.
+    """
+    return flag_float("AZTEA_AUTO_INVOKE_TRUST_FLOOR", default=50.0)
 
 
 def auto_invoke_success_floor() -> float:
-    """Minimum success rate (0.0–1.0) to be eligible for auto-invoke."""
-    return flag_float("AZTEA_AUTO_INVOKE_SUCCESS_FLOOR", default=0.90)
+    """Minimum success rate (0.0–1.0) to be eligible for auto-invoke.
+
+    Default 0.80 — agents with <10 completed jobs sit at the seeded baseline.
+    Raised toward 0.90 once history accumulates.
+    """
+    return flag_float("AZTEA_AUTO_INVOKE_SUCCESS_FLOOR", default=0.80)

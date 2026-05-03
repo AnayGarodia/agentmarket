@@ -96,6 +96,24 @@ def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
             pass
 
 
+def _eslint_cache_root() -> str:
+    """Per-process npm cache root — isolates this call's `npx` install from any
+    other concurrent linter run.
+
+    The shared default cache (`~/.npm`) hits an ENOTEMPTY race when two
+    `npx --yes eslint` invocations land at the same time and both try to
+    atomically rename their freshly-extracted `node_modules/eslint` into the
+    same `_npx/<hash>/` slot. Giving each call its own cache directory
+    sidesteps the rename collision entirely. We also reuse a stable
+    per-process subdir so a single worker amortizes install cost across
+    sequential calls.
+    """
+    base = os.environ.get("AZTEA_LINTER_NPM_CACHE")
+    if base:
+        return base
+    return os.path.join(tempfile.gettempdir(), f"aztea-eslint-cache-{os.getpid()}")
+
+
 def _run_eslint(code: str, language: str, filename: str) -> tuple[list[dict], str]:
     suffix = ".ts" if language == "typescript" else ".js"
     lint_name = filename or f"snippet{suffix}"
@@ -139,16 +157,37 @@ def _run_eslint(code: str, language: str, filename: str) -> tuple[list[dict], st
             "no-unreachable:error",
         ]
 
-    result = subprocess.run(
-        base_cmd,
-        input=code,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    if result.returncode not in {0, 1}:
-        stderr = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(stderr or "eslint failed")
+    cache_dir = _eslint_cache_root()
+    os.makedirs(cache_dir, exist_ok=True)
+    env = {**os.environ, "npm_config_cache": cache_dir, "NPM_CONFIG_CACHE": cache_dir}
+
+    result = None
+    last_err = ""
+    # Retry on the known ENOTEMPTY/EEXIST race in case concurrent calls
+    # within the same process still collide. The per-process cache dir
+    # makes this rare; the retry covers the residual case and a transient
+    # network blip on first install.
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                base_cmd,
+                input=code,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_err = f"eslint timed out after {exc.timeout}s"
+            continue
+        if result.returncode in {0, 1}:
+            break
+        last_err = (result.stderr or result.stdout or "").strip()
+        # Only retry on the install-race signatures.
+        if not re.search(r"ENOTEMPTY|EEXIST|EACCES|ETIMEDOUT", last_err, re.IGNORECASE):
+            break
+    if result is None or result.returncode not in {0, 1}:
+        raise RuntimeError(last_err or "eslint failed")
 
     raw = result.stdout.strip() or "[]"
     parsed = json.loads(raw)

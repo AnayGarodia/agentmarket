@@ -48,6 +48,13 @@ Thumbs.db
 test.py
 scripts/release_publish_local.sh
 
+# Local design / debug screenshots — never commit these to the repo root
+/*.png
+/.playwright-mcp/
+
+# Local eval workspace
+/aztea-eval/
+
 # Tool caches (user-local; never committed)
 .qwen/
 .agents/

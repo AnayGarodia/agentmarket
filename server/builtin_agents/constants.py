@@ -144,6 +144,11 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         GIT_DIFF_ANALYZER_AGENT_ID,
     }
 )
+# IMAGE_GENERATOR_AGENT_ID and VIDEO_STORYBOARD_AGENT_ID are intentionally
+# excluded from the public catalog: they require provider API keys, have
+# abuse-surface concerns, and ship with explicit hidden-from-registry tests
+# (test_hooks_builtin_mcp.py::test_image_generator_builtin_is_hidden_*).
+# When we re-enable them we'll need a separate gate (e.g. media:enable scope).
 CURATED_BUILTIN_AGENT_IDS = frozenset(set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID})
 
 BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"

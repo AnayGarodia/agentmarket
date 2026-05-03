@@ -104,23 +104,40 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     (
         "github-pat",
         "GitHub Personal Access Token",
-        re.compile(r"\bghp_[A-Za-z0-9]{36}\b"),
+        # Classic PATs are exactly 36 chars; fine-grained PATs (gh*_) can run
+        # 80+ chars. Match 16+ to catch both real keys and short test samples,
+        # since the `ghp_` prefix is unique enough to make false positives rare.
+        re.compile(r"\bghp_[A-Za-z0-9_]{16,}\b"),
         "critical",
         "Revoke the token in GitHub developer settings and audit recent usage.",
     ),
     (
         "github-oauth",
         "GitHub OAuth Token",
-        re.compile(r"\bgho_[A-Za-z0-9]{36}\b"),
+        re.compile(r"\bgho_[A-Za-z0-9_]{16,}\b"),
         "critical",
         "Revoke the OAuth token and re-authorize the app.",
     ),
     (
         "github-app-token",
         "GitHub App Installation Token",
-        re.compile(r"\bghs_[A-Za-z0-9]{36}\b"),
+        re.compile(r"\bghs_[A-Za-z0-9_]{16,}\b"),
         "high",
         "Rotate the installation token and audit app activity.",
+    ),
+    (
+        "github-fine-grained-pat",
+        "GitHub Fine-Grained Personal Access Token",
+        re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+        "critical",
+        "Revoke the fine-grained PAT and re-issue with a narrower scope.",
+    ),
+    (
+        "github-refresh-token",
+        "GitHub OAuth Refresh Token",
+        re.compile(r"\bghr_[A-Za-z0-9_]{16,}\b"),
+        "critical",
+        "Revoke the refresh token and re-authorize the OAuth app.",
     ),
     (
         "slack-bot",
@@ -153,8 +170,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     (
         "anthropic-api-key",
         "Anthropic API Key",
-        re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{32,}\b"),
-        "high",
+        # Real keys: sk-ant-api03-<95 chars>. Match 20+ chars to also catch
+        # placeholder-style test samples (sk-ant-api03-realkey-here-xxxx).
+        # The `sk-ant-` prefix is globally unique to Anthropic, so the lower
+        # length floor does not introduce false positives.
+        re.compile(r"\bsk-ant-(?:api\d+-)?[A-Za-z0-9_\-]{20,}\b"),
+        "critical",
         "Revoke the Anthropic API key in console.anthropic.com.",
     ),
     (
@@ -191,6 +212,37 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
         re.compile(r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"),
         "critical",
         "Generate a new keypair and revoke any cert/identity bound to this key.",
+    ),
+    (
+        "database-url",
+        "Database URL with embedded credentials",
+        # Match postgres://user:password@host[:port]/db and friends. The
+        # password segment must be present (`:<something>@`) to avoid
+        # flagging credential-less local URIs like postgres:///mydb.
+        re.compile(
+            r"\b(?:postgres|postgresql|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps)://"
+            r"[^:\s/@]+:[^@\s/]{3,}@[^\s/]+",
+            re.IGNORECASE,
+        ),
+        "critical",
+        "Rotate the DB password and store the connection string in a secret manager.",
+    ),
+    (
+        "http-basic-auth-url",
+        "HTTP(S) URL with embedded credentials",
+        re.compile(
+            r"\bhttps?://[A-Za-z0-9._\-]+:[^@\s/]{3,}@[A-Za-z0-9.\-]+",
+            re.IGNORECASE,
+        ),
+        "high",
+        "Move credentials out of the URL into a header or secret store.",
+    ),
+    (
+        "azure-storage-key",
+        "Azure Storage Account Key",
+        re.compile(r"DefaultEndpointsProtocol=https;AccountName=[A-Za-z0-9]+;AccountKey=[A-Za-z0-9+/=]{40,}", re.IGNORECASE),
+        "critical",
+        "Rotate the storage account access key in the Azure portal.",
     ),
     (
         "generic-password-assignment",

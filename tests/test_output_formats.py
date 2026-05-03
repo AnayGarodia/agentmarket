@@ -119,9 +119,17 @@ def test_render_slack_returns_blocks_dict():
     assert isinstance(out, dict)
     assert "blocks" in out
     assert isinstance(out["blocks"], list)
-    assert all(b["type"] == "section" for b in out["blocks"])
-    text = "".join(b["text"]["text"] for b in out["blocks"])
-    assert "Code Review" in text
+    types = {b["type"] for b in out["blocks"]}
+    # Real Block Kit: header + section/context/divider, NOT one mrkdwn blob.
+    assert "header" in types
+    assert "section" in types
+    # Header text or one of the sections must mention the kind.
+    blob = " ".join(
+        (b.get("text", {}).get("text") if isinstance(b.get("text"), dict) else "")
+        or " ".join(e.get("text", "") for e in b.get("elements", []) if isinstance(e, dict))
+        for b in out["blocks"]
+    )
+    assert "Code Review" in blob
 
 
 def test_render_linter_shape():

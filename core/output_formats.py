@@ -147,19 +147,34 @@ def _md_code_review(output: dict[str, Any]) -> str:
         for issue in issues[:50]:
             sev = str(issue.get("severity") or "info").lower()
             cat = issue.get("category") or ""
-            title = str(issue.get("title") or issue.get("message") or "").strip()
+            # Code-review agents use `description`; linters use `message`;
+            # generic shapes use `title`. Try all three before falling back.
+            text = str(
+                issue.get("description")
+                or issue.get("title")
+                or issue.get("message")
+                or ""
+            ).strip()
             location = ""
             file_ = issue.get("file") or issue.get("filename")
-            line = issue.get("line")
+            line = issue.get("line") or issue.get("line_hint")
             if file_ and line:
                 location = f" · `{file_}:{line}`"
             elif file_:
                 location = f" · `{file_}`"
-            head = f"- {_count_emoji(sev)} **{sev}** _{cat}_{location} — {title}" if cat else f"- {_count_emoji(sev)} **{sev}**{location} — {title}"
+            elif line:
+                location = f" · line `{line}`"
+            cwe = str(issue.get("cwe_id") or "").strip()
+            cwe_chip = f" [{cwe}]" if cwe else ""
+            head = (
+                f"- {_count_emoji(sev)} **{sev}** _{cat}_{cwe_chip}{location} — {text}"
+                if cat
+                else f"- {_count_emoji(sev)} **{sev}**{cwe_chip}{location} — {text}"
+            )
             lines.append(head)
-            suggestion = str(issue.get("suggestion") or "").strip()
-            if suggestion:
-                lines.append(f"  - Fix: {suggestion}")
+            fix = str(issue.get("fix") or issue.get("suggestion") or "").strip()
+            if fix:
+                lines.append(f"  - Fix: {fix}")
     positives = output.get("positive_aspects") or []
     if positives:
         lines.append("\n### What's good")
@@ -335,7 +350,22 @@ def _render_text(output: Any, meta: dict[str, Any]) -> str:
 
 
 def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
-    """Slack Block Kit JSON. Returns the dict; callers POST it as `blocks`."""
+    """Slack Block Kit JSON. Returns the dict; callers POST it as `blocks`.
+
+    Builds STRUCTURED Block Kit for known shapes (one section per issue +
+    header + context blocks) so messages render with severity emoji,
+    expandable details, and proper visual separation. Falls back to
+    chunked-mrkdwn for unknown shapes.
+    """
+    if isinstance(output, dict):
+        if "issues" in output and (
+            "severity_counts" in output or "summary" in output
+        ):
+            return {"blocks": _slack_code_review_blocks(output)}
+        if isinstance(output.get("findings"), list):
+            return {"blocks": _slack_linter_blocks(output)}
+        if isinstance(output.get("vulnerabilities"), list):
+            return {"blocks": _slack_dep_audit_blocks(output)}
     md = _render_markdown(output, meta)
     blocks: list[dict] = []
     for chunk in _split_for_slack(md):
@@ -343,6 +373,112 @@ def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
     if not blocks:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_(no output)_"}})
     return {"blocks": blocks}
+
+
+def _slack_header(text: str) -> dict:
+    return {"type": "header", "text": {"type": "plain_text", "text": text[:150], "emoji": True}}
+
+
+def _slack_section(md: str) -> dict:
+    return {"type": "section", "text": {"type": "mrkdwn", "text": md[:2900]}}
+
+
+def _slack_context(md: str) -> dict:
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": md[:2900]}]}
+
+
+def _slack_code_review_blocks(output: dict[str, Any]) -> list[dict]:
+    blocks: list[dict] = [_slack_header("Code Review")]
+    score = output.get("score")
+    counts = output.get("severity_counts") or {}
+    summary = str(output.get("summary") or "").strip()
+    chips = " · ".join(
+        f"{_count_emoji(sev)} {n} {sev}" for sev, n in counts.items() if n
+    )
+    head_bits = []
+    if isinstance(score, (int, float)):
+        head_bits.append(f"*Score:* {score}/100")
+    if chips:
+        head_bits.append(chips)
+    if head_bits:
+        blocks.append(_slack_context(" · ".join(head_bits)))
+    if summary:
+        blocks.append(_slack_section(summary))
+    issues = output.get("issues") or []
+    if issues:
+        blocks.append({"type": "divider"})
+        for issue in issues[:30]:
+            sev = str(issue.get("severity") or "info").lower()
+            cat = str(issue.get("category") or "")
+            text = str(
+                issue.get("description")
+                or issue.get("title")
+                or issue.get("message")
+                or ""
+            ).strip()
+            line = issue.get("line") or issue.get("line_hint") or ""
+            cwe = str(issue.get("cwe_id") or "").strip()
+            fix = str(issue.get("fix") or issue.get("suggestion") or "").strip()
+            head = f"{_count_emoji(sev)} *{sev.upper()}*"
+            if cat:
+                head += f" · _{cat}_"
+            if cwe:
+                head += f" · `{cwe}`"
+            if line:
+                head += f" · line `{line}`"
+            body = f"{head}\n{text}"
+            if fix:
+                body += f"\n→ *Fix:* {fix}"
+            blocks.append(_slack_section(body))
+    return blocks
+
+
+def _slack_linter_blocks(output: dict[str, Any]) -> list[dict]:
+    findings = output.get("findings") or []
+    total = output.get("total") if isinstance(output.get("total"), int) else len(findings)
+    blocks: list[dict] = [_slack_header("Linter")]
+    blocks.append(_slack_context(
+        "✓ No issues found." if not total else f"{total} issue{'s' if total != 1 else ''} found."
+    ))
+    if findings:
+        rows = []
+        for f in findings[:25]:
+            sev = str(f.get("severity") or "warning").lower()
+            rule = str(f.get("rule") or f.get("code") or "")
+            file_ = str(f.get("file") or "")
+            line = f.get("line") or ""
+            msg = str(f.get("message") or "")
+            loc = f"`{file_}:{line}`" if file_ else (f"line `{line}`" if line else "")
+            rows.append(f"{_count_emoji(sev)} `{rule}` {loc}\n{msg}")
+        blocks.append(_slack_section("\n\n".join(rows)))
+    return blocks
+
+
+def _slack_dep_audit_blocks(output: dict[str, Any]) -> list[dict]:
+    vulns = output.get("vulnerabilities") or []
+    blocks: list[dict] = [_slack_header("Dependency Audit")]
+    summary = str(output.get("summary") or "").strip()
+    if summary:
+        blocks.append(_slack_context(summary))
+    elif not vulns:
+        blocks.append(_slack_context("✓ No known vulnerabilities."))
+    else:
+        blocks.append(_slack_context(
+            f"{len(vulns)} vulnerabilit{'ies' if len(vulns) != 1 else 'y'} found."
+        ))
+    if vulns:
+        blocks.append({"type": "divider"})
+        for v in vulns[:30]:
+            sev = str(v.get("severity") or "unknown").lower()
+            pkg = str(v.get("package") or v.get("name") or "")
+            cve = str(v.get("cve_id") or v.get("id") or "")
+            fix = str(v.get("fix_version") or v.get("fixed_in") or "—")
+            desc = str(v.get("description") or v.get("summary") or "").strip()
+            body = f"{_count_emoji(sev)} *{sev.upper()}* · `{pkg}` · `{cve}`\n*Fix in:* `{fix}`"
+            if desc:
+                body += f"\n{desc[:400]}"
+            blocks.append(_slack_section(body))
+    return blocks
 
 
 def _split_for_slack(text: str, *, limit: int = 2900) -> list[str]:

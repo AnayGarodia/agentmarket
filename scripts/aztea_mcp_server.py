@@ -35,6 +35,114 @@ _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _AZTEA_PROTOCOL_VERSION = "1.0"
 _CLIENT_ID_HEADER = "X-Aztea-Client"
 _DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
+# Platform recipe entries surfaced into the MCP catalog so they're
+# discoverable via `aztea_search` and resolvable via `aztea_describe`.
+# Slugs match the recipe_ids in `core/recipes.py::BUILTIN_RECIPES`.
+# Keep in sync with that file: when a recipe is added there, add it here too.
+_BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
+    {
+        "slug": "git-diff-review",
+        "aliases": ["git-diff-review", "git_diff_review", "git_diff_review_recipe", "diff-review"],
+        "kind": "recipe",
+        "recipe_id": "git-diff-review",
+        "name": "git-diff-review (recipe)",
+        "description": (
+            "Two-stage pipeline. Stage 1 deterministically classifies risk surfaces "
+            "in a unified diff (auth/money/migration changes, removed tests, secret "
+            "patterns). Stage 2 runs an LLM code review using that classification "
+            "as context. Run via aztea_run_recipe(recipe_id='git-diff-review', "
+            "input_payload={'diff': '...'})."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"diff": {"type": "string", "description": "Unified-diff text to review (≤500 KB)."}},
+            "required": ["diff"],
+        },
+        "output_schema": {},
+        "category": "Code",
+        "tags": ["recipe", "pipeline", "diff", "review", "security"],
+        "is_featured": True,
+        "cacheable": True,
+        "runtime_requirements": [],
+        "tooling_kind": "recipe_pipeline",
+        "stability_tier": "stable",
+        "codex_recommended": True,
+        "short_use_cases": ["pre-PR diff review", "block-merge gate", "risk triage"],
+        "trust_score": None,
+        "success_rate": None,
+        "avg_latency_ms": None,
+        "price_per_call_usd": None,
+        "verified": True,
+    },
+    {
+        "slug": "modernize-python",
+        "aliases": ["modernize-python", "modernize_python"],
+        "kind": "recipe",
+        "recipe_id": "modernize-python",
+        "name": "modernize-python (recipe)",
+        "description": "Lint → type-check → review pipeline for Python code. Run via aztea_run_recipe(recipe_id='modernize-python').",
+        "input_schema": {
+            "type": "object",
+            "properties": {"code": {"type": "string"}},
+            "required": ["code"],
+        },
+        "output_schema": {},
+        "category": "Code",
+        "tags": ["recipe", "pipeline", "python", "lint", "types"],
+        "is_featured": True,
+        "cacheable": True,
+        "runtime_requirements": ["ruff", "mypy"],
+        "tooling_kind": "recipe_pipeline",
+        "stability_tier": "stable",
+        "codex_recommended": True,
+        "short_use_cases": ["lint+type+review on a snippet"],
+        "trust_score": None, "success_rate": None, "avg_latency_ms": None,
+        "price_per_call_usd": None, "verified": True,
+    },
+    {
+        "slug": "audit-deps",
+        "aliases": ["audit-deps", "audit_deps"],
+        "kind": "recipe",
+        "recipe_id": "audit-deps",
+        "name": "audit-deps (recipe)",
+        "description": "Audit a manifest (requirements.txt or package.json) for known CVEs. Run via aztea_run_recipe(recipe_id='audit-deps').",
+        "input_schema": {
+            "type": "object",
+            "properties": {"manifest": {"type": "string"}},
+            "required": ["manifest"],
+        },
+        "output_schema": {},
+        "category": "Security",
+        "tags": ["recipe", "pipeline", "cve", "dependencies", "security"],
+        "is_featured": True,
+        "cacheable": True,
+        "runtime_requirements": [],
+        "tooling_kind": "recipe_pipeline",
+        "stability_tier": "stable",
+        "codex_recommended": True,
+        "short_use_cases": ["scan requirements.txt for CVEs"],
+        "trust_score": None, "success_rate": None, "avg_latency_ms": None,
+        "price_per_call_usd": None, "verified": True,
+    },
+    {
+        "slug": "review-and-lint",
+        "aliases": ["review-and-lint", "review_and_lint"],
+        "kind": "recipe",
+        "recipe_id": "review-and-lint",
+        "name": "review-and-lint (recipe)",
+        "description": "Review then lint code. Run via aztea_run_recipe(recipe_id='review-and-lint').",
+        "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+        "output_schema": {},
+        "category": "Code",
+        "tags": ["recipe", "pipeline", "review", "lint"],
+        "is_featured": False, "cacheable": True, "runtime_requirements": [],
+        "tooling_kind": "recipe_pipeline", "stability_tier": "stable",
+        "codex_recommended": False, "short_use_cases": [],
+        "trust_score": None, "success_rate": None, "avg_latency_ms": None,
+        "price_per_call_usd": None, "verified": True,
+    },
+]
+
 _PUBLIC_SEARCH_EXCLUDED = {
     "reverse_string",
     "reverse string",
@@ -682,6 +790,13 @@ class RegistryBridge:
                     "verified": bool(meta.get("verified", False)),
                 }
             )
+        # Surface platform recipes as first-class searchable entries so
+        # `aztea_search("git diff review")` and `aztea_describe("git-diff-review")`
+        # both resolve. Without this, the recipe IDs are reachable only via
+        # `aztea_run_recipe(recipe_id=...)`, which the user has to know about
+        # in advance — the eval (2026-05-03) found this gap.
+        for recipe in _BUILTIN_RECIPE_CATALOG_ENTRIES:
+            entries.append(dict(recipe))
         result = [entry for entry in entries if entry.get("slug")]
         with self._lock:
             self._catalog_cache = result
@@ -881,8 +996,14 @@ class RegistryBridge:
                     if key not in set(entry["input_schema"].get("required") or [])
                 ]
             ) if isinstance(entry["input_schema"], dict) else [],
-            "next_step": f"Call aztea_call(slug='{slug}', arguments={{...}}) using the required_fields above.",
+            "next_step": (
+                f"Call aztea_run_recipe(recipe_id='{entry.get('recipe_id') or slug}', input_payload={{...}}) using the required_fields above."
+                if entry["kind"] == "recipe"
+                else f"Call aztea_call(slug='{slug}', arguments={{...}}) using the required_fields above."
+            ),
         }
+        if entry["kind"] == "recipe":
+            result["recipe_id"] = entry.get("recipe_id") or entry["slug"]
         # Surface a worked example from the spec if available so Claude can copy it
         tool = entry.get("tool") or {}
         examples = tool.get("output_examples") or []
@@ -1010,6 +1131,29 @@ class RegistryBridge:
 
         resolved_entry = self._catalog_entry(tool_name)
         resolved_tool_name = str(resolved_entry.get("slug") or tool_name) if resolved_entry else tool_name
+
+        # If the resolved slug is a recipe, transparently redirect to the
+        # `aztea_run_recipe` meta-tool so callers can use the recipe by slug
+        # without having to know about the meta-tool layer.
+        if resolved_entry and resolved_entry.get("kind") == "recipe":
+            recipe_id = resolved_entry.get("recipe_id") or resolved_tool_name
+            input_payload = arguments.get("input_payload")
+            if input_payload is None:
+                # Accept either {arguments: {...}} (aztea_call shape) or a raw
+                # field dict (when called directly by slug). Prefer the former.
+                inner = arguments.get("arguments")
+                input_payload = inner if isinstance(inner, dict) else dict(arguments)
+                input_payload.pop("slug", None)
+                input_payload.pop("arguments", None)
+            return meta_tools.call_meta_tool(
+                "aztea_run_recipe",
+                {"recipe_id": recipe_id, "input_payload": input_payload},
+                base_url=self.base_url,
+                api_key=self.api_key,
+                session=self._session,
+                timeout=self.timeout_seconds,
+                session_state=self._session_state,
+            )
 
         # Route platform meta-tools directly to Aztea API
         if resolved_tool_name in meta_tools.META_TOOL_NAMES:
