@@ -234,25 +234,25 @@
   z-index: 1;
 }
 
-/* Container clips to a wide horizontal band; the image is anchored
-   to the bottom so only the hands portion of the source shows.
-   This avoids stacking the image's own empty upper-half on top of
-   the hero's negative space (which read as a giant void). */
+/* Hero illustration as a background-image so we can swap source per
+   theme. Container is sized to a wide horizontal band; the image is
+   anchored to the bottom and offset down so the source PNG's parchment
+   band slips off-screen, leaving just the hands visible. The aspect
+   ratio is generous enough to keep the dot-trail tops uncropped.
+   Light + dark variants are separate files (matched palette per theme).
+*/
 .lp__hero-art {
-  position: relative;
   width: 100%;
-  aspect-ratio: 1536 / 600;
-  overflow: hidden;
+  aspect-ratio: 1536 / 470;
+  background-image: url('/hero-adam-desktop.png');
+  background-size: 100% auto;
+  background-repeat: no-repeat;
+  background-position: center calc(100% + 9.5vw); /* push parchment off */
   pointer-events: none;
   user-select: none;
 }
-.lp__hero-art img {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 100%;
-  height: auto;
-  display: block;
+[data-theme="dark"] .lp__hero-art {
+  background-image: url('/hero-adam-desktop-dark.png');
 }
 
 .lp__hero-stamp {
@@ -1281,9 +1281,15 @@
   .lp__nav-menu { display: grid; place-items: center; }
 
   .lp__hero-inner { padding: 56px 22px 24px; }
-  /* Mobile portrait source — show enough of the lower image to
-     include the full hands + a sliver of parchment band. */
-  .lp__hero-art { aspect-ratio: 1024 / 900; }
+  /* Mobile portrait source — taller crop, push parchment off-screen. */
+  .lp__hero-art {
+    aspect-ratio: 1024 / 720;
+    background-image: url('/hero-adam-mobile.png');
+    background-position: center calc(100% + 16vw);
+  }
+  [data-theme="dark"] .lp__hero-art {
+    background-image: url('/hero-adam-mobile-dark.png');
+  }
 
   .lp__sec { padding: 80px 0; }
   .lp__sec-inner { padding: 0 22px; }

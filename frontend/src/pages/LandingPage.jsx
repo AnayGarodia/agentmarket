@@ -255,18 +255,7 @@ export default function LandingPage() {
           </div>
         </div>
 
-        <picture className="lp__hero-art" aria-hidden="true">
-          <source media="(max-width: 720px)" srcSet="/hero-adam-mobile.png" />
-          <img
-            src="/hero-adam-desktop.png"
-            alt=""
-            width="1536"
-            height="1024"
-            loading="eager"
-            decoding="async"
-            fetchpriority="high"
-          />
-        </picture>
+        <div className="lp__hero-art" aria-hidden="true" />
       </section>
 
       {/* ─────────────────────────────────────────────────────
