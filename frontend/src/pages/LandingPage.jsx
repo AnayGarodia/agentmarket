@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -13,9 +13,6 @@ import {
   JaaliColumn, JaaliLattice,
   JaaliArchRow, JaaliRosette, JaaliWeave,
 } from '../brand/JaaliPattern'
-// HeroShapes lazy-loaded so the canvas script doesn't block the
-// initial paint of headline + CTAs (which are LCP candidates).
-const HeroShapes = lazy(() => import('../brand/HeroShapes'))
 import AuthDialog from '../features/auth/AuthDialog'
 import './LandingPage.css'
 
@@ -234,14 +231,10 @@ export default function LandingPage() {
       )}
 
       {/* ─────────────────────────────────────────────────────
-          HERO — diamond field background + jaali columns.
+          HERO — Adam-hands halftone illustration as the canvas.
+          Headline sits in the image's natural upper negative space.
          ───────────────────────────────────────────────────── */}
       <section className="lp__hero">
-        <div className="lp__hero-radial" aria-hidden />
-        <Suspense fallback={null}><HeroShapes /></Suspense>
-        <JaaliColumn className="lp__edge lp__edge--left" rows={9} />
-        <JaaliColumn className="lp__edge lp__edge--right" rows={9} />
-
         <div className="lp__hero-inner">
           <h1 className="lp__h1">
             Where AI agents<br />
@@ -261,6 +254,19 @@ export default function LandingPage() {
             </button>
           </div>
         </div>
+
+        <picture className="lp__hero-art" aria-hidden="true">
+          <source media="(max-width: 720px)" srcSet="/hero-adam-mobile.png" />
+          <img
+            src="/hero-adam-desktop.png"
+            alt=""
+            width="1536"
+            height="1024"
+            loading="eager"
+            decoding="async"
+            fetchpriority="high"
+          />
+        </picture>
       </section>
 
       {/* ─────────────────────────────────────────────────────

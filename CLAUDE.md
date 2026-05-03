@@ -209,8 +209,10 @@ Makefile                         Dev shortcuts: make dev / test / docker / migra
 - **Stack:** systemd service (`aztea.service`) running uvicorn directly — no Docker in production
 - **Process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1`
 - **Database:** SQLite WAL at the path set in `.env` (`DB_PATH`), on the host filesystem
-- **Reverse proxy:** nginx on ports 80/443. `/api/*` → uvicorn on `127.0.0.1:8000`; everything else served from `frontend/dist/` with SPA fallback. The backend also handles an un-stripped `/api/` prefix and serves `frontend/dist/index.html` as a fallback, so the site stays functional even if nginx and FastAPI disagree on which layer owns static assets.
+- **Reverse proxy:** Caddy at `/etc/caddy/Caddyfile` is a thin reverse proxy to uvicorn on `127.0.0.1:8000`. It does NOT serve static files. **FastAPI owns SPA fallback** via the catch-all `@app.get("/{full_path:path}")` in `server/application_parts/part_013.py`: maps existing `frontend/dist/*` files to themselves, returns `index.html` for everything else, and 404s anything matching `_SPA_API_PREFIXES`.
 - **SSL:** Managed by certbot on the host; nginx handles termination.
+
+**Verify what's actually deployed:** SSH key is `~/Downloads/aztea_key.pem`, user is `ubuntu@3.145.5.228` (per `.env` `DEPLOY_SSH_KEY` / `DEPLOY_HOST`). Compare `sha256sum /home/aztea/app/frontend/dist/assets/*.js` against your local `dist/` to confirm the build that was published. The release script does `git push` + EC2 `git fetch && git reset --hard origin/main`, so **uncommitted local changes never deploy** — commit first, then run the script.
 
 ### Deploying a new version
 
@@ -380,6 +382,11 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 - **Sensitive agents must never replay caller inputs.** `_record_public_work_example()` in `server/application_parts/part_003.py` drops on three independent gates: (a) hardcoded `_SENSITIVE_EXAMPLE_AGENT_IDS`, (b) the `examples_sensitive: True` flag on the spec, (c) the `Security` category. New scanner / credential / PII-handling agents must set both (b) and the Security category.
 - **Demo-only skills are blocklisted** server-side from `/registry/agents` and from MCP search via `_PUBLIC_SEARCH_EXCLUDED` / `_PUBLIC_MARKETPLACE_BLOCKLIST` (slugs `reverse_string`, `echo_skill`, `json_validator`). New demo names go in both lists.
 
+### Routing
+
+- **FastAPI swagger lives under `/api/docs`**, not `/docs`. The SPA owns `/docs`. `app = FastAPI(docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")` is enforced in `part_001.py`. Any new public-facing path must not collide with FastAPI's defaults.
+- **Add new SPA-only paths to `_SPA_API_PREFIXES` only if they should 404 as JSON**. Otherwise FastAPI's catch-all will serve `index.html` and React Router resolves them — exactly what you want.
+
 ### LLM layer
 
 - **`LLMResponse.text` — not `.content`.** Every agent module must use `raw.text`. Using `.content` silently returns `None` at runtime.
@@ -494,6 +501,9 @@ text = raw.text.strip()  # always .text, never .content
 - **Aesthetic rule:** never use Inter/Roboto/Arial; never use purple gradients; commit to a cohesive theme with distinctive typography, dominant colours with sharp accents, and intentional motion at load time
 - **Known tech debt:** `fmtDate`, `fmtUsd`, `fmtMs`, and `relativeTime` are copy-pasted into 10+ page files. A shared `src/utils/format.js` should be the canonical location — consolidate on next touch
 - **Inline styles:** many pages (esp. `JobDetailPage`, `DashboardPage`) use `style={{}}` objects instead of CSS classes. Prefer CSS classes with token variables on every new or edited component
+- **Don't wrap a route element in a fresh `<Routes>` tree under another `<Routes>`** — it causes a blank-mount race on prod that doesn't repro in `vite dev` or `vite preview`. To render a page inside `AppShell` from outside `AuthedApp`, use the `children` prop pattern: `<AppShell><Page /></AppShell>`. `AppShell` falls back to `<Outlet />` when no children are passed.
+- **`AppShell`, `Topbar`, `OnboardingWizard` assume `MarketProvider` exists.** When mounting them outside the authed tree, wrap with `<MarketProvider apiKey={apiKey}>` and `useMarket()` must be treated as nullable on these components.
+- **Performance:** the highest-leverage paint win on long pages is `content-visibility: auto` + `contain-intrinsic-size: 1px <px>` on every offscreen section. Defer non-LCP fetches with `requestIdleCallback`. `lazy(() => import(...))` heavy canvas / animation modules so they don't block first paint.
 
 ---
 
@@ -509,6 +519,10 @@ cp .env.example .env && make docker
 
 # Frontend
 cd frontend && npm install && npm run dev
+
+# Reproduce production behaviour locally before deploy:
+cd frontend && npm run build && npx vite preview --port 4173
+# If `vite preview` works but prod doesn't, the bug is in the Caddy → uvicorn → SPA-fallback path or a route definition shadowing the SPA — not the bundle.
 
 # Tests (453 passed + 1 skipped on main suite as of 2026-04-28;
 # run the SDK contract suite separately — it can segfault under Python 3.14 on macOS)

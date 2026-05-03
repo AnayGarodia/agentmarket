@@ -209,57 +209,50 @@
 .lp__mobile-sep { height: 1px; background: var(--border-soft); margin: 8px 0; }
 
 /* ── HERO — diamond field + radial warmth + jaali columns ── */
+/* ── HERO ──────────────────────────────────────────────────
+   Stack: copy on top, illustration hanging below. The image's
+   natural ivory upper portion fuses with the section's ivory
+   background, so headline + image read as one canvas.
+─────────────────────────────────────────────────────────── */
 .lp__hero {
   position: relative;
-  padding: 90px 0 110px;
+  background: var(--canvas);
   overflow: hidden;
-}
-.lp__hero-field { position: absolute; inset: 0; pointer-events: none; }
-
-/* ── Hero animated grid canvas (21st.dev grid-hero, palette-mapped) ── */
-.hero-grid-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 0;
-  /* fade edges so it doesn't fight with hero copy */
-  -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, transparent 0%, black 70%);
-          mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, transparent 0%, black 70%);
-  will-change: transform;
-}
-.lp__hero-radial {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(720px 460px at 50% 35%, color-mix(in srgb, var(--terracotta) 13%, transparent) 0%, transparent 65%);
-}
-.lp__edge {
-  position: absolute;
-  top: 40px;
-  bottom: 40px;
-  width: 64px;
   display: flex;
-  align-items: center;
-  pointer-events: none;
-  color: var(--terracotta);
-  z-index: 0;
+  flex-direction: column;
 }
-.lp__edge--left  { left: 0; }
-.lp__edge--right { right: 0; transform: scaleX(-1); }
-.lp__edge svg { height: 100%; width: 64px; }
 
 .lp__hero-inner {
   max-width: 980px;
   margin: 0 auto;
-  padding: 0 64px;
+  padding: clamp(72px, 8vw, 120px) 32px clamp(20px, 3vw, 36px);
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
   position: relative;
   z-index: 1;
+}
+
+/* Container clips to a wide horizontal band; the image is anchored
+   to the bottom so only the hands portion of the source shows.
+   This avoids stacking the image's own empty upper-half on top of
+   the hero's negative space (which read as a giant void). */
+.lp__hero-art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1536 / 600;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.lp__hero-art img {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: auto;
+  display: block;
 }
 
 .lp__hero-stamp {
@@ -1267,7 +1260,7 @@
 
 /* ── RESPONSIVE ────────────────────────────────────────────── */
 @media (max-width: 1080px) {
-  .lp__hero-inner { padding: 0 40px; }
+  .lp__hero-inner { padding: clamp(48px, 7vw, 96px) 40px 0; }
   .lp__stages { grid-template-columns: 1fr; }
   .lp__stage { border-right: none; border-bottom: 1px solid var(--border); }
   .lp__stage:last-child { border-bottom: none; }
@@ -1287,9 +1280,10 @@
   .lp__nav-cta { display: none; }
   .lp__nav-menu { display: grid; place-items: center; }
 
-  .lp__hero { padding: 56px 0 64px; }
-  .lp__hero-inner { padding: 0 22px; }
-  .lp__edge { display: none; }
+  .lp__hero-inner { padding: 56px 22px 24px; }
+  /* Mobile portrait source — show enough of the lower image to
+     include the full hands + a sliver of parchment band. */
+  .lp__hero-art { aspect-ratio: 1024 / 900; }
 
   .lp__sec { padding: 80px 0; }
   .lp__sec-inner { padding: 0 22px; }
