@@ -5,6 +5,7 @@ from __future__ import annotations
 from server.builtin_agents.constants import (
     CODEREVIEW_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
+    GIT_DIFF_ANALYZER_AGENT_ID,
     LINTER_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
 )
@@ -42,6 +43,48 @@ BUILTIN_RECIPES: list[dict] = [
                     "agent_id": CODEREVIEW_AGENT_ID,
                     "depends_on": ["lint", "types"],
                     "input_map": {"code": "$input.code"},
+                },
+            ]
+        },
+    },
+    {
+        # Killer demo: agent A runs deterministic risk classification on the
+        # diff, agent B reviews the diff with that classification as context.
+        # First production A2A pipeline on the platform.
+        "recipe_id": "git-diff-review",
+        "name": "git-diff-review",
+        "description": (
+            "Review a git diff. Stage 1 classifies risk (auth/money/migration "
+            "surfaces, removed tests, secret patterns) deterministically. "
+            "Stage 2 runs an LLM code review using that classification as "
+            "context, biased toward bugs and security."
+        ),
+        "default_input_schema": {
+            "type": "object",
+            "properties": {
+                "diff": {
+                    "type": "string",
+                    "description": "Unified-diff text to review (≤500 KB).",
+                },
+            },
+            "required": ["diff"],
+        },
+        "pipeline_definition": {
+            "nodes": [
+                {
+                    "id": "analyze",
+                    "agent_id": GIT_DIFF_ANALYZER_AGENT_ID,
+                    "input_map": {"diff": "$input.diff"},
+                },
+                {
+                    "id": "review",
+                    "agent_id": CODEREVIEW_AGENT_ID,
+                    "depends_on": ["analyze"],
+                    "input_map": {
+                        "diff": "$input.diff",
+                        "focus": "bugs",
+                        "context": "$analyze.output.summary",
+                    },
                 },
             ]
         },

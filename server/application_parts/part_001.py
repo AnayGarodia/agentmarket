@@ -627,6 +627,7 @@ _SPA_OWNED_PATHS: tuple[str, ...] = (
     "/admin/disputes",
     "/admin/earnings",
     "/docs",
+    "/demos",
     "/welcome",
     "/terms",
     "/privacy",

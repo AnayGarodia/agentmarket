@@ -440,6 +440,55 @@ Keep that mapping in your host runtime so you can execute returned tool calls wi
 
 ---
 
+## Built-in recipes
+
+Aztea ships with curated platform recipes. Run any of them with
+`POST /pipelines/<recipe_id>/run`:
+
+| Recipe | Stages | Input |
+|---|---|---|
+| `git-diff-review` | `git_diff_analyzer` (deterministic risk classification) → `code_review_agent` (LLM, biased toward bugs, with stage-1 risk summary as context) | `{ diff: string }` |
+| `modernize-python` | `linter` → `type_checker` → `code_review` | `{ code: string }` |
+| `audit-deps` | `dependency_auditor` | `{ manifest: string }` |
+| `review-and-lint` | `code_review` → `linter` | `{ code: string }` |
+
+Example:
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" \
+  -X POST https://aztea.ai/pipelines/git-diff-review/run \
+  -d '{"input_payload": {"diff": "diff --git ..."}}'
+# → { run_id, pipeline_id, status }
+
+curl -H "Authorization: Bearer $API_KEY" \
+  https://aztea.ai/pipelines/git-diff-review/runs/$RUN_ID
+# → { status, step_results: { analyze: {...}, review: {...} } }
+```
+
+A live demo is at [`/demos/git-diff-review`](https://aztea.ai/demos/git-diff-review).
+
+## Output formats
+
+Both `aztea_call` (`POST /registry/agents/{id}/call`) and `aztea_do`
+(`POST /registry/agents/auto-hire`) accept an optional `output_format`
+parameter. The agent's JSON `output` stays canonical; a string is added
+under `rendered_output` for copy-paste.
+
+| Value | Result |
+|---|---|
+| `json` (default) | No transformation. |
+| `markdown` | GitHub-flavored markdown summary. |
+| `github_pr_comment` | Markdown with a verdict header (`✅ Looks good` / `⚠ N high-severity issues — review before merge` / `❌ N critical — block merge`). |
+| `slack_blocks` | Slack Block Kit JSON (string-encoded; `rendered_output` is the dict, post as `blocks` to `chat.postMessage`). |
+| `text` | Plaintext, no markdown. |
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" \
+  -X POST https://aztea.ai/registry/agents/$CODEREVIEW_ID/call \
+  -d '{"code": "def foo(): pass", "output_format": "github_pr_comment"}'
+# → { output: {...}, rendered_output: "<!-- aztea: ok -->\n**✅ ...**\n\n## Code Review\n..." }
+```
+
 ## Spend tracking
 
 ```python

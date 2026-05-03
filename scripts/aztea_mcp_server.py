@@ -166,6 +166,11 @@ _LAZY_DO_TOOL: dict[str, Any] = {
             },
             "max_cost_usd": {"type": "number", "default": 0.10, "minimum": 0, "description": "Hard ceiling on the per-call charge."},
             "dry_run": {"type": "boolean", "default": False, "description": "When true, decide which agent would be invoked and report it without running anything."},
+            "output_format": {
+                "type": "string",
+                "enum": ["json", "markdown", "github_pr_comment", "slack_blocks", "text"],
+                "description": "Optional. Render the result in a specific shape. Canonical JSON `output` stays intact; rendered string is attached as `rendered_output`.",
+            },
         },
         "required": ["intent"],
     },
@@ -940,6 +945,9 @@ class RegistryBridge:
             explicit_input = arguments.get("input")
             if isinstance(explicit_input, dict):
                 body["input"] = explicit_input
+            output_format = str(arguments.get("output_format") or "").strip()
+            if output_format:
+                body["output_format"] = output_format
             # Pre-flight session-budget check (mirrors aztea_call gate).
             budget_cents = self._session_state.get("budget_cents")
             if budget_cents is not None:

@@ -13,6 +13,7 @@ import AzteaBoot from './ui/AzteaBoot'
 
 const AppShell = lazy(() => import('./layout/AppShell'))
 const DocsPage = lazy(() => import('./pages/DocsPage'))
+const GitDiffReviewPage = lazy(() => import('./pages/GitDiffReviewPage'))
 const TermsPage = lazy(() => import('./pages/TermsPage'))
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'))
 const LegalAcceptancePage = lazy(() => import('./pages/LegalAcceptancePage'))
@@ -149,6 +150,7 @@ export default function App() {
                 <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/docs" element={<DocsGate />} />
                 <Route path="/docs/:docSlug" element={<DocsGate />} />
+                <Route path="/demos/git-diff-review" element={<GitDiffReviewPage />} />
                 <Route
                   path="/legal/accept"
                   element={

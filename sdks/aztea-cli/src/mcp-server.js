@@ -88,6 +88,7 @@ const LAZY_DO_TOOL = {
       input:        { type: 'object',  description: 'Optional structured payload that matches the chosen agent\'s input schema. When omitted, the server attempts simple field extraction from `intent`.' },
       max_cost_usd: { type: 'number',  default: 0.10, minimum: 0, description: 'Hard ceiling on the per-call charge. Auto-invoke is suppressed if the best agent costs more.' },
       dry_run:      { type: 'boolean', default: false, description: 'When true, decide which agent would be invoked and report it without running anything.' },
+      output_format: { type: 'string', enum: ['json', 'markdown', 'github_pr_comment', 'slack_blocks', 'text'], description: 'Optional. Render the result in a specific shape. The canonical JSON `output` stays intact; the rendered string is added as `rendered_output`.' },
     },
     required: ['intent'],
   },
@@ -969,6 +970,9 @@ async function callTool(name, args) {
     }
     if (args.input != null && typeof args.input === 'object' && !Array.isArray(args.input)) {
       body.input = args.input
+    }
+    if (typeof args.output_format === 'string' && args.output_format.trim()) {
+      body.output_format = args.output_format.trim()
     }
     // Pre-flight budget guard so an auto-invoke can't bypass session caps.
     const blocked = budgetGuard()

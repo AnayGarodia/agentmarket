@@ -341,6 +341,10 @@ class _AutoHireRequestBody(BaseModel):
     input: dict[str, Any] | None = None
     max_cost_usd: float = Field(default=0.10, ge=0.0, le=100.0)
     dry_run: bool = False
+    # Optional rendering hint applied AFTER invocation. The agent's JSON
+    # output stays canonical; if set, `rendered_output` (string or dict
+    # for slack_blocks) is attached alongside.
+    output_format: str | None = None
 
 
 @app.post(
@@ -408,6 +412,13 @@ def registry_auto_hire(
     payload = decision.payload or {}
     assert chosen is not None  # for type checkers
 
+    # Forward output_format into the call payload so the underlying
+    # registry_call route applies the renderer once. We don't render here
+    # to keep a single source of truth for output decoration.
+    if body.output_format:
+        payload = dict(payload)
+        payload["output_format"] = body.output_format
+
     # 4. Dry-run: report what *would* happen, no invocation.
     if body.dry_run:
         return JSONResponse(
@@ -462,19 +473,23 @@ def registry_auto_hire(
         # Belt-and-suspenders: registry_call always returns JSONResponse today.
         inner = {}
 
-    return JSONResponse(
-        content={
-            "auto_invoked": True,
-            "agent": chosen.public_dict(),
-            "confidence": decision.confidence,
-            "cost_usd": (
-                int(inner.get("cost_cents") or 0) / 100
-                if inner.get("cost_cents") is not None
-                else chosen.price_per_call_usd
-            ),
-            "job_id": inner.get("job_id"),
-            "output": inner.get("output"),
-            "latency_ms": inner.get("latency_ms"),
-            "cached": bool(inner.get("cached", False)),
-        }
-    )
+    response_body: dict[str, Any] = {
+        "auto_invoked": True,
+        "agent": chosen.public_dict(),
+        "confidence": decision.confidence,
+        "cost_usd": (
+            int(inner.get("cost_cents") or 0) / 100
+            if inner.get("cost_cents") is not None
+            else chosen.price_per_call_usd
+        ),
+        "job_id": inner.get("job_id"),
+        "output": inner.get("output"),
+        "latency_ms": inner.get("latency_ms"),
+        "cached": bool(inner.get("cached", False)),
+    }
+    if "rendered_output" in inner:
+        response_body["rendered_output"] = inner["rendered_output"]
+        response_body["rendered_output_format"] = inner.get(
+            "rendered_output_format", body.output_format
+        )
+    return JSONResponse(content=response_body)

@@ -914,3 +914,38 @@ export async function fetchReconciliationRuns(key, limit = 5) {
   const { body } = await request(`/ops/payments/reconcile/runs?limit=${encodeURIComponent(String(limit))}`, { key })
   return body // { runs, count }
 }
+
+// ── Pipelines / recipes ───────────────────────────────────────────────────
+
+export async function runPipeline(key, pipelineId, inputPayload) {
+  const { body } = await request(`/pipelines/${encodeURIComponent(pipelineId)}/run`, {
+    key,
+    method: 'POST',
+    body: { input_payload: inputPayload },
+  })
+  return body // { run_id, pipeline_id, status }
+}
+
+export async function fetchPipelineRun(key, pipelineId, runId) {
+  const { body } = await request(
+    `/pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}`,
+    { key }
+  )
+  return body
+}
+
+// Helper: poll until terminal. Returns the final run record.
+export async function awaitPipelineRun(key, pipelineId, runId, { intervalMs = 1500, timeoutMs = 120000 } = {}) {
+  const terminal = new Set(['complete', 'completed', 'failed', 'cancelled', 'error'])
+  const started = Date.now()
+  while (true) {
+    const run = await fetchPipelineRun(key, pipelineId, runId)
+    if (terminal.has(String(run?.status || '').toLowerCase())) return run
+    if (Date.now() - started > timeoutMs) {
+      const err = new Error('Pipeline run timed out.')
+      err.status = 504
+      throw err
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+  }
+}

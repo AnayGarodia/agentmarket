@@ -191,6 +191,7 @@ export default function LandingPage() {
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-agents')}>Agents</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-faq')}>FAQ</button>
+            <Link className="lp__nav-link" to="/demos/git-diff-review">Demo</Link>
             <Link className="lp__nav-link" to="/docs">Docs</Link>
           </nav>
           <div className="lp__nav-right">

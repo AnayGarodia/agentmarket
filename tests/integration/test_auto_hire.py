@@ -347,3 +347,86 @@ def test_auto_hire_unauthenticated(client):
         json={"intent": "test"},
     )
     assert resp.status_code in (401, 403)
+
+
+def test_auto_hire_propagates_rendered_output_when_format_set(client, monkeypatch):
+    """output_format=markdown → response includes `rendered_output` string
+    formatted from the underlying agent output."""
+    _, raw = _signed_in_user(client)
+
+    from core.registry import auto_hire as ah
+    import server.application as server_app
+    from fastapi.responses import JSONResponse
+
+    fake_agent = ah.CandidateAgent(
+        agent_id="agt-stub",
+        slug="stub_agent",
+        name="Stub Agent",
+        description="",
+        tags=[],
+        category="",
+        price_per_call_usd=0.04,
+        trust_score=92.0,
+        success_rate=0.99,
+        stability_tier="stable",
+        input_schema={},
+        raw={"agent_id": "agt-stub"},
+    )
+
+    monkeypatch.setattr(
+        ah,
+        "decide",
+        lambda **_: ah.Decision(
+            auto_invoked=True,
+            chosen=fake_agent,
+            payload={"task": "stub"},
+            confidence=0.92,
+        ),
+    )
+
+    def _fake_registry_call(*, request, agent_id, body, caller):  # noqa: ANN001
+        # Mirror what the real registry_call does when output_format is set:
+        # decorate the response with `rendered_output`. We assert here that
+        # output_format made it into the body so we know the auto-hire route
+        # is forwarding it correctly.
+        body_dict = body.root if hasattr(body, "root") else body
+        assert body_dict.get("output_format") == "markdown"
+        from core import output_formats as _output_formats
+
+        agent_output = {
+            "score": 80,
+            "summary": "Looks fine.",
+            "severity_counts": {"critical": 0, "high": 0, "medium": 1},
+            "issues": [{"severity": "medium", "title": "magic number"}],
+        }
+        return JSONResponse(
+            content={
+                "job_id": "job-1",
+                "status": "complete",
+                "output": agent_output,
+                "latency_ms": 5,
+                "cached": False,
+                "cost_cents": 4,
+                "rendered_output": _output_formats.render(agent_output, format="markdown"),
+                "rendered_output_format": "markdown",
+            }
+        )
+
+    monkeypatch.setattr(server_app, "registry_call", _fake_registry_call)
+
+    resp = _post_auto_hire(
+        client,
+        raw,
+        {
+            "intent": "review my code",
+            "max_cost_usd": 0.50,
+            "output_format": "markdown",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["auto_invoked"] is True
+    assert "rendered_output" in body
+    assert body["rendered_output_format"] == "markdown"
+    assert "## Code Review" in body["rendered_output"]
+    assert "magic number" in body["rendered_output"]

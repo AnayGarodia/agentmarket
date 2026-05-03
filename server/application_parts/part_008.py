@@ -321,6 +321,7 @@ def registry_agent_work_history(
 
 def _extract_sync_cache_controls(payload: dict[str, Any]) -> tuple[dict[str, Any], bool, int]:
     raw = dict(payload or {})
+    raw.pop("output_format", None)  # extracted separately by _extract_output_format
     use_cache_raw = raw.pop("use_cache", None)
     cache_ttl_raw = raw.pop("cache_ttl_hours", None)
     try:
@@ -353,6 +354,37 @@ def _extract_sync_cache_controls(payload: dict[str, Any]) -> tuple[dict[str, Any
                 ),
             )
     return raw, use_cache, cache_ttl_hours
+
+
+def _extract_output_format(payload_or_body: Any) -> str | None:
+    """Pull `output_format` out of a request body without mutating it."""
+    if not isinstance(payload_or_body, dict):
+        return None
+    from core import output_formats as _output_formats
+    return _output_formats.normalize_format(payload_or_body.get("output_format"))
+
+
+def _decorate_with_rendered_output(
+    response_payload: dict[str, Any],
+    *,
+    output_format: str | None,
+) -> dict[str, Any]:
+    """Attach `rendered_output` (string or dict) to a response when the caller
+    requested a non-JSON output format. The canonical `output` field is left
+    untouched so existing clients keep working."""
+    if not output_format or output_format == "json":
+        return response_payload
+    output = response_payload.get("output")
+    if output is None:
+        return response_payload
+    from core import output_formats as _output_formats
+    try:
+        rendered = _output_formats.render(output, format=output_format)
+    except Exception:  # pragma: no cover - renderer must never break a call
+        return response_payload
+    response_payload["rendered_output"] = rendered
+    response_payload["rendered_output_format"] = output_format
+    return response_payload
 
 
 def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
@@ -752,7 +784,9 @@ def registry_call(
     client_id = _request_client_id(request)
     fee_bearer_policy = "caller"
     platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
-    payload, use_cache, cache_ttl_hours = _extract_sync_cache_controls(dict(body.root) if body is not None else {})
+    raw_body = dict(body.root) if body is not None else {}
+    requested_output_format = _extract_output_format(raw_body)
+    payload, use_cache, cache_ttl_hours = _extract_sync_cache_controls(raw_body)
     requested_output_formats: list[str] = []
     try:
         payload, requested_output_formats = _normalize_input_protocol_from_payload(payload)
@@ -833,6 +867,9 @@ def registry_call(
             )
             cache_response["output"] = shaped_output
             cache_response.update(extra)
+            cache_response = _decorate_with_rendered_output(
+                cache_response, output_format=requested_output_format
+            )
             return JSONResponse(content=cache_response)
     success_distribution = payments.compute_success_distribution(
         price_cents,
@@ -989,6 +1026,9 @@ def registry_call(
                     ttl_hours=cache_ttl_hours,
                     version_token=cache_version_token,
                 )
+            response_payload = _decorate_with_rendered_output(
+                response_payload, output_format=requested_output_format
+            )
             # Always wrap in a consistent envelope so callers can reliably
             # read job_id, status, and output without sniffing the shape.
             return JSONResponse(content=response_payload)
@@ -1339,6 +1379,9 @@ def registry_call(
     )
     response_payload["output"] = shaped_output
     response_payload.update(extra)
+    response_payload = _decorate_with_rendered_output(
+        response_payload, output_format=requested_output_format
+    )
     if idempotency_key:
         _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, response_payload)
     return JSONResponse(content=response_payload, status_code=200)
