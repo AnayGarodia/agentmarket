@@ -237,8 +237,11 @@
 /* Hero illustration as a background-image so we can swap source per
    theme. Container is sized to a wide horizontal band; the image is
    anchored to the bottom and offset down so the source PNG's parchment
-   band slips off-screen, leaving just the hands visible. The aspect
-   ratio is generous enough to keep the dot-trail tops uncropped.
+   band slips off-screen, leaving just the hands visible.
+
+   The top edge is feathered with a CSS mask so the image dissolves
+   into the section canvas — kills any seam from minor color drift
+   between the PNG's background and the page's --canvas token.
    Light + dark variants are separate files (matched palette per theme).
 */
 .lp__hero-art {
@@ -248,6 +251,14 @@
   background-size: 100% auto;
   background-repeat: no-repeat;
   background-position: center calc(100% + 9.5vw); /* push parchment off */
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(0,0,0,0.4) 8%,
+    #000 22%);
+          mask-image: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(0,0,0,0.4) 8%,
+    #000 22%);
   pointer-events: none;
   user-select: none;
 }
