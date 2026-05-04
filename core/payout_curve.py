@@ -22,13 +22,44 @@ from __future__ import annotations
 
 import json
 import logging
-from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+
+from core.functional import Ok, Err, Result, compute_clawback_cents  # noqa: F401 — re-exported
 
 _LOG = logging.getLogger(__name__)
 
 _VALID_STARS = {"1", "2", "3", "4", "5"}
 _DEFAULT_CURVE: dict[str, float] = {}  # empty = no curve, always full payout
+
+
+def parse_curve_result(raw: Any) -> "Result[dict[str, float], str]":
+    """Parse and validate a payout curve, returning Ok(curve) or Err(message).
+
+    Prefer this over parse_curve in new code; use parse_curve where you need
+    the legacy raise-on-error behaviour.
+    """
+    if raw is None or raw == "" or raw == "null":
+        return Ok({})
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return Err(f"payout_curve must be valid JSON: {exc}")
+    if not isinstance(raw, dict):
+        return Err("payout_curve must be a JSON object mapping star ratings to fractions.")
+    result: dict[str, float] = {}
+    for key, val in raw.items():
+        star = str(key).strip()
+        if star not in _VALID_STARS:
+            return Err(f"payout_curve keys must be '1'–'5', got '{star}'.")
+        try:
+            fraction = float(val)
+        except (TypeError, ValueError):
+            return Err(f"payout_curve['{star}'] must be a number, got {val!r}.")
+        if not (0.0 <= fraction <= 1.0):
+            return Err(f"payout_curve['{star}'] must be between 0.0 and 1.0.")
+        result[star] = fraction
+    return Ok(result)
 
 
 def parse_curve(raw: Any) -> dict[str, float] | None:
@@ -37,30 +68,10 @@ def parse_curve(raw: Any) -> dict[str, float] | None:
     Returns a normalised {star: fraction} dict, or None if raw is empty/null.
     Raises ValueError for invalid input.
     """
-    if raw is None or raw == "" or raw == "null":
-        return None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"payout_curve must be valid JSON: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise ValueError(
-            "payout_curve must be a JSON object mapping star ratings to fractions."
-        )
-    result: dict[str, float] = {}
-    for key, val in raw.items():
-        star = str(key).strip()
-        if star not in _VALID_STARS:
-            raise ValueError(f"payout_curve keys must be '1'–'5', got '{star}'.")
-        try:
-            fraction = float(val)
-        except (TypeError, ValueError):
-            raise ValueError(f"payout_curve['{star}'] must be a number, got {val!r}.")
-        if not (0.0 <= fraction <= 1.0):
-            raise ValueError(f"payout_curve['{star}'] must be between 0.0 and 1.0.")
-        result[star] = fraction
-    return result or None
+    r = parse_curve_result(raw)
+    if isinstance(r, Err):
+        raise ValueError(r.error)
+    return r.value or None
 
 
 def fraction_for_rating(curve: dict[str, float] | None, rating: int) -> float:
@@ -172,11 +183,7 @@ def apply_curve_clawback(
     if payout_fraction >= 1.0:
         return {"clawback_cents": 0, "payout_fraction": 1.0, "applied": False}
 
-    clawback_cents = int(
-        (
-            Decimal(str(agent_payout_cents)) * (1 - Decimal(str(payout_fraction)))
-        ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    )
+    clawback_cents = compute_clawback_cents(agent_payout_cents, payout_fraction)
     if clawback_cents <= 0:
         return {
             "clawback_cents": 0,

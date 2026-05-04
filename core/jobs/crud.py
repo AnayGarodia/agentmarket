@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import uuid
 
+from core.functional import Err, pipe, validate
+
 from .db import (
     VALID_STATUSES,
     _clean_optional_text,
@@ -81,23 +83,34 @@ def create_job(
     Returns the newly created job as a dict.
     Raises ``ValueError`` for invalid money amounts.
     """
-    if price_cents < 0:
-        raise ValueError("price_cents must be non-negative.")
     parsed_caller_charge_cents = _to_non_negative_int(
         caller_charge_cents, default=price_cents
     )
-    if parsed_caller_charge_cents <= 0 and price_cents > 0:
-        raise ValueError(
-            "invalid_charge_amount: caller_charge_cents must be positive when price is non-zero."
-        )
-    if parsed_caller_charge_cents < price_cents:
-        raise ValueError("caller_charge_cents must be >= price_cents.")
-    # Hard cap: caller_charge_cents must not exceed price_cents * 2 (room for 100% platform fee)
-    # to prevent inflated charges that would produce a negative net payout on partial refund.
-    if parsed_caller_charge_cents > max(price_cents * 2, price_cents + _MAX_CALLER_CHARGE_BUFFER_CENTS):
-        raise ValueError(
-            "charge_exceeds_listed_price: caller_charge_cents must not exceed 2x price_cents."
-        )
+    # Chain price/charge invariants with and_then: each step receives the unwrapped
+    # integer and returns Ok(price_cents) or Err(message). Short-circuits on first Err.
+    _price_check = (
+        validate(price_cents, lambda p: p >= 0, "price_cents must be non-negative.")
+        .and_then(lambda p: validate(
+            p,
+            lambda x: not (parsed_caller_charge_cents <= 0 and x > 0),
+            "invalid_charge_amount: caller_charge_cents must be positive when price is non-zero.",
+        ))
+        .and_then(lambda p: validate(
+            p,
+            lambda x: parsed_caller_charge_cents >= x,
+            "caller_charge_cents must be >= price_cents.",
+        ))
+        # Hard cap: caller_charge_cents must not exceed price_cents * 2 (room for 100% fee)
+        # to prevent inflated charges that would produce a negative net payout on partial refund.
+        .and_then(lambda p: validate(
+            p,
+            lambda x: parsed_caller_charge_cents
+            <= max(x * 2, x + _MAX_CALLER_CHARGE_BUFFER_CENTS),
+            "charge_exceeds_listed_price: caller_charge_cents must not exceed 2x price_cents.",
+        ))
+    )
+    if isinstance(_price_check, Err):
+        raise ValueError(_price_check.error)
     parsed_platform_fee_pct = _to_non_negative_int(
         platform_fee_pct_at_create, default=DEFAULT_PLATFORM_FEE_PCT
     )
