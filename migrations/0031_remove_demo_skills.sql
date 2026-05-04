@@ -1,7 +1,6 @@
--- Remove legacy demo / smoke-test skill rows from the registry. These were
--- previously hidden by an in-memory blocklist; the blocklist has been deleted
--- and the rows themselves are now dropped so the surface is the same on every
--- read path.
+-- Remove legacy demo / smoke-test skill rows from the registry. The
+-- in-memory blocklist that used to hide them has been deleted, so the
+-- rows themselves are dropped to keep every read path consistent.
 DELETE FROM agents
 WHERE LOWER(TRIM(COALESCE(name, ''))) IN (
     'reverse_string', 'reverse string',
