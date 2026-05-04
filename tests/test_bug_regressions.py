@@ -3,6 +3,8 @@ Regression tests — one test per bug fix.
 
 Fix 1: _caller_from_raw_api_key used wrong auth function name
 Fix 2: MCP manifest used camelCase keys and aztea__ prefix
+Fix 12: security search boost did not include scanner/secret tokens, so secret_scanner
+        was missing from top results for "security" queries
 Fix 3: get_agents() did not filter suspended agents
 Fix 4: TrustGauge used raw success_rate instead of backend trust_score (frontend)
 Fix 5: ApiKeyRow copied key_prefix instead of warning user (frontend)
@@ -648,3 +650,90 @@ def test_fix10_payout_curve_clawback_skips_cleanly_on_insufficient_balance(payme
             ("payout_curve:job-payout-curve-2",),
         ).fetchone()[0]
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Fix 12 — security search boost must surface secret_scanner
+# ---------------------------------------------------------------------------
+
+def test_fix12_search_security_includes_secret_scanner():
+    """_search_catalog('security') must rank secret_scanner in the top-10 results.
+
+    The inner boost check previously only tested for CVE/dependency tokens.
+    secret_scanner has 'scanner', 'secret', and 'credential' in its haystack
+    so it should receive the +12 boost after the fix.
+    """
+    import threading
+    import scripts.aztea_mcp_server as mcp
+
+    cat = mcp.RegistryBridge.__new__(mcp.RegistryBridge)
+    cat._lock = threading.Lock()
+    cat._entries = []
+    cat._catalog_cache = None
+    cat._session_state = {}
+    cat._auth_required = False
+    cat.base_url = "http://localhost:8000"
+    cat.api_key = "test"
+    cat.timeout_seconds = 30
+    cat._signup_url = ""
+
+    # Inject a fake secret_scanner entry directly into the catalog cache so
+    # the test does not require a running server.
+    fake_secret_scanner = {
+        "slug": "secret_scanner",
+        "aliases": ["secret_scanner"],
+        "kind": "registry_agent",
+        "name": "Secret Scanner",
+        "description": (
+            "Scans source code for leaked credentials, secrets, API keys, "
+            "and entropy-based patterns. Detects hardcoded passwords and tokens."
+        ),
+        "input_schema": {"type": "object"},
+        "output_schema": {},
+        "category": "Security",
+        "tags": ["security", "scanner", "secrets", "credential", "leak"],
+        "is_featured": False,
+        "cacheable": False,
+        "runtime_requirements": [],
+        "tooling_kind": "scanner",
+        "stability_tier": "stable",
+        "codex_recommended": False,
+        "short_use_cases": ["scan for leaked secrets", "detect credentials in code"],
+        "trust_score": None,
+        "success_rate": None,
+        "avg_latency_ms": None,
+        "price_per_call_usd": None,
+        "verified": True,
+    }
+    # Also add a noise entry so the result list is non-trivial.
+    fake_noise = {
+        "slug": "unrelated_tool",
+        "aliases": ["unrelated_tool"],
+        "kind": "registry_agent",
+        "name": "Unrelated Tool",
+        "description": "Does something unrelated to security.",
+        "input_schema": {"type": "object"},
+        "output_schema": {},
+        "category": "Utilities",
+        "tags": [],
+        "is_featured": False,
+        "cacheable": False,
+        "runtime_requirements": [],
+        "tooling_kind": None,
+        "stability_tier": "stable",
+        "codex_recommended": False,
+        "short_use_cases": [],
+        "trust_score": None,
+        "success_rate": None,
+        "avg_latency_ms": None,
+        "price_per_call_usd": None,
+        "verified": False,
+    }
+    with cat._lock:
+        cat._catalog_cache = [fake_secret_scanner, fake_noise]
+
+    result = cat._search_catalog("security", limit=10)
+    slugs = [r.get("slug") for r in result.get("results", [])]
+    assert "secret_scanner" in slugs, (
+        f"secret_scanner not in top-10 security results. Got: {slugs}"
+    )

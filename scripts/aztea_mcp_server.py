@@ -961,7 +961,7 @@ class RegistryBridge:
                 if verb_boost > 0:
                     reasons.append("verb-intent match")
             if {"security", "vulnerability", "vulnerabilities", "cve", "npm", "dependency", "dependencies", "audit"} & set(terms):
-                if any(token in haystack for token in ("cve", "nvd", "osv", "dependency", "dependencies", "audit")):
+                if any(token in haystack for token in ("cve", "nvd", "osv", "dependency", "dependencies", "audit", "secret", "scanner", "credential", "entropy", "leak")):
                     score += 12
                 if "package_finder" in entry["slug"] or "changelog" in entry["slug"]:
                     score -= 8
