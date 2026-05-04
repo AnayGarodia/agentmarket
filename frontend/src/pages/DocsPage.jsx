@@ -353,13 +353,6 @@ export default function DocsPage() {
             <div className={`docs-hub${hubChat.length > 0 ? ' docs-hub--chatting' : ''}`}>
               {hubChat.length > 0 && (
                 <div className="docs-hub__thread">
-                  <div className="docs-hub__thread-head">
-                    <span>Conversation</span>
-                    <button type="button" className="docs-hub__thread-reset" onClick={resetHub}>
-                      <RotateCcw size={12} aria-hidden />
-                      <span>Ask another</span>
-                    </button>
-                  </div>
                   {hubChat.map((msg, i) => (
                     <div key={i} className={`docs-hub__msg docs-hub__msg--${msg.role}`}>
                       {msg.role === 'user' ? (

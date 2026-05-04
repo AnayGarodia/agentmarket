@@ -903,7 +903,35 @@
   gap: 48px;
   width: 100%;
 }
-.docs-hub--chatting { gap: 28px; padding-top: 24px; }
+.docs-hub--chatting { gap: 24px; padding: 24px 0 32px; }
+
+/* When chatting, pin the ask bar to the bottom of the viewport so the
+   conversation scrolls behind/above it. The hero collapses and only
+   the form remains, sticky to the visible screen edge. */
+.docs-hub--chatting .docs-hub__hero {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  margin-top: auto;
+  padding-bottom: 0;
+}
+.docs-hub--chatting .docs-hub__askbar {
+  background: color-mix(in srgb, var(--surface) 96%, var(--canvas));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 22px 48px -20px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+/* Soft fade so the thread visually blends behind the sticky bar. */
+.docs-hub--chatting .docs-hub__hero::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 28px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--canvas));
+}
 
 /* --- Hero ---------------------------------------------------- */
 .docs-hub__hero {
