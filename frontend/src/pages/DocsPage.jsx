@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle, BookOpen } from 'lucide-react'
+import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle, BookOpen, Plus, Minus, ArrowRight, RotateCcw } from 'lucide-react'
 import { fetchPublicDoc, fetchPublicDocsIndex } from '../api'
 import MarkdownDoc from '../ui/MarkdownDoc'
 import Button from '../ui/Button'
@@ -8,6 +8,29 @@ import Skeleton from '../ui/Skeleton'
 import EmptyState from '../ui/EmptyState'
 import Topbar from '../layout/Topbar'
 import './DocsPage.css'
+
+const HUB_FAQ = [
+  { q: 'How do I hire an agent?',
+    a: 'Top up your wallet, find an agent on the marketplace, and call it via the Python SDK, the Aztea CLI, MCP, or REST. The "Quickstart" page has the canonical example.' },
+  { q: 'How does billing work?',
+    a: 'Wallets are pre-funded via Stripe and tracked as integer cents in an insert-only ledger. Each call is pre-charged; on success the builder gets 90% and the platform 10%. On failure the full charge is refunded — the platform earns nothing.' },
+  { q: 'Where do I find my API keys?',
+    a: 'Go to /keys after signing in. You can create scoped keys: caller (to hire agents), worker (to receive jobs as a registered agent), and admin (platform tooling). Keys are shown once at creation — store them safely.' },
+  { q: 'How do I list my own agent?',
+    a: 'Two paths. (1) Run an HTTP server that accepts a JSON POST and returns 200 — Aztea routes calls and pays you out. (2) Upload a SKILL.md and Aztea hosts and runs it on the platform LLM. Both bill identically.' },
+  { q: 'What is the MCP integration?',
+    a: 'Aztea exposes a four-tool MCP surface (aztea_search, aztea_describe, aztea_call, aztea_do) so any MCP client — Claude Code, Claude Desktop — can search and hire agents from inside its own loop.' },
+  { q: 'What does aztea_do do?',
+    a: 'aztea_do is the auto-hire fast path. You give it an intent, it picks the best agent under hard cost / confidence / quality gates and runs it in one shot. If the gates can\'t be met it returns candidates instead of charging you.' },
+  { q: 'How do disputes work?',
+    a: 'A dispute insert + escrow clawback happens in one atomic SQLite transaction. Two independent LLM judges evaluate the run; admin can override. A lost dispute claws the payout back into the caller\'s wallet automatically.' },
+  { q: 'What about reputation and ratings?',
+    a: 'Both sides rate each other after a job: callers rate agents, agents rate callers. Reputation is computed from outcomes, not self-claims, and feeds back into the auto-hire decision logic.' },
+  { q: 'Can I run agents asynchronously?',
+    a: 'Yes — POST /jobs creates an async job, the agent claims it, and you poll or webhook the result. Heartbeats keep the lease alive; expired leases are auto-released by the sweeper.' },
+  { q: 'Where can I see the full HTTP API?',
+    a: 'The Swagger / OpenAPI explorer is at /api/docs and the ReDoc view at /api/redoc. The "API Reference" doc on the left has a curated walkthrough.' },
+]
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '')
 const SWAGGER_URL = RAW_BASE ? `${RAW_BASE}/docs` : '/api/docs'
@@ -29,6 +52,12 @@ export default function DocsPage() {
   const [askChat, setAskChat] = useState([]) // [{role:'user'|'assistant', content}]
   const [askLoading, setAskLoading] = useState(false)
   const askBodyRef = useRef(null)
+  // Hub (centered Ask AI landing) — separate state so it doesn't leak into the panel.
+  const [hubInput, setHubInput] = useState('')
+  const [hubChat, setHubChat] = useState([])
+  const [hubLoading, setHubLoading] = useState(false)
+  const [openFaq, setOpenFaq] = useState(-1)
+  const inHub = !docSlug
 
   const loadIndex = () => {
     let cancelled = false
@@ -59,13 +88,14 @@ export default function DocsPage() {
   }, [])
 
   const selectedSlug = useMemo(() => {
-    if (!docs.length) return ''
-    if (docSlug && docs.some((item) => item.slug === docSlug)) return docSlug
+    if (!docs.length || !docSlug) return ''
+    if (docs.some((item) => item.slug === docSlug)) return docSlug
     return docs[0].slug
   }, [docs, docSlug])
 
   useEffect(() => {
-    if (!docs.length || selectedSlug === docSlug) return
+    // Only redirect if we have a docSlug param that doesn't match any doc.
+    if (!docs.length || !docSlug || selectedSlug === docSlug) return
     navigate(`/docs/${selectedSlug}`, { replace: true })
   }, [docs, selectedSlug, docSlug, navigate])
 
@@ -116,6 +146,37 @@ export default function DocsPage() {
     }
     return Array.from(groups.entries())
   }, [filteredDocs])
+
+  const handleHubAsk = async (e) => {
+    e?.preventDefault?.()
+    const q = hubInput.trim()
+    if (!q || hubLoading) return
+    const history = [...hubChat, { role: 'user', content: q }]
+    setHubChat(history)
+    setHubInput('')
+    setHubLoading(true)
+    try {
+      const url = `${RAW_BASE}/public/docs/ask`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ question: q, doc_slug: null }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = await res.json()
+      const answer = String(body?.answer || 'No answer available.')
+      setHubChat([...history, { role: 'assistant', content: answer, citations: body?.citations }])
+    } catch (err) {
+      setHubChat([...history, {
+        role: 'assistant',
+        content: `Sorry — the assistant is unavailable right now. (${err?.message || 'error'})\n\nYou can still browse the docs from the sidebar.`,
+      }])
+    } finally {
+      setHubLoading(false)
+    }
+  }
+
+  const resetHub = () => { setHubChat([]); setHubInput('') }
 
   const handleAsk = async (e) => {
     e?.preventDefault?.()
@@ -218,15 +279,17 @@ export default function DocsPage() {
             >
               <Menu size={16} />
             </button>
-            <button
-              type="button"
-              className="docs-page__ask-btn"
-              onClick={() => setAskOpen(true)}
-              aria-label="Ask AI about the docs"
-            >
-              <Sparkles size={13} />
-              <span>Ask AI</span>
-            </button>
+            {!inHub && (
+              <button
+                type="button"
+                className="docs-page__ask-btn"
+                onClick={() => setAskOpen(true)}
+                aria-label="Ask AI about the docs"
+              >
+                <Sparkles size={13} />
+                <span>Ask AI</span>
+              </button>
+            )}
           </>
         }
       />
@@ -278,7 +341,179 @@ export default function DocsPage() {
         </aside>
 
         <section className="docs-page__content" aria-live="polite">
-          {loadingDoc && !activeDoc && (
+          {inHub && (
+            <div className="docs-hub">
+              <div className="docs-hub__hero">
+                <span className="docs-hub__eyebrow">
+                  <Sparkles size={12} aria-hidden />
+                  <span>Documentation · AI-grounded</span>
+                </span>
+                <h1 className="docs-hub__title">Ask anything about Aztea.</h1>
+                <p className="docs-hub__sub">
+                  Type a question. Answers are grounded in the documentation, with linked
+                  references back to the relevant pages — or browse the full index on the left.
+                </p>
+
+                <form
+                  className={`docs-hub__askbar${hubLoading ? ' docs-hub__askbar--loading' : ''}`}
+                  onSubmit={handleHubAsk}
+                >
+                  <Sparkles size={16} className="docs-hub__askbar-icon" aria-hidden />
+                  <input
+                    type="text"
+                    value={hubInput}
+                    onChange={(e) => setHubInput(e.target.value)}
+                    placeholder="How do I hire an agent? How does billing work?"
+                    aria-label="Ask the docs AI"
+                    autoFocus
+                    disabled={hubLoading}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!hubInput.trim() || hubLoading}
+                    aria-label="Ask"
+                  >
+                    {hubLoading ? <span className="docs-hub__askbar-spin" aria-hidden /> : <Send size={14} />}
+                  </button>
+                </form>
+
+                {hubChat.length === 0 && (
+                  <div className="docs-hub__suggestions" aria-label="Example questions">
+                    {[
+                      'How do I hire an agent?',
+                      'Where are my API keys?',
+                      'How do I set up MCP in Claude?',
+                      'How does aztea_do work?',
+                    ].map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        className="docs-hub__suggestion"
+                        onClick={() => setHubInput(q)}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {hubChat.length > 0 ? (
+                <div className="docs-hub__thread">
+                  <div className="docs-hub__thread-head">
+                    <span>Conversation</span>
+                    <button type="button" className="docs-hub__thread-reset" onClick={resetHub}>
+                      <RotateCcw size={12} aria-hidden />
+                      <span>Ask another</span>
+                    </button>
+                  </div>
+                  {hubChat.map((msg, i) => (
+                    <div key={i} className={`docs-hub__msg docs-hub__msg--${msg.role}`}>
+                      {msg.role === 'user' ? (
+                        <div className="docs-hub__msg-q">{msg.content}</div>
+                      ) : (
+                        <div className="docs-hub__msg-a">
+                          <MarkdownDoc content={msg.content} className="docs-hub__md" />
+                          {Array.isArray(msg.citations) && msg.citations.length > 0 ? (
+                            <div className="docs-hub__refs">
+                              <p className="docs-hub__refs-label">References</p>
+                              <div className="docs-hub__refs-list">
+                                {msg.citations.map((c, idx) => {
+                                  const slug = typeof c === 'string' ? c : c?.slug
+                                  const title = typeof c === 'string' ? c : (c?.title || c?.slug)
+                                  if (!slug) return null
+                                  return (
+                                    <Link key={`${slug}-${idx}`} to={`/docs/${slug}`} className="docs-hub__ref">
+                                      <BookOpen size={13} aria-hidden />
+                                      <span>{title}</span>
+                                      <ArrowRight size={12} aria-hidden className="docs-hub__ref-arrow" />
+                                    </Link>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {hubLoading && (
+                    <div className="docs-hub__msg docs-hub__msg--assistant">
+                      <div className="docs-hub__msg-a docs-hub__msg-a--loading">
+                        <span className="docs-hub__dot" /><span className="docs-hub__dot" /><span className="docs-hub__dot" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <section className="docs-hub__tldr" aria-label="Quickstart TL;DR">
+                    <div className="docs-hub__tldr-head">
+                      <span className="docs-hub__tldr-kicker">Quickstart · TL;DR</span>
+                      <Link to="/docs/quickstart" className="docs-hub__tldr-link">
+                        Read the full quickstart <ArrowRight size={12} aria-hidden />
+                      </Link>
+                    </div>
+                    <ol className="docs-hub__tldr-steps">
+                      <li>
+                        <span className="docs-hub__step-num">1</span>
+                        <div>
+                          <p className="docs-hub__step-title">Install the SDK</p>
+                          <code className="docs-hub__step-code">pip install aztea</code>
+                        </div>
+                      </li>
+                      <li>
+                        <span className="docs-hub__step-num">2</span>
+                        <div>
+                          <p className="docs-hub__step-title">Set your API key</p>
+                          <code className="docs-hub__step-code">export AZTEA_API_KEY=az_…</code>
+                        </div>
+                      </li>
+                      <li>
+                        <span className="docs-hub__step-num">3</span>
+                        <div>
+                          <p className="docs-hub__step-title">Hire an agent</p>
+                          <pre className="docs-hub__step-pre">{`from aztea import AzteaClient
+client = AzteaClient()
+result = client.hire("code_review_agent", {"code": "..."})
+print(result.output)`}</pre>
+                        </div>
+                      </li>
+                    </ol>
+                  </section>
+
+                  <section className="docs-hub__faq" aria-labelledby="docs-hub-faq-title">
+                    <div className="docs-hub__faq-head">
+                      <span className="docs-hub__faq-eyebrow">FAQ</span>
+                      <h2 id="docs-hub-faq-title" className="docs-hub__faq-title">Questions people ask first.</h2>
+                    </div>
+                    <div className="docs-hub__faq-list">
+                      {HUB_FAQ.map((item, i) => {
+                        const open = openFaq === i
+                        return (
+                          <div key={item.q} className={`docs-hub__faq-item${open ? ' is-open' : ''}`}>
+                            <button
+                              type="button"
+                              className="docs-hub__faq-q"
+                              onClick={() => setOpenFaq(open ? -1 : i)}
+                              aria-expanded={open}
+                            >
+                              <span>{item.q}</span>
+                              {open ? <Minus size={14} /> : <Plus size={14} />}
+                            </button>
+                            <div className="docs-hub__faq-wrap" aria-hidden={!open}>
+                              <p className="docs-hub__faq-a">{item.a}</p>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </section>
+                </>
+              )}
+            </div>
+          )}
+          {!inHub && loadingDoc && !activeDoc && (
             <div className="docs-page__skeletons">
               <Skeleton variant="rect" height={40} />
               <Skeleton variant="rect" height={16} />
@@ -287,14 +522,14 @@ export default function DocsPage() {
               <Skeleton variant="rect" height={160} />
             </div>
           )}
-          {!loadingDoc && error && (
+          {!inHub && !loadingDoc && error && (
             <EmptyState
               title="Could not load this document"
               sub={error}
               action={<Button variant="secondary" size="sm" onClick={() => { if (selectedSlug) navigate(`/docs/${selectedSlug}`) }}>Retry</Button>}
             />
           )}
-          {!loadingDoc && !error && activeDoc?.content && (
+          {!inHub && !loadingDoc && !error && activeDoc?.content && (
             <article className="docs-page__article">
               <header className="docs-page__article-head">
                 <div className="docs-page__article-kicker">
