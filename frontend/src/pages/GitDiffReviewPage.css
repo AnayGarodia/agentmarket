@@ -20,6 +20,28 @@
   border-bottom: 1px solid var(--border-soft);
 }
 
+.gdrp__nav-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.gdrp__back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 5px 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.gdrp__back-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+
 .gdrp__brand {
   display: inline-flex;
   align-items: center;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import {
@@ -139,9 +139,19 @@ export default function LandingPage() {
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   const openAuth = (tab = 'signin', redirect = null) => setAuth({ open: true, tab, redirect })
   const closeAuth = () => setAuth(a => ({ ...a, open: false }))
+
+  // Auto-open auth dialog when redirected here from a protected page
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    const redirect = searchParams.get('redirect')
+    if (tab === 'signin' || tab === 'register') {
+      setAuth({ open: true, tab, redirect: redirect || null })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Defer the registry fetch until the browser is idle so it never

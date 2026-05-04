@@ -158,6 +158,13 @@ export default function DocsPage() {
     return found?.title ?? ''
   }, [docs, selectedSlug])
 
+  // Strip a leading H1 that duplicates the title already rendered in the page header.
+  const docContent = useMemo(() => {
+    const content = activeDoc?.content
+    if (!content) return ''
+    return content.replace(/^#{1}\s+[^\n]*\n+/, '')
+  }, [activeDoc])
+
   const docIndex = useMemo(() => docs.findIndex((item) => item.slug === selectedSlug), [docs, selectedSlug])
   const prevDoc = docIndex > 0 ? docs[docIndex - 1] : null
   const nextDoc = docIndex >= 0 && docIndex < docs.length - 1 ? docs[docIndex + 1] : null
@@ -303,7 +310,7 @@ export default function DocsPage() {
                   <a href={REDOC_URL} target="_blank" rel="noreferrer">Open ReDoc</a>
                 </div>
               </header>
-              <MarkdownDoc content={activeDoc.content} className="docs-page__markdown" />
+              <MarkdownDoc content={docContent} className="docs-page__markdown" />
               {(prevDoc || nextDoc) && (
                 <nav className="docs-page__pager" aria-label="Documentation pagination">
                   {prevDoc ? (

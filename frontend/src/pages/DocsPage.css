@@ -689,11 +689,14 @@
 .docs-ask__msg--assistant { justify-content: flex-start; }
 .docs-ask__msg-bubble {
   max-width: 85%;
+  min-width: 0;
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: break-word;
   padding: 10px 12px;
   border-radius: var(--r-md);
   font-size: 0.8125rem;
   line-height: 1.55;
-  white-space: pre-wrap;
 }
 .docs-ask__msg--user .docs-ask__msg-bubble {
   background: var(--accent);
@@ -742,6 +745,9 @@
   border-radius: 6px;
   padding: 10px 12px;
   overflow-x: auto;
+  max-width: 100%;
+  white-space: pre;
+  word-break: normal;
   margin: 0.6em 0;
 }
 .docs-ask__md pre code { background: none; padding: 0; }

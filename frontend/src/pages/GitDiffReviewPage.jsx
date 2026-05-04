@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  ArrowRight, Copy, Check, Loader2, AlertCircle,
+  ArrowLeft, ArrowRight, Copy, Check, Loader2, AlertCircle,
   GitPullRequest, Sparkles, Clock, Receipt,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
@@ -61,7 +61,7 @@ export default function GitDiffReviewPage() {
     setError(null)
     setResult(null)
     if (!apiKey) {
-      navigate(`/welcome?tab=signin&redirect=${encodeURIComponent('/demos/git-diff-review')}`)
+      navigate(`/welcome?tab=register&redirect=${encodeURIComponent('/demos/git-diff-review')}`)
       return
     }
     const trimmed = diff.trim()
@@ -106,8 +106,23 @@ export default function GitDiffReviewPage() {
   return (
     <div className="gdrp">
       <header className="gdrp__nav">
-        <Link to="/" className="gdrp__brand"><AzteaMark size={22} /> <span>Aztea</span></Link>
-        <Link to="/agents" className="gdrp__nav-link">All agents <ArrowRight size={14} /></Link>
+        <div className="gdrp__nav-left">
+          <button
+            type="button"
+            className="gdrp__back-btn"
+            onClick={() => navigate(window.history.length > 1 ? -1 : '/')}
+            aria-label="Go back"
+          >
+            <ArrowLeft size={14} /> Back
+          </button>
+          <Link to="/" className="gdrp__brand"><AzteaMark size={22} /> <span>Aztea</span></Link>
+        </div>
+        <Link
+          to={apiKey ? '/agents' : '/welcome'}
+          className="gdrp__nav-link"
+        >
+          All agents <ArrowRight size={14} />
+        </Link>
       </header>
 
       <section className="gdrp__hero">
