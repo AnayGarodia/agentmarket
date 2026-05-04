@@ -363,7 +363,10 @@ def run(payload: dict) -> dict:
                          " ".join(p.get("categories") or [])]).lower()
         return any(tok in text for tok in _query_tokens)
 
-    low_confidence = bool(papers) and not any(_paper_overlaps(p) for p in papers)
+    if not _query_tokens:
+        low_confidence = False
+    else:
+        low_confidence = bool(papers) and not any(_paper_overlaps(p) for p in papers)
 
     return annotate_success({
         "query": query,
