@@ -222,7 +222,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
             "SELECT COUNT(*) AS count FROM jobs WHERE status = 'failed' AND settled_at IS NULL"
         ).fetchone()["count"]
         events_24h = conn.execute(
-            "SELECT COUNT(*) AS count FROM job_events WHERE created_at >= ?",
+            "SELECT COUNT(*) AS count FROM job_events WHERE created_at >= %s",
             (events_since,),
         ).fetchone()["count"]
         delivery_rows = conn.execute(
@@ -236,7 +236,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
             """
             SELECT COUNT(*) AS count
             FROM job_event_deliveries
-            WHERE last_attempt_at IS NOT NULL AND last_attempt_at >= ?
+            WHERE last_attempt_at IS NOT NULL AND last_attempt_at >= %s
             """,
             (events_since,),
         ).fetchone()["count"]
@@ -244,7 +244,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
             """
             SELECT COUNT(*) AS count
             FROM job_event_deliveries
-            WHERE last_success_at IS NOT NULL AND last_success_at >= ?
+            WHERE last_success_at IS NOT NULL AND last_success_at >= %s
             """,
             (events_since,),
         ).fetchone()["count"]
@@ -252,7 +252,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
             """
             SELECT created_at, claimed_at, settled_at, timeout_count
             FROM jobs
-            WHERE created_at >= ?
+            WHERE created_at >= %s
             """,
             (events_since,),
         ).fetchall()

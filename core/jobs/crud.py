@@ -282,10 +282,10 @@ def list_jobs_for_owner(
 ) -> list:
     """Paginated job list for a caller (buyer view); keyset-paginated on ``before_created_at``/``before_job_id``."""
     limit = min(max(1, limit), 200)
-    where_clauses = ["caller_owner_id = ?"]
+    where_clauses = ["caller_owner_id = %s"]
     params: list = [owner_id]
     if status:
-        where_clauses.append("status = ?")
+        where_clauses.append("status = %s")
         params.append(status)
     if before_created_at:
         cursor_job_id = before_job_id or "\uffff"
@@ -316,10 +316,10 @@ def list_jobs_for_agent(
 ) -> list:
     """Paginated job list for an agent (worker view); keyset-paginated on ``before_created_at``/``before_job_id``."""
     limit = min(max(1, limit), 200)
-    where_clauses = ["agent_id = ?"]
+    where_clauses = ["agent_id = %s"]
     params: list = [agent_id]
     if status:
-        where_clauses.append("status = ?")
+        where_clauses.append("status = %s")
         params.append(status)
     if before_created_at:
         cursor_job_id = before_job_id or "\uffff"

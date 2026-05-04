@@ -226,10 +226,10 @@ def list_pipelines(
     params: list[object] = []
     normalized_owner = str(owner_id or "").strip() or None
     if normalized_owner and include_public:
-        clauses.append("(owner_id = ? OR is_public = 1)")
+        clauses.append("(owner_id = %s OR is_public = 1)")
         params.append(normalized_owner)
     elif normalized_owner:
-        clauses.append("owner_id = ?")
+        clauses.append("owner_id = %s")
         params.append(normalized_owner)
     elif include_public:
         clauses.append("is_public = 1")

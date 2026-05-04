@@ -454,10 +454,10 @@ def get_agents(
         if not include_unapproved:
             where_clauses.append("review_status = 'approved'")
         if tag:
-            where_clauses.append("tags LIKE ?")
+            where_clauses.append("tags LIKE %s")
             params.append(f'%"{tag}"%')
         if normalized_provider:
-            where_clauses.append("model_provider = ?")
+            where_clauses.append("model_provider = %s")
             params.append(normalized_provider)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         rows = conn.execute(
@@ -711,7 +711,7 @@ def set_agent_decay_multiplier(agent_id: str, multiplier: float, at_iso: str) ->
 
 def get_agent(agent_id: str, *, include_unapproved: bool = True) -> dict | None:
     """Return a single agent listing by ID, or None if not found."""
-    where_sql = "agent_id = ?"
+    where_sql = "agent_id = %s"
     if not include_unapproved:
         where_sql += " AND review_status = 'approved'"
     with _conn() as conn:
@@ -815,7 +815,7 @@ def update_agent(
         if not updates:
             return agent
 
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
         values = list(updates.values()) + [agent_id, owner_id]
         conn.execute(
             f"UPDATE agents SET {set_clause} WHERE agent_id = %s AND owner_id = %s",

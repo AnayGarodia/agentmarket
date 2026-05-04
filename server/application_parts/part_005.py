@@ -14,10 +14,10 @@ def _list_job_events(
     params: list[Any] = []
     where_clauses = []
     if caller["type"] != "master":
-        where_clauses.append("(caller_owner_id = ? OR agent_owner_id = ?)")
+        where_clauses.append("(caller_owner_id = %s OR agent_owner_id = %s)")
         params.extend([caller["owner_id"], caller["owner_id"]])
     if since is not None:
-        where_clauses.append("event_id > ?")
+        where_clauses.append("event_id > %s")
         params.append(since)
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     params.append(limit)

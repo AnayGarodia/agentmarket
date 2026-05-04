@@ -874,7 +874,7 @@ def _list_job_event_hooks(
     clauses = []
     params: list[Any] = []
     if owner_id is not None:
-        clauses.append("owner_id = ?")
+        clauses.append("owner_id = %s")
         params.append(owner_id)
     if not include_inactive:
         clauses.append("is_active = 1")

@@ -35,8 +35,8 @@ def backfill_agent_signing_keys(agent_ids: list[str], now: str) -> None:
             agent_did_value = _build_agent_did(aid)
             with _conn() as conn:
                 conn.execute(
-                    "UPDATE agents SET did = ?, signing_public_key = ?, signing_private_key = ?, signing_keys_created_at = ? "
-                    "WHERE agent_id = ? AND (signing_private_key IS NULL OR signing_private_key = '')",
+                    "UPDATE agents SET did = %s, signing_public_key = %s, signing_private_key = %s, signing_keys_created_at = %s "
+                    "WHERE agent_id = %s AND (signing_private_key IS NULL OR signing_private_key = '')",
                     (agent_did_value, public_pem, private_pem, now, aid),
                 )
             _logger.info("Provisioned Ed25519 keypair for built-in agent %s", aid)

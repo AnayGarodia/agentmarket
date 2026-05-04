@@ -21,7 +21,7 @@ def _wallet_balance_snapshot_conn(conn: _db.DbConnection, wallet_id: str) -> dic
             COALESCE(SUM(t.amount_cents), 0) AS ledger_balance_cents
         FROM wallets w
         LEFT JOIN transactions t ON t.wallet_id = w.wallet_id
-        WHERE w.wallet_id = ?
+        WHERE w.wallet_id = %s
         GROUP BY w.wallet_id
         """,
         (wallet_id,),
@@ -58,7 +58,7 @@ def repair_wallet_balance_cache(wallet_id: str) -> dict:
         snapshot = _wallet_balance_snapshot_conn(conn, wallet_id)
         if snapshot["drift_cents"] != 0:
             conn.execute(
-                "UPDATE wallets SET balance_cents = ? WHERE wallet_id = ?",
+                "UPDATE wallets SET balance_cents = %s WHERE wallet_id = %s",
                 (snapshot["ledger_balance_cents"], wallet_id),
             )
         return _wallet_balance_snapshot_conn(conn, wallet_id)

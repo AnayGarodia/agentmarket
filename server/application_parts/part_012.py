@@ -218,7 +218,7 @@ def skills_create(
     final_endpoint = _hosted_skills.make_skill_endpoint_url(skill_row["skill_id"])
     with get_db_connection() as _conn:
         _conn.execute(
-            "UPDATE agents SET endpoint_url = ? WHERE agent_id = ? AND owner_id = ?",
+            "UPDATE agents SET endpoint_url = %s WHERE agent_id = %s AND owner_id = %s",
             (final_endpoint, agent_id, caller["owner_id"]),
         )
 

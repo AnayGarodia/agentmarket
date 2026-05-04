@@ -346,18 +346,18 @@ def get_messages(
     Max 200 results per call.
     """
     limit = min(max(1, limit), 200)
-    filters: list[str] = ["job_id = ?"]
+    filters: list[str] = ["job_id = %s"]
     params: list[object] = [job_id]
     if since_id is not None:
-        filters.append("message_id > ?")
+        filters.append("message_id > %s")
         params.append(since_id)
     normalized_type = (msg_type or "").strip().lower()
     if normalized_type:
-        filters.append("type = ?")
+        filters.append("type = %s")
         params.append(normalized_type)
     normalized_from_id = (from_id or "").strip()
     if normalized_from_id:
-        filters.append("from_id = ?")
+        filters.append("from_id = %s")
         params.append(normalized_from_id)
     where_sql = " AND ".join(filters)
     params.append(limit)

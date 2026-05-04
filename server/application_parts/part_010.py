@@ -735,7 +735,7 @@ def ops_platform_stats(
             """
             SELECT
               COUNT(*) FILTER (WHERE status = 'complete') AS total_completed,
-              COUNT(*) FILTER (WHERE status = 'complete' AND created_at >= ?) AS completed_30d,
+              COUNT(*) FILTER (WHERE status = 'complete' AND created_at >= %s) AS completed_30d,
               SUM(CASE WHEN status = 'complete' THEN price_cents ELSE 0 END) AS total_value_cents
             FROM jobs
             """,
@@ -746,7 +746,7 @@ def ops_platform_stats(
             SELECT
               COUNT(*) AS total_disputes,
               COUNT(*) FILTER (WHERE d.status IN ('final','resolved','consensus')) AS resolved_disputes,
-              COUNT(*) FILTER (WHERE d.created_at >= ?) AS disputes_30d
+              COUNT(*) FILTER (WHERE d.created_at >= %s) AS disputes_30d
             FROM disputes d
             JOIN jobs j ON j.job_id = d.job_id
             """,
@@ -754,7 +754,7 @@ def ops_platform_stats(
         ).fetchone()
         completed_30d_count = (
             conn.execute(
-                "SELECT COUNT(*) AS n FROM jobs WHERE status = 'complete' AND created_at >= ?",
+                "SELECT COUNT(*) AS n FROM jobs WHERE status = 'complete' AND created_at >= %s",
                 (since_30d,),
             ).fetchone()["n"]
             or 1
@@ -764,7 +764,7 @@ def ops_platform_stats(
             SELECT (julianday(completed_at) - julianday(claimed_at)) * 86400 AS latency_s
             FROM jobs
             WHERE status = 'complete' AND claimed_at IS NOT NULL AND completed_at IS NOT NULL
-              AND created_at >= ?
+              AND created_at >= %s
             ORDER BY latency_s
             """,
             (since_30d,),
