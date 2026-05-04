@@ -350,8 +350,22 @@ def _score_candidate(
     # Schema-shape match — the strongest disambiguator when the caller
     # provides an explicit input payload. We don't validate types
     # rigorously; presence of every required key is enough signal.
+    # Also checks oneOf/anyOf composite variants so agents like CVE Lookup
+    # (no top-level required, only oneOf) receive the bonus when their
+    # variant fields are fully provided.
     if isinstance(explicit_input, dict) and c.input_schema:
         required = list((c.input_schema.get("required") or []))
+        # Collect composite variants for oneOf/anyOf (same semantics as _resolve_payload).
+        schema_for_score = c.input_schema if isinstance(c.input_schema, dict) else {}
+        composite_score_variants: list[list[str]] = []
+        for _kw in ("oneOf", "anyOf"):
+            _variants = schema_for_score.get(_kw)
+            if isinstance(_variants, list):
+                for _v in _variants:
+                    if isinstance(_v, dict):
+                        _vreq = list(_v.get("required") or [])
+                        if _vreq:
+                            composite_score_variants.append(_vreq)
         if required:
             present = [f for f in required if f in explicit_input]
             if len(present) == len(required):
@@ -360,6 +374,18 @@ def _score_candidate(
             elif present:
                 score += 15
                 reasons.append(f"schema-shape partial ({len(present)}/{len(required)})")
+        elif composite_score_variants:
+            # No top-level required — check if any composite variant is fully satisfied.
+            if any(all(f in explicit_input for f in vreq) for vreq in composite_score_variants):
+                score += 35
+                reasons.append("schema-shape match (composite variant)")
+            else:
+                # Partial credit: find the best-matching variant.
+                best = max(composite_score_variants, key=lambda vr: sum(1 for f in vr if f in explicit_input))
+                n_present = sum(1 for f in best if f in explicit_input)
+                if n_present:
+                    score += 15
+                    reasons.append(f"schema-shape partial (composite {n_present}/{len(best)})")
 
     return Ranked(candidate=c, score=round(score, 3), reasons=reasons)
 
@@ -404,9 +430,13 @@ def _resolve_payload(
     required = list(schema.get("required") or [])
     properties = dict(schema.get("properties") or {})
 
-    # Collect required fields from composite schema keywords (oneOf/anyOf/allOf).
+    # Collect required fields from composite schema keywords (oneOf/anyOf).
+    # oneOf/anyOf: any one variant being satisfied is sufficient.
+    # allOf is intentionally excluded — it means ALL sub-schemas must be satisfied
+    # simultaneously, not just one, so it requires different handling. No current
+    # built-in agent uses allOf for input gating.
     composite_variants: list[list[str]] = []
-    for keyword in ("oneOf", "anyOf", "allOf"):
+    for keyword in ("oneOf", "anyOf"):
         variants = schema.get(keyword)
         if isinstance(variants, list):
             for variant in variants:
