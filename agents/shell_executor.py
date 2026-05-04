@@ -22,6 +22,7 @@ Output:
 from __future__ import annotations
 
 import os
+import re as _re
 import shlex
 import subprocess
 import time
@@ -47,6 +48,27 @@ _BLOCKLIST_PATTERNS = (
     # Command substitution and process substitution.
     "$(", "`", "<(", ">(",
 )
+
+# Patterns for inline code passed via `python3 -c` — blocks network + subprocess access.
+_PYTHON_INLINE_BLOCKED = (
+    r"\bsubprocess\b",
+    r"import\s+socket",
+    r"import\s+requests",
+    r"import\s+urllib",
+    r"import\s+http\.client",
+    r"\bos\.sy" + r"stem\b",
+)
+
+
+def _extract_python_inline(command: str) -> "str | None":
+    """Return the inline code from `python3 -c '...'` / `python -c "..."`, else None."""
+    m = _re.match(r"""(?:python3?)\s+-c\s+(['"])(.*?)\1""", command.strip(), _re.DOTALL)
+    if m:
+        return m.group(2)
+    m2 = _re.match(r"""(?:python3?)\s+-c\s+(.+)""", command.strip())
+    if m2:
+        return m2.group(1)
+    return None
 
 
 def _has_unquoted_shell_operator(command: str) -> bool:
@@ -82,6 +104,12 @@ def _is_allowed(command: str) -> bool:
             return False
     # Must start with an allowed prefix
     lower = stripped.lower()
+    # For python3 -c INLINE, apply static analysis to the inline code.
+    inline = _extract_python_inline(stripped)
+    if inline is not None:
+        for pattern in _PYTHON_INLINE_BLOCKED:
+            if _re.search(pattern, inline):
+                return False
     return any(lower.startswith(p) for p in _ALLOWLIST_PREFIXES)
 
 

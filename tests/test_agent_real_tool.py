@@ -790,3 +790,21 @@ def test_linter_agent_no_eval_and_no_var_rules_in_ts_eslint_command(monkeypatch)
     cmd_str = " ".join(captured_cmd["cmd"])
     assert "no-eval" in cmd_str, "TypeScript eslint command must include no-eval"
     assert "no-var" in cmd_str, "TypeScript eslint command must include no-var"
+
+
+def test_shell_executor_blocks_network_in_python3_c():
+    from agents import shell_executor
+    try:
+        result = shell_executor.run({"command": "python3 -c 'import socket'"})
+        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
+    except ValueError as exc:
+        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
+
+
+def test_shell_executor_blocks_subprocess_import_in_python3_c():
+    from agents import shell_executor
+    try:
+        result = shell_executor.run({"command": "python3 -c 'import subprocess'"})
+        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
+    except ValueError as exc:
+        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
