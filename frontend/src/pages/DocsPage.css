@@ -756,18 +756,78 @@
 .docs-ask__ref svg { flex-shrink: 0; opacity: 0.7; }
 
 /* Tighten MarkdownDoc inside the narrow ask panel */
-.docs-ask__md { font-size: 0.875rem; line-height: 1.6; min-width: 0; width: 100%; }
-.docs-ask__md > *:first-child { margin-top: 0; }
-.docs-ask__md h1, .docs-ask__md h2, .docs-ask__md h3, .docs-ask__md h4 {
-  margin-top: 1.1em;
-  margin-bottom: 0.3em;
+.docs-ask__md.markdown-doc {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  min-width: 0;
+  width: 100%;
 }
-.docs-ask__md h1 { font-size: 1.05rem; }
-.docs-ask__md h2 { font-size: 0.975rem; }
-.docs-ask__md h3 { font-size: 0.9rem; }
-.docs-ask__md h4 { font-size: 0.85rem; }
-.docs-ask__md pre { font-size: 0.78rem; }
-.docs-ask__md p, .docs-ask__md ul, .docs-ask__md ol { font-size: 0.875rem; }
+.docs-ask__md.markdown-doc > *:first-child { margin-top: 0; }
+
+/* Sans-serif headings (override the display serif used in full docs) */
+.docs-ask__md.markdown-doc h1,
+.docs-ask__md.markdown-doc h2,
+.docs-ask__md.markdown-doc h3,
+.docs-ask__md.markdown-doc h4 {
+  font-family: inherit;
+  letter-spacing: 0;
+  margin: 1.1em 0 0.35em;
+  padding: 0;
+  border: none;
+  font-weight: 650;
+}
+.docs-ask__md.markdown-doc h1 { font-size: 1rem; }
+.docs-ask__md.markdown-doc h2 { font-size: 0.9375rem; }
+.docs-ask__md.markdown-doc h3 { font-size: 0.875rem; }
+.docs-ask__md.markdown-doc h4 { font-size: 0.825rem; color: var(--text-secondary); }
+
+.docs-ask__md.markdown-doc p,
+.docs-ask__md.markdown-doc ul,
+.docs-ask__md.markdown-doc ol { font-size: 0.875rem; margin: 0.6em 0; }
+
+/* Code blocks: wrap long lines, leave room for the copy button */
+.docs-ask__md.markdown-doc .md-codeblock { margin: 0.7em 0; }
+.docs-ask__md.markdown-doc pre {
+  padding: 0.85rem 0.95rem;
+  padding-right: 64px; /* clearance for the absolutely-positioned Copy button */
+  border-radius: 10px;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  box-shadow: none;
+}
+.docs-ask__md.markdown-doc pre code {
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Inline code + placeholders: keep them compact in the narrow panel */
+.docs-ask__md.markdown-doc :not(pre) > code {
+  font-size: 0.78em;
+  padding: 0.08em 0.32em;
+  word-break: break-word;
+}
+.docs-ask__md.markdown-doc .doc-placeholder {
+  font-size: 0.85em;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+/* Copy button: keep it clear of content, always at least faintly visible */
+.docs-ask__md.markdown-doc .md-codeblock__copy {
+  top: 6px;
+  right: 6px;
+  padding: 3px 7px;
+  font-size: 0.65rem;
+  opacity: 0.85;
+}
 .docs-ask__form {
   display: flex;
   gap: 8px;
