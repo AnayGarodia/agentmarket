@@ -1,3 +1,5 @@
+
+from core import db as _db
 # server.application shard 7 — registry routes: register, list, search, get,
 # update, delist, MCP manifest + invoke. All auth + SSRF validation lives
 # here for agent-facing surfaces.
@@ -97,7 +99,7 @@ def registry_register(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except sqlite3.IntegrityError:
+    except _db.IntegrityError:
         raise HTTPException(status_code=409, detail="Agent ID or name already exists.")
     message = "Agent registered successfully."
     if safe_verifier_url:

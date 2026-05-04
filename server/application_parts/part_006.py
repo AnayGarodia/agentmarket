@@ -1,3 +1,5 @@
+
+from core import db as _db
 # server.application shard 6 — background sweeper, jobs metrics, onboarding
 # routes (agent.md spec, validate, ingest), and auth routes (register, login,
 # me, legal accept, keys CRUD). First shard that registers HTTP routes.
@@ -568,7 +570,7 @@ def onboarding_ingest(
         )
     except onboarding.ManifestValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    except (ValueError, sqlite3.IntegrityError) as exc:
+    except (ValueError, _db.IntegrityError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     agent = registry.get_agent_with_reputation(
@@ -649,7 +651,7 @@ def auth_register(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except sqlite3.DatabaseError:
+    except _db.OperationalError:
         _LOG.exception("Auth register failed; retrying after auth schema init.")
         try:
             _auth.init_auth_db()
@@ -658,7 +660,7 @@ def auth_register(
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        except sqlite3.DatabaseError:
+        except _db.OperationalError:
             _LOG.exception("Auth register failed due to auth DB error.")
             raise HTTPException(
                 status_code=503,
@@ -702,7 +704,7 @@ def auth_login(
             status_code=403,
             detail="This account has been suspended. Please contact support if you believe this is an error.",
         )
-    except sqlite3.DatabaseError:
+    except _db.OperationalError:
         _LOG.exception("Auth login failed; retrying after auth schema init.")
         try:
             _auth.init_auth_db()
@@ -712,7 +714,7 @@ def auth_login(
                 status_code=403,
                 detail="This account has been suspended. Please contact support if you believe this is an error.",
             )
-        except sqlite3.DatabaseError:
+        except _db.OperationalError:
             _LOG.exception("Auth login failed due to auth DB error.")
             raise HTTPException(
                 status_code=503,
@@ -789,7 +791,7 @@ def auth_google(
             status_code=403,
             detail="This account has been suspended. Please contact support if you believe this is an error.",
         )
-    except sqlite3.DatabaseError:
+    except _db.OperationalError:
         _LOG.exception("Google sign-in failed due to auth DB error.")
         raise HTTPException(
             status_code=503,

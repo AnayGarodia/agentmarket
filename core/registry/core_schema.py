@@ -30,7 +30,6 @@ import json
 import logging
 import math
 import re
-import sqlite3
 import sys
 import threading
 import time
@@ -134,12 +133,12 @@ _embeddings_cache: dict[str, np.ndarray] = {}
 # ---------------------------------------------------------------------------
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     """Return a thread-local SQLite connection with WAL mode."""
     return _db.get_raw_connection(_resolved_db_path())
 
 
-def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -> None:
+def _create_agents_table(conn: _db.DbConnection, table_name: str = "agents") -> None:
     conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {table_name} (
                 agent_id            TEXT PRIMARY KEY,
@@ -188,7 +187,7 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
         """)
 
 
-def _create_agent_embeddings_table(conn: sqlite3.Connection) -> None:
+def _create_agent_embeddings_table(conn: _db.DbConnection) -> None:
     conn.execute("""
             CREATE TABLE IF NOT EXISTS agent_embeddings (
                 agent_id     TEXT PRIMARY KEY REFERENCES agents(agent_id) ON DELETE CASCADE,
@@ -199,7 +198,7 @@ def _create_agent_embeddings_table(conn: sqlite3.Connection) -> None:
         """)
 
 
-def _ensure_agents_indexes(conn: sqlite3.Connection) -> None:
+def _ensure_agents_indexes(conn: _db.DbConnection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_created ON agents(created_at)")
     conn.execute(
@@ -213,20 +212,34 @@ def _ensure_agents_indexes(conn: sqlite3.Connection) -> None:
     )
 
 
-def _agents_table_exists(conn: sqlite3.Connection) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
-    ).fetchone()
+def _agents_table_exists(conn: _db.DbConnection) -> bool:
+    if _db.IS_POSTGRES:
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'agents'"
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
+        ).fetchone()
     return row is not None
 
 
-def _agents_columns(conn: sqlite3.Connection) -> dict:
+def _agents_columns(conn: _db.DbConnection) -> dict:
+    if _db.IS_POSTGRES:
+        rows = conn.execute(
+            "SELECT column_name AS name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'agents'"
+        ).fetchall()
+        return {row["name"]: {"name": row["name"], "pk": 0, "notnull": 1, "dflt_value": None} for row in rows}
     return {
         row["name"]: row for row in conn.execute("PRAGMA table_info(agents)").fetchall()
     }
 
 
-def _has_unique_name_constraint(conn: sqlite3.Connection) -> bool:
+def _has_unique_name_constraint(conn: _db.DbConnection) -> bool:
+    # In Postgres mode we rely on the migration files to enforce constraints.
+    if _db.IS_POSTGRES:
+        return True
     for idx in conn.execute("PRAGMA index_list(agents)").fetchall():
         if idx["unique"] != 1:
             continue
@@ -238,7 +251,10 @@ def _has_unique_name_constraint(conn: sqlite3.Connection) -> bool:
     return False
 
 
-def _has_price_check_constraint(conn: sqlite3.Connection) -> bool:
+def _has_price_check_constraint(conn: _db.DbConnection) -> bool:
+    # In Postgres mode constraints are managed by migration SQL files.
+    if _db.IS_POSTGRES:
+        return True
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
     ).fetchone()
@@ -246,7 +262,10 @@ def _has_price_check_constraint(conn: sqlite3.Connection) -> bool:
     return bool(_PRICE_CHECK_RE.search(table_sql))
 
 
-def _needs_agents_migration(conn: sqlite3.Connection) -> bool:
+def _needs_agents_migration(conn: _db.DbConnection) -> bool:
+    # In Postgres mode, schema evolution is handled by SQL migration files.
+    if _db.IS_POSTGRES:
+        return False
     cols = _agents_columns(conn)
     if not _REQUIRED_COLUMNS.issubset(cols.keys()):
         return True
@@ -425,13 +444,13 @@ def _unpack_embedding(blob: bytes | bytearray | memoryview) -> np.ndarray:
 
 
 def _upsert_agent_embedding_row(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     agent_id: str,
     source_text: str,
     embedding_vector: list[float] | np.ndarray | None = None,
 ) -> bool:
     existing = conn.execute(
-        "SELECT source_text FROM agent_embeddings WHERE agent_id = ?",
+        "SELECT source_text FROM agent_embeddings WHERE agent_id = %s",
         (agent_id,),
     ).fetchone()
     if existing and existing["source_text"] == source_text:
@@ -445,7 +464,7 @@ def _upsert_agent_embedding_row(
     conn.execute(
         """
         INSERT INTO agent_embeddings (agent_id, embedding, source_text, embedded_at)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
         ON CONFLICT(agent_id)
         DO UPDATE SET
             embedding = excluded.embedding,
@@ -661,7 +680,7 @@ def _normalize_legacy_agent_row(
     )
 
 
-def _migrate_agents_table(conn: sqlite3.Connection) -> None:
+def _migrate_agents_table(conn: _db.DbConnection) -> None:
     columns = _agents_columns(conn)
     order_by = "created_at, rowid" if "created_at" in columns else "rowid"
     legacy_rows = conn.execute(
@@ -684,7 +703,7 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
                  endpoint_health_status, endpoint_consecutive_failures, endpoint_last_checked_at, endpoint_last_error,
                  internal_only, cacheable, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             normalized,
         )
@@ -692,7 +711,7 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE agents__canonical RENAME TO agents")
 
 
-def _ensure_agent_identity_columns(conn: sqlite3.Connection) -> None:
+def _ensure_agent_identity_columns(conn: _db.DbConnection) -> None:
     """Add the cryptographic-identity columns to the agents table.
 
     Mirrors what migration 0015_agent_identity.sql does, so dev and test
@@ -709,7 +728,7 @@ def _ensure_agent_identity_columns(conn: sqlite3.Connection) -> None:
     for ddl in extras:
         try:
             conn.execute(ddl)
-        except sqlite3.OperationalError as exc:
+        except _db.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
     conn.execute(
@@ -718,22 +737,22 @@ def _ensure_agent_identity_columns(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_kind_column(conn: sqlite3.Connection) -> None:
+def _ensure_kind_column(conn: _db.DbConnection) -> None:
     """Add kind column to agents table if not present. Idempotent."""
     try:
         conn.execute(
             "ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'self_hosted'"
         )
-    except sqlite3.OperationalError as exc:
+    except _db.OperationalError as exc:
         if "duplicate column name" not in str(exc).lower():
             raise
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_kind ON agents(kind)")
-    except sqlite3.OperationalError:
+    except _db.OperationalError:
         pass
 
 
-def _ensure_privacy_tier_columns(conn: sqlite3.Connection) -> None:
+def _ensure_privacy_tier_columns(conn: _db.DbConnection) -> None:
     extras = [
         "ALTER TABLE agents ADD COLUMN pii_safe INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE agents ADD COLUMN outputs_not_stored INTEGER NOT NULL DEFAULT 0",
@@ -743,23 +762,23 @@ def _ensure_privacy_tier_columns(conn: sqlite3.Connection) -> None:
     for ddl in extras:
         try:
             conn.execute(ddl)
-        except sqlite3.OperationalError as exc:
+        except _db.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
 
 
-def _ensure_payout_curve_column(conn: sqlite3.Connection) -> None:
+def _ensure_payout_curve_column(conn: _db.DbConnection) -> None:
     try:
         conn.execute("ALTER TABLE agents ADD COLUMN payout_curve TEXT")
-    except sqlite3.OperationalError as exc:
+    except _db.OperationalError as exc:
         if "duplicate column name" not in str(exc).lower():
             raise
 
 
-def _ensure_cacheable_column(conn: sqlite3.Connection) -> None:
+def _ensure_cacheable_column(conn: _db.DbConnection) -> None:
     try:
         conn.execute("ALTER TABLE agents ADD COLUMN cacheable INTEGER")
-    except sqlite3.OperationalError as exc:
+    except _db.OperationalError as exc:
         if "duplicate column name" not in str(exc).lower():
             raise
 
@@ -785,7 +804,7 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
+def _row_to_dict(row: dict) -> dict:
     d = dict(row)
     try:
         parsed_tags = json.loads(d.get("tags") or "[]")

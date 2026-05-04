@@ -19,7 +19,6 @@
 #   score = NEUTRAL*(1-confidence) + base*confidence, then * decay_multiplier
 
 import math
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 
@@ -38,7 +37,7 @@ _LATENCY_HALF_SCORE_MS = 2000.0
 _CONFIDENCE_DENOMINATOR = 10.0
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     """Return a thread-local SQLite connection with WAL mode."""
     return _db.get_raw_connection(DB_PATH)
 
@@ -208,13 +207,13 @@ def init_reputation_db() -> None:
         )
 
 
-def _job_has_dispute_conn(conn: sqlite3.Connection, job_id: str) -> bool:
+def _job_has_dispute_conn(conn: _db.DbConnection, job_id: str) -> bool:
     try:
         row = conn.execute(
-            "SELECT 1 FROM disputes WHERE job_id = ? LIMIT 1",
+            "SELECT 1 FROM disputes WHERE job_id = %s LIMIT 1",
             (job_id,),
         ).fetchone()
-    except sqlite3.OperationalError:
+    except _db.OperationalError:
         return False
     return row is not None
 
@@ -223,7 +222,7 @@ def get_job_quality_rating(job_id: str) -> dict | None:
     init_reputation_db()
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM job_quality_ratings WHERE job_id = ?",
+            "SELECT * FROM job_quality_ratings WHERE job_id = %s",
             (job_id,),
         ).fetchone()
     return dict(row) if row else None
@@ -243,11 +242,11 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
                 """
                 SELECT job_id, agent_id, caller_owner_id, status
                 FROM jobs
-                WHERE job_id = ?
+                WHERE job_id = %s
                 """,
                 (job_id,),
             ).fetchone()
-        except sqlite3.OperationalError as e:
+        except _db.OperationalError as e:
             raise RuntimeError(
                 "jobs table is not initialized. Call jobs.init_jobs_db() first."
             ) from e
@@ -266,7 +265,7 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
                 """
                 INSERT INTO job_quality_ratings
                     (job_id, agent_id, caller_owner_id, rating, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 (
                     job_id,
@@ -276,7 +275,7 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
                     _now(),
                 ),
             )
-        except sqlite3.IntegrityError as e:
+        except _db.IntegrityError as e:
             raise ValueError(f"Job '{job_id}' already has a quality rating.") from e
 
     created = get_job_quality_rating(job_id)
@@ -287,7 +286,7 @@ def get_job_caller_rating(job_id: str) -> dict | None:
     init_reputation_db()
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM caller_ratings WHERE job_id = ?",
+            "SELECT * FROM caller_ratings WHERE job_id = %s",
             (job_id,),
         ).fetchone()
     return dict(row) if row else None
@@ -313,11 +312,11 @@ def record_caller_rating(
                 """
                 SELECT job_id, caller_owner_id, agent_owner_id, status
                 FROM jobs
-                WHERE job_id = ?
+                WHERE job_id = %s
                 """,
                 (job_id,),
             ).fetchone()
-        except sqlite3.OperationalError as e:
+        except _db.OperationalError as e:
             raise RuntimeError(
                 "jobs table is not initialized. Call jobs.init_jobs_db() first."
             ) from e
@@ -336,7 +335,7 @@ def record_caller_rating(
                 """
                 INSERT INTO caller_ratings
                     (rating_id, job_id, caller_owner_id, agent_owner_id, rating, comment, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -348,7 +347,7 @@ def record_caller_rating(
                     _now(),
                 ),
             )
-        except sqlite3.IntegrityError as e:
+        except _db.IntegrityError as e:
             raise ValueError(f"Job '{job_id}' already has a caller rating.") from e
 
     created = get_job_caller_rating(job_id)
@@ -416,7 +415,7 @@ def _load_agent_stats_map(agent_ids: list[str]) -> dict[str, tuple[int, int, flo
     with _conn() as conn:
         try:
             rows = conn.execute(query, tuple(agent_ids)).fetchall()
-        except sqlite3.OperationalError as e:
+        except _db.OperationalError as e:
             raise RuntimeError(
                 "agents table is not initialized. Call registry.init_db() first."
             ) from e
@@ -467,7 +466,7 @@ def _load_agent_stats(agent_id: str) -> tuple[int, int, float]:
 def _load_agent_decay_multiplier(agent_id: str) -> float:
     with _conn() as conn:
         row = conn.execute(
-            "SELECT trust_decay_multiplier FROM agents WHERE agent_id = ?",
+            "SELECT trust_decay_multiplier FROM agents WHERE agent_id = %s",
             (agent_id,),
         ).fetchone()
     if row is None:
@@ -509,7 +508,7 @@ def _load_dispute_rates_map(agent_ids: list[str]) -> dict[str, int]:
                 agent_ids,
             ).fetchall()
         return {row["agent_id"]: int(row["dispute_count"]) for row in rows}
-    except sqlite3.OperationalError:
+    except _db.OperationalError:
         return {}
 
 
@@ -537,7 +536,7 @@ def _load_client_quality_summary_map(
                 """,
                 agent_ids,
             ).fetchall()
-    except sqlite3.OperationalError:
+    except _db.OperationalError:
         return {}
     return {
         (str(row["agent_id"]), str(row["client_id"])): {
@@ -580,7 +579,7 @@ def _load_client_stats_map(
                 """,
                 agent_ids,
             ).fetchall()
-    except sqlite3.OperationalError:
+    except _db.OperationalError:
         return {}
     return {
         (str(row["agent_id"]), str(row["client_id"])): _normalize_agent_stats(
@@ -785,7 +784,7 @@ def count_caller_given_ratings(
                 """
                 SELECT COUNT(*) AS count
                 FROM job_quality_ratings
-                WHERE caller_owner_id = ?
+                WHERE caller_owner_id = %s
                 """,
                 (normalized_owner_id,),
             ).fetchone()
@@ -795,7 +794,7 @@ def count_caller_given_ratings(
                 """
                 SELECT COUNT(*) AS count
                 FROM job_quality_ratings
-                WHERE caller_owner_id = ? AND rating = ?
+                WHERE caller_owner_id = %s AND rating = %s
                 """,
                 (normalized_owner_id, validated),
             ).fetchone()

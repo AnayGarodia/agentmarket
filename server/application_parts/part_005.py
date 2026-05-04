@@ -1,3 +1,5 @@
+
+from core import db as _db
 # server.application shard 5 — verification, settlement, and dispute
 # adjudication: output-verifier calls, registration verifier, quality-gate
 # judge, dispute effects, cascaded child-job failure, dispute-window math,
@@ -25,7 +27,7 @@ def _list_job_events(
             SELECT * FROM job_events
             {where_sql}
             ORDER BY event_id ASC
-            LIMIT ?
+            LIMIT %s
             """,
             tuple(params),
         ).fetchall()
@@ -1370,7 +1372,7 @@ def _ensure_output_rejection_dispute(
         payments.lock_dispute_funds(created["dispute_id"], conn=conn)
         conn.execute("COMMIT")
         return created
-    except sqlite3.IntegrityError:
+    except _db.IntegrityError:
         conn.execute("ROLLBACK")
         existing = disputes.get_dispute_by_job(job["job_id"])
         if existing is not None:
@@ -1942,7 +1944,7 @@ def _auto_suspend_low_performing_agents(actor_owner_id: str) -> dict[str, Any]:
             """
             SELECT agent_id, owner_id, successful_calls, total_calls
             FROM agents
-            WHERE status = 'active' AND total_calls >= ?
+            WHERE status = 'active' AND total_calls >= %s
             """,
             (AUTO_SUSPEND_MIN_CALLS,),
         ).fetchall()
@@ -1955,7 +1957,7 @@ def _auto_suspend_low_performing_agents(actor_owner_id: str) -> dict[str, Any]:
             if failure_rate <= AUTO_SUSPEND_FAILURE_RATE_THRESHOLD:
                 continue
             status_update = conn.execute(
-                "UPDATE agents SET status = 'suspended' WHERE agent_id = ? AND status = 'active'",
+                "UPDATE agents SET status = 'suspended' WHERE agent_id = %s AND status = 'active'",
                 (row["agent_id"],),
             )
             if status_update.rowcount <= 0:
@@ -1970,7 +1972,7 @@ def _auto_suspend_low_performing_agents(actor_owner_id: str) -> dict[str, Any]:
                 """
                 INSERT INTO job_events
                     (job_id, agent_id, agent_owner_id, caller_owner_id, event_type, actor_owner_id, payload, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     f"agent:{row['agent_id']}",

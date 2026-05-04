@@ -23,7 +23,7 @@ def _resolved_db_path() -> str:
     return DB_PATH
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     return _db.get_raw_connection(_resolved_db_path())
 
 
@@ -85,7 +85,7 @@ def _decode_json(raw: str | None, default):
         return default
 
 
-def _pipeline_row_to_dict(row: sqlite3.Row | None) -> dict | None:
+def _pipeline_row_to_dict(row: dict | None) -> dict | None:
     if row is None:
         return None
     payload = dict(row)
@@ -94,7 +94,7 @@ def _pipeline_row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return payload
 
 
-def _run_row_to_dict(row: sqlite3.Row | None) -> dict | None:
+def _run_row_to_dict(row: dict | None) -> dict | None:
     if row is None:
         return None
     payload = dict(row)
@@ -130,7 +130,7 @@ def create_pipeline(
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 generated_id,
@@ -177,7 +177,7 @@ def upsert_pipeline(
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(pipeline_id) DO UPDATE SET
                 owner_id = excluded.owner_id,
                 name = excluded.name,
@@ -209,7 +209,7 @@ def get_pipeline(pipeline_id: str) -> dict | None:
     init_db()
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM pipelines WHERE pipeline_id = ?",
+            "SELECT * FROM pipelines WHERE pipeline_id = %s",
             (str(pipeline_id).strip(),),
         ).fetchone()
     return _pipeline_row_to_dict(row)
@@ -267,7 +267,7 @@ def create_run(
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, 'running', ?, '{}', ?, ?)
+            VALUES (%s, %s, %s, 'running', %s, '{}', %s, %s)
             """,
             (
                 run_id,
@@ -293,7 +293,7 @@ def get_run(run_id: str) -> dict | None:
     init_db()
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM pipeline_runs WHERE run_id = ?",
+            "SELECT * FROM pipeline_runs WHERE run_id = %s",
             (str(run_id).strip(),),
         ).fetchone()
     return _run_row_to_dict(row)
@@ -308,7 +308,7 @@ def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT step_results FROM pipeline_runs WHERE run_id = ?",
+            "SELECT step_results FROM pipeline_runs WHERE run_id = %s",
             (normalized_run_id,),
         ).fetchone()
         if row is None:
@@ -320,8 +320,8 @@ def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
         conn.execute(
             """
             UPDATE pipeline_runs
-            SET step_results = ?, updated_at = COALESCE(updated_at, ?)
-            WHERE run_id = ?
+            SET step_results = %s, updated_at = COALESCE(updated_at, %s)
+            WHERE run_id = %s
             """,
             (
                 json.dumps(
@@ -346,11 +346,11 @@ def complete_run(run_id: str, output_payload) -> dict | None:
             """
             UPDATE pipeline_runs
             SET status = 'complete',
-                output_json = ?,
+                output_json = %s,
                 error_message = NULL,
-                updated_at = ?,
-                completed_at = COALESCE(completed_at, ?)
-            WHERE run_id = ?
+                updated_at = %s,
+                completed_at = COALESCE(completed_at, %s)
+            WHERE run_id = %s
             """,
             (
                 json.dumps(
@@ -376,10 +376,10 @@ def fail_run(run_id: str, error_message: str) -> dict | None:
             """
             UPDATE pipeline_runs
             SET status = 'failed',
-                error_message = ?,
-                updated_at = ?,
-                completed_at = COALESCE(completed_at, ?)
-            WHERE run_id = ?
+                error_message = %s,
+                updated_at = %s,
+                completed_at = COALESCE(completed_at, %s)
+            WHERE run_id = %s
             """,
             (
                 str(error_message or "").strip() or "Pipeline execution failed.",

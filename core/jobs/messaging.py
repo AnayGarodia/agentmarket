@@ -112,7 +112,7 @@ def add_message(
                 )
 
         row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?",
+            "SELECT * FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
         message_id = _insert_job_message_row(
@@ -176,21 +176,21 @@ def add_message(
                 conn.execute(
                     """
                     UPDATE jobs
-                    SET status = CASE WHEN ? = 1 THEN ? ELSE status END,
-                        lease_expires_at = CASE WHEN ? = 1 THEN ? ELSE lease_expires_at END,
-                        last_heartbeat_at = CASE WHEN ? = 1 THEN ? ELSE last_heartbeat_at END,
+                    SET status = CASE WHEN %s = 1 THEN %s ELSE status END,
+                        lease_expires_at = CASE WHEN %s = 1 THEN %s ELSE lease_expires_at END,
+                        last_heartbeat_at = CASE WHEN %s = 1 THEN %s ELSE last_heartbeat_at END,
                         clarification_requested_at = CASE
-                            WHEN ? = 1 THEN ?
-                            WHEN ? = 1 THEN NULL
+                            WHEN %s = 1 THEN %s
+                            WHEN %s = 1 THEN NULL
                             ELSE clarification_requested_at
                         END,
                         clarification_deadline_at = CASE
-                            WHEN ? = 1 THEN ?
-                            WHEN ? = 1 THEN NULL
+                            WHEN %s = 1 THEN %s
+                            WHEN %s = 1 THEN NULL
                             ELSE clarification_deadline_at
                         END,
-                        updated_at = ?
-                    WHERE job_id = ?
+                        updated_at = %s
+                    WHERE job_id = %s
                     """,
                     (
                         1 if should_update_status else 0,
@@ -250,7 +250,7 @@ def add_claim_event(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT 1 FROM jobs WHERE job_id = ?",
+            "SELECT 1 FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
         if row is None:
@@ -290,8 +290,8 @@ def claim_token_was_recently_active(
             """
             SELECT payload
             FROM job_messages
-            WHERE job_id = ?
-              AND type = ?
+            WHERE job_id = %s
+              AND type = %s
             ORDER BY message_id DESC
             LIMIT 500
             """,
@@ -324,7 +324,7 @@ def get_message(job_id: str, message_id: int) -> dict | None:
         row = conn.execute(
             """
             SELECT * FROM job_messages
-            WHERE job_id = ? AND message_id = ?
+            WHERE job_id = %s AND message_id = %s
             """,
             (job_id, message_id),
         ).fetchone()
@@ -367,7 +367,7 @@ def get_messages(
             SELECT * FROM job_messages
             WHERE {where_sql}
             ORDER BY message_id ASC
-            LIMIT ?
+            LIMIT %s
             """,
             tuple(params),
         ).fetchall()
@@ -398,7 +398,7 @@ def count_job_messages(job_id: str) -> int:
     """Return the total number of messages on a job."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ?",
+            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = %s",
             (job_id,),
         ).fetchone()
     return int(row["n"]) if row else 0
@@ -408,12 +408,12 @@ def count_open_clarification_requests(job_id: str) -> int:
     """Count unanswered clarification_request messages on a job."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ? AND type = 'clarification_request'",
+            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = %s AND type = 'clarification_request'",
             (job_id,),
         ).fetchone()
     answered = (
         conn.execute(
-            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ? AND type = 'clarification_response'",
+            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = %s AND type = 'clarification_response'",
             (job_id,),
         ).fetchone()
         if conn
@@ -431,7 +431,7 @@ def get_latest_message_id(job_id: str) -> int | None:
             """
             SELECT MAX(message_id) AS latest_message_id
             FROM job_messages
-            WHERE job_id = ?
+            WHERE job_id = %s
             """,
             (job_id,),
         ).fetchone()
@@ -454,8 +454,8 @@ def set_job_quality_result(
         conn.execute(
             """
             UPDATE jobs
-            SET judge_verdict = ?, quality_score = ?, judge_agent_id = ?, updated_at = ?
-            WHERE job_id = ?
+            SET judge_verdict = %s, quality_score = %s, judge_agent_id = %s, updated_at = %s
+            WHERE job_id = %s
             """,
             (
                 _clean_optional_text(judge_verdict),
@@ -475,8 +475,8 @@ def set_job_dispute_outcome(job_id: str, outcome: str | None) -> dict | None:
         conn.execute(
             """
             UPDATE jobs
-            SET dispute_outcome = ?, updated_at = ?
-            WHERE job_id = ?
+            SET dispute_outcome = %s, updated_at = %s
+            WHERE job_id = %s
             """,
             (_clean_optional_text(outcome), now, job_id),
         )

@@ -622,10 +622,11 @@ def _enqueue_job_event_hook_deliveries(event: dict) -> None:
         with jobs._conn() as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO job_event_deliveries
+                INSERT INTO job_event_deliveries
                     (event_id, hook_id, owner_id, target_url, secret, payload,
                      status, attempt_count, next_attempt_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', 0, %s, %s, %s)
+                ON CONFLICT DO NOTHING
                 """,
                 (
                     event["event_id"],
@@ -669,10 +670,11 @@ def _enqueue_job_callback(job: dict, event_id: int) -> None:
     with jobs._conn() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO job_event_deliveries
+            INSERT INTO job_event_deliveries
                 (event_id, hook_id, owner_id, target_url, secret, payload,
                  status, attempt_count, next_attempt_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending', 0, %s, %s, %s)
+            ON CONFLICT DO NOTHING
             """,
             (
                 event_id,
@@ -702,7 +704,7 @@ def _claim_due_hook_delivery(now_iso: str) -> dict | None:
             SELECT *
             FROM job_event_deliveries
             WHERE status = 'pending'
-              AND next_attempt_at <= ?
+              AND next_attempt_at <= %s
             ORDER BY next_attempt_at ASC, delivery_id ASC
             LIMIT 1
             """,
@@ -718,12 +720,12 @@ def _claim_due_hook_delivery(now_iso: str) -> dict | None:
         result = conn.execute(
             """
             UPDATE job_event_deliveries
-            SET next_attempt_at = ?,
-                last_attempt_at = ?,
-                updated_at = ?
-            WHERE delivery_id = ?
+            SET next_attempt_at = %s,
+                last_attempt_at = %s,
+                updated_at = %s
+            WHERE delivery_id = %s
               AND status = 'pending'
-              AND next_attempt_at <= ?
+              AND next_attempt_at <= %s
             """,
             (claim_until_iso, now_iso, now_iso, row["delivery_id"], now_iso),
         )
@@ -731,7 +733,7 @@ def _claim_due_hook_delivery(now_iso: str) -> dict | None:
             return None
 
         claimed = conn.execute(
-            "SELECT * FROM job_event_deliveries WHERE delivery_id = ?",
+            "SELECT * FROM job_event_deliveries WHERE delivery_id = %s",
             (row["delivery_id"],),
         ).fetchone()
     return dict(claimed) if claimed else None
@@ -748,11 +750,11 @@ def _update_hook_attempt_metadata(
         conn.execute(
             """
             UPDATE job_event_hooks
-            SET last_attempt_at = ?,
-                last_success_at = CASE WHEN ? = 1 THEN ? ELSE last_success_at END,
-                last_status_code = ?,
-                last_error = ?
-            WHERE hook_id = ?
+            SET last_attempt_at = %s,
+                last_success_at = CASE WHEN %s = 1 THEN %s ELSE last_success_at END,
+                last_status_code = %s,
+                last_error = %s
+            WHERE hook_id = %s
             """,
             (
                 attempted_at,
@@ -780,14 +782,14 @@ def _mark_hook_delivery(
         conn.execute(
             """
             UPDATE job_event_deliveries
-            SET status = ?,
-                next_attempt_at = ?,
-                attempt_count = COALESCE(?, attempt_count),
-                last_status_code = ?,
-                last_error = ?,
-                last_success_at = CASE WHEN ? = 1 THEN ? ELSE last_success_at END,
-                updated_at = ?
-            WHERE delivery_id = ?
+            SET status = %s,
+                next_attempt_at = %s,
+                attempt_count = COALESCE(%s, attempt_count),
+                last_status_code = %s,
+                last_error = %s,
+                last_success_at = CASE WHEN %s = 1 THEN %s ELSE last_success_at END,
+                updated_at = %s
+            WHERE delivery_id = %s
             """,
             (
                 status,
@@ -826,7 +828,7 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
         if not is_job_callback:
             with jobs._conn() as conn:
                 hook_row = conn.execute(
-                    "SELECT is_active FROM job_event_hooks WHERE hook_id = ?",
+                    "SELECT is_active FROM job_event_hooks WHERE hook_id = %s",
                     (hook_id,),
                 ).fetchone()
 
@@ -1049,7 +1051,7 @@ def _list_hook_deliveries(
             FROM job_event_deliveries
             {where_sql}
             ORDER BY created_at DESC, delivery_id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             tuple(params),
         ).fetchall()

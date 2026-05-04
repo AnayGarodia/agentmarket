@@ -181,7 +181,7 @@ _CANONICAL_JOB_COLUMNS = (
 _REQUIRED_JOB_COLUMNS = set(_CANONICAL_JOB_COLUMNS)
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     """Return a thread-local SQLite connection with WAL mode."""
     return _db.get_raw_connection(_resolved_db_path())
 
@@ -305,7 +305,7 @@ def _claim_token_sha256(token: str | None) -> str | None:
 
 
 def _insert_job_message_row(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     job_id: str,
     from_id: str,
     msg_type: str,
@@ -316,7 +316,7 @@ def _insert_job_message_row(
     cur = conn.execute(
         """
         INSERT INTO job_messages (job_id, from_id, type, payload, correlation_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """,
         (job_id, from_id, msg_type, json.dumps(payload), correlation_id, created_at),
     )
@@ -324,7 +324,7 @@ def _insert_job_message_row(
 
 
 def _insert_claim_event_row(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     job_id: str,
     *,
     event_type: str,
@@ -382,20 +382,33 @@ def unsubscribe_job_messages(job_id: str, subscriber: queue.Queue) -> None:
             _JOB_MESSAGE_SUBSCRIBERS.pop(job_id, None)
 
 
-def _jobs_table_exists(conn: sqlite3.Connection) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
-    ).fetchone()
+def _jobs_table_exists(conn: _db.DbConnection) -> bool:
+    if _db.IS_POSTGRES:
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'jobs'"
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+        ).fetchone()
     return row is not None
 
 
-def _jobs_columns(conn: sqlite3.Connection) -> dict:
+def _jobs_columns(conn: _db.DbConnection) -> dict:
+    if _db.IS_POSTGRES:
+        # Return a minimal dict that satisfies _needs_jobs_migration checks.
+        # In Postgres mode the migration SQL files handle schema evolution.
+        rows = conn.execute(
+            "SELECT column_name AS name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'jobs'"
+        ).fetchall()
+        return {row["name"]: {"name": row["name"], "pk": 0, "notnull": 1, "dflt_value": None} for row in rows}
     return {
         row["name"]: row for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
     }
 
 
-def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> None:
+def _create_jobs_table(conn: _db.DbConnection, table_name: str = "jobs") -> None:
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             job_id              TEXT PRIMARY KEY,
@@ -456,7 +469,7 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
     """)
 
 
-def _create_job_messages_table(conn: sqlite3.Connection) -> None:
+def _create_job_messages_table(conn: _db.DbConnection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS job_messages (
             message_id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -470,21 +483,31 @@ def _create_job_messages_table(conn: sqlite3.Connection) -> None:
     """)
 
 
-def _job_messages_columns(conn: sqlite3.Connection) -> dict:
+def _job_messages_columns(conn: _db.DbConnection) -> dict:
+    if _db.IS_POSTGRES:
+        rows = conn.execute(
+            "SELECT column_name AS name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'job_messages'"
+        ).fetchall()
+        return {row["name"]: {"name": row["name"]} for row in rows}
     return {
         row["name"]: row
         for row in conn.execute("PRAGMA table_info(job_messages)").fetchall()
     }
 
 
-def _ensure_job_messages_schema(conn: sqlite3.Connection) -> None:
+def _ensure_job_messages_schema(conn: _db.DbConnection) -> None:
     _create_job_messages_table(conn)
     cols = _job_messages_columns(conn)
     if "correlation_id" not in cols:
-        conn.execute("ALTER TABLE job_messages ADD COLUMN correlation_id TEXT")
+        try:
+            conn.execute("ALTER TABLE job_messages ADD COLUMN correlation_id TEXT")
+        except _db.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
 
-def _ensure_jobs_indexes(conn: sqlite3.Connection) -> None:
+def _ensure_jobs_indexes(conn: _db.DbConnection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_jobs_caller ON jobs(caller_owner_id, created_at DESC)"
     )
@@ -535,7 +558,10 @@ def _ensure_jobs_indexes(conn: sqlite3.Connection) -> None:
     )
 
 
-def _needs_jobs_migration(conn: sqlite3.Connection) -> bool:
+def _needs_jobs_migration(conn: _db.DbConnection) -> bool:
+    # In Postgres mode, schema evolution is handled by SQL migration files.
+    if _db.IS_POSTGRES:
+        return False
     cols = _jobs_columns(conn)
     if not _REQUIRED_JOB_COLUMNS.issubset(cols.keys()):
         return True
@@ -775,15 +801,20 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
     )
 
 
-def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
+def _migrate_jobs_table(conn: _db.DbConnection) -> None:
+    # Table migration is SQLite-only; in Postgres mode schema is managed by migrations/
+    if _db.IS_POSTGRES:
+        return
+
     columns = _jobs_columns(conn)
     order_by = "created_at, rowid" if "created_at" in columns else "rowid"
     legacy_rows = conn.execute(
         f"SELECT rowid AS _legacy_rowid, * FROM jobs ORDER BY {order_by}"
     ).fetchall()
 
+    # PRAGMA foreign_keys returns a row with a single column named 'foreign_keys'.
     fk_row = conn.execute("PRAGMA foreign_keys").fetchone()
-    fk_enabled = bool(fk_row and int(fk_row[0]) == 1)
+    fk_enabled = bool(fk_row and int(fk_row.get("foreign_keys", 0) if isinstance(fk_row, dict) else fk_row[0]) == 1)
     if fk_enabled:
         conn.execute("PRAGMA foreign_keys=OFF")
 
@@ -792,7 +823,7 @@ def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
         _create_jobs_table(conn, table_name="jobs__canonical")
 
         cols_sql = ", ".join(_CANONICAL_JOB_COLUMNS)
-        placeholders = ", ".join(["?"] * len(_CANONICAL_JOB_COLUMNS))
+        placeholders = ", ".join(["%s"] * len(_CANONICAL_JOB_COLUMNS))
 
         used_job_ids: set[str] = set()
         for row in legacy_rows:
@@ -813,12 +844,12 @@ def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
 
     violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
-        raise sqlite3.IntegrityError(
+        raise _db.IntegrityError(
             "jobs migration introduced foreign key violations."
         )
 
 
-def _ensure_job_signature_columns(conn: sqlite3.Connection) -> None:
+def _ensure_job_signature_columns(conn: _db.DbConnection) -> None:
     """Add cryptographic-signature columns to the jobs table.
 
     Mirrors migration 0015_agent_identity.sql for dev/test environments
@@ -833,7 +864,7 @@ def _ensure_job_signature_columns(conn: sqlite3.Connection) -> None:
     for ddl in extras:
         try:
             conn.execute(ddl)
-        except sqlite3.OperationalError as exc:
+        except _db.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
 
@@ -868,14 +899,14 @@ def _decode_json(raw, default):
         return default
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
+def _row_to_dict(row: dict) -> dict:
     d = dict(row)
     d["input_payload"] = _decode_json(d.get("input_payload"), default={})
     d["output_payload"] = _decode_json(d.get("output_payload"), default=None)
     return d
 
 
-def _msg_to_dict(row: sqlite3.Row) -> dict:
+def _msg_to_dict(row: dict) -> dict:
     d = dict(row)
     d["payload"] = _decode_json(d.get("payload"), default={})
     return d

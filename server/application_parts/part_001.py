@@ -3,7 +3,11 @@
 # request tracing, prometheus metrics, /metrics endpoint, auth helpers.
 
 
-def _migrate_job_event_deliveries_status_schema(conn: sqlite3.Connection) -> None:
+def _migrate_job_event_deliveries_status_schema(conn: _db.DbConnection) -> None:
+    # sqlite_master is SQLite-only; Postgres uses information_schema. In Postgres
+    # mode the migration SQL files handle schema evolution so we skip this helper.
+    if _db.IS_POSTGRES:
+        return
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'job_event_deliveries'"
     ).fetchone()
@@ -257,7 +261,7 @@ def _name_owned_by_other_user(name: str, system_owner_id: str) -> bool:
     """
     with registry._conn() as conn:
         row = conn.execute(
-            "SELECT 1 FROM agents WHERE name = ? AND owner_id != ? LIMIT 1",
+            "SELECT 1 FROM agents WHERE name = %s AND owner_id != %s LIMIT 1",
             (name, system_owner_id),
         ).fetchone()
     return row is not None
@@ -266,13 +270,13 @@ def _name_owned_by_other_user(name: str, system_owner_id: str) -> bool:
 def _ensure_system_user() -> str:
     with _auth._conn() as conn:
         existing = conn.execute(
-            "SELECT user_id FROM users WHERE username = ? ORDER BY created_at ASC LIMIT 1",
+            "SELECT user_id FROM users WHERE username = %s ORDER BY created_at ASC LIMIT 1",
             (_SYSTEM_USERNAME,),
         ).fetchone()
         if existing is not None:
             user_id = str(existing["user_id"])
             conn.execute(
-                "UPDATE users SET status = 'suspended' WHERE user_id = ?", (user_id,)
+                "UPDATE users SET status = 'suspended' WHERE user_id = %s", (user_id,)
             )
             return user_id
 
@@ -281,7 +285,7 @@ def _ensure_system_user() -> str:
         email = _SYSTEM_USER_EMAIL
         if (
             conn.execute(
-                "SELECT 1 FROM users WHERE email = ? LIMIT 1", (email,)
+                "SELECT 1 FROM users WHERE email = %s LIMIT 1", (email,)
             ).fetchone()
             is not None
         ):
@@ -291,7 +295,7 @@ def _ensure_system_user() -> str:
         conn.execute(
             """
             INSERT INTO users (user_id, username, email, password_hash, salt, created_at, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'suspended')
+            VALUES (%s, %s, %s, %s, %s, %s, 'suspended')
             """,
             (user_id, _SYSTEM_USERNAME, email, password_hash, salt, now),
         )
@@ -354,25 +358,25 @@ def ensure_builtin_agents_registered() -> None:
             conn.execute(
                 """
                 UPDATE agents
-                SET owner_id = ?,
-                    name = ?,
-                    description = ?,
-                    endpoint_url = ?,
-                    price_per_call_usd = ?,
-                    tags = ?,
-                    input_schema = ?,
-                    output_schema = ?,
-                    output_examples = ?,
-                    internal_only = ?,
-                    cacheable = ?,
+                SET owner_id = %s,
+                    name = %s,
+                    description = %s,
+                    endpoint_url = %s,
+                    price_per_call_usd = %s,
+                    tags = %s,
+                    input_schema = %s,
+                    output_schema = %s,
+                    output_examples = %s,
+                    internal_only = %s,
+                    cacheable = %s,
                     status = 'active',
                     review_status = 'approved',
-                    reviewed_by = ?,
-                    reviewed_at = ?,
-                    model_provider = ?,
-                    model_id = ?,
+                    reviewed_by = %s,
+                    reviewed_at = %s,
+                    model_provider = %s,
+                    model_id = %s,
                     kind = 'aztea_built'
-                WHERE agent_id = ?
+                WHERE agent_id = %s
                 """,
                 (
                     system_owner_id,

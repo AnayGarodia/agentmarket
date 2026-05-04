@@ -34,7 +34,7 @@ def list_child_wallets(parent_wallet_id: str) -> list[dict]:
             """
             SELECT *
             FROM wallets
-            WHERE parent_wallet_id = ?
+            WHERE parent_wallet_id = %s
             ORDER BY created_at ASC
             """,
             (parent_wallet_id,),
@@ -61,15 +61,15 @@ def set_wallet_guarantor(
         updated = conn.execute(
             """
             UPDATE wallets
-            SET guarantor_enabled = ?, guarantor_cap_cents = ?
-            WHERE wallet_id = ?
+            SET guarantor_enabled = %s, guarantor_cap_cents = %s
+            WHERE wallet_id = %s
             """,
             (1 if enabled else 0, cap_cents, wallet_id),
         ).rowcount
         if updated == 0:
             raise ValueError(f"Wallet '{wallet_id}' not found.")
         row = conn.execute(
-            "SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)
+            "SELECT * FROM wallets WHERE wallet_id = %s", (wallet_id,)
         ).fetchone()
     return dict(row)
 
@@ -81,13 +81,13 @@ def set_wallet_label(wallet_id: str, display_label: str | None) -> dict:
         raise ValueError("display_label must be 80 characters or fewer.")
     with _conn() as conn:
         updated = conn.execute(
-            "UPDATE wallets SET display_label = ? WHERE wallet_id = ?",
+            "UPDATE wallets SET display_label = %s WHERE wallet_id = %s",
             (label, wallet_id),
         ).rowcount
         if updated == 0:
             raise ValueError(f"Wallet '{wallet_id}' not found.")
         row = conn.execute(
-            "SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)
+            "SELECT * FROM wallets WHERE wallet_id = %s", (wallet_id,)
         ).fetchone()
     return dict(row)
 
@@ -114,7 +114,7 @@ def sweep_to_parent(
         try:
             row = conn.execute(
                 "SELECT wallet_id, parent_wallet_id, balance_cents"
-                " FROM wallets WHERE wallet_id = ?",
+                " FROM wallets WHERE wallet_id = %s",
                 (wallet_id,),
             ).fetchone()
             if row is None:
@@ -222,7 +222,7 @@ def get_agent_earnings_breakdown_v2(parent_wallet_id: str) -> list[dict]:
                 WHERE type IN ('charge','fee') AND amount_cents < 0
                 GROUP BY wallet_id
             ) spend ON spend.wallet_id = w.wallet_id
-            WHERE w.parent_wallet_id = ?
+            WHERE w.parent_wallet_id = %s
             ORDER BY total_earned_cents DESC, w.created_at ASC
             """,
             (parent_wallet_id,),

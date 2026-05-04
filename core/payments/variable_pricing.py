@@ -17,7 +17,8 @@ rows are never mutated; the ledger stays insert-only.
 from __future__ import annotations
 
 import logging
-import sqlite3
+
+from core import db as _db
 
 from core import logging_utils
 
@@ -95,7 +96,7 @@ def post_call_refund_difference(
             """
             SELECT -amount_cents AS debit_cents
             FROM transactions
-            WHERE tx_id = ? AND type = 'charge'
+            WHERE tx_id = %s AND type = 'charge'
             LIMIT 1
             """,
             (charge_tx_id,),
@@ -112,9 +113,9 @@ def post_call_refund_difference(
             """
             SELECT 1
             FROM transactions
-            WHERE related_tx_id = ?
+            WHERE related_tx_id = %s
               AND type = 'refund'
-              AND memo LIKE ?
+              AND memo LIKE %s
             LIMIT 1
             """,
             (charge_tx_id, f"%{_PRICING_DIFF_MEMO_TAG}%"),
@@ -125,7 +126,7 @@ def post_call_refund_difference(
             """
             SELECT COALESCE(SUM(amount_cents), 0) AS refunded_cents
             FROM transactions
-            WHERE related_tx_id = ? AND type = 'refund'
+            WHERE related_tx_id = %s AND type = 'refund'
             """,
             (charge_tx_id,),
         ).fetchone()
@@ -165,7 +166,7 @@ def post_call_refund_difference(
                 charge_tx_id,
                 normalized_memo,
             )
-        except sqlite3.IntegrityError as exc:
+        except _db.IntegrityError as exc:
             # In practice this only triggers when the agent or platform
             # balance can't absorb the clawback, or when a concurrent
             # write lost the race. Roll back the entire legs; the

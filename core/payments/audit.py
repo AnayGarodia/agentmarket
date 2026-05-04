@@ -7,12 +7,11 @@ drift without duplicating SQL in multiple places.
 
 from __future__ import annotations
 
-import sqlite3
 
 from .base import _conn
 
 
-def _wallet_balance_snapshot_conn(conn: sqlite3.Connection, wallet_id: str) -> dict:
+def _wallet_balance_snapshot_conn(conn: _db.DbConnection, wallet_id: str) -> dict:
     row = conn.execute(
         """
         SELECT

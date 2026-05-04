@@ -1,3 +1,5 @@
+
+from core import db as _db
 # server.application shard 11 — admin dispute review, job event hooks
 # (CRUD + process + dead-letter), background sweep trigger, ops metrics +
 # SLO, Stripe webhook + Connect onboarding, and spend / reconciliation
@@ -218,7 +220,7 @@ def job_event_hook_create(
         hook = _create_job_event_hook(caller["owner_id"], body.target_url, body.secret)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    except sqlite3.IntegrityError as exc:
+    except _db.IntegrityError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return JSONResponse(content=hook, status_code=201)
 
@@ -448,9 +450,9 @@ def wallet_spend_summary(
             """
             SELECT agent_id, SUM(price_cents) AS total_cents, COUNT(*) AS job_count
             FROM jobs
-            WHERE caller_owner_id = ?
+            WHERE caller_owner_id = %s
               AND status IN ('complete', 'failed')
-              AND created_at >= ?
+              AND created_at >= %s
             GROUP BY agent_id
             ORDER BY total_cents DESC
             LIMIT 100
@@ -461,7 +463,7 @@ def wallet_spend_summary(
             """
             SELECT SUM(price_cents) AS total_cents, COUNT(*) AS job_count
             FROM jobs
-            WHERE caller_owner_id = ? AND created_at >= ?
+            WHERE caller_owner_id = %s AND created_at >= %s
             """,
             (caller_owner_id, since_iso),
         ).fetchone()
@@ -606,7 +608,7 @@ def _enrich_agent_wallet_rows(rows: list[dict]) -> list[dict]:
                 agent = registry.get_agent(agent_id, include_unapproved=True)
                 if agent:
                     name = agent.get("name") or agent_id
-            except (sqlite3.DatabaseError, ValueError, TypeError) as exc:
+            except (_db.OperationalError, ValueError, TypeError) as exc:
                 _LOG.warning(
                     "Failed to load agent name for wallet row %s: %s", agent_id, exc
                 )
@@ -1127,10 +1129,11 @@ def _stripe_begin_checkout_webhook_event(
 ) -> str:
     now = _utc_now_iso()
     with get_db_connection() as conn:
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("BEGIN IMMEDIATE")
+        if not _db.IS_POSTGRES:
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("BEGIN IMMEDIATE")
         processed_row = conn.execute(
-            "SELECT 1 FROM stripe_sessions WHERE session_id = ? LIMIT 1",
+            "SELECT 1 FROM stripe_sessions WHERE session_id = %s LIMIT 1",
             (session_id,),
         ).fetchone()
         if processed_row is not None:
@@ -1140,7 +1143,7 @@ def _stripe_begin_checkout_webhook_event(
             """
             SELECT status
             FROM stripe_webhook_events
-            WHERE session_id = ?
+            WHERE session_id = %s
             LIMIT 1
             """,
             (session_id,),
@@ -1150,13 +1153,13 @@ def _stripe_begin_checkout_webhook_event(
                 """
                 INSERT INTO stripe_webhook_events
                     (session_id, wallet_id, amount_cents, status, attempts, created_at, updated_at)
-                VALUES (?, ?, ?, 'processing', 1, ?, ?)
+                VALUES (%s, %s, %s, 'processing', 1, %s, %s)
                 """,
                 (session_id, wallet_id, int(amount_cents), now, now),
             )
             conn.commit()
             return "acquired"
-        status = str(state_row[0] or "").strip().lower()
+        status = str(state_row.get("status", "") or "").strip().lower()
         if status == "processed":
             conn.commit()
             return "already_processed"
@@ -1166,13 +1169,13 @@ def _stripe_begin_checkout_webhook_event(
         conn.execute(
             """
             UPDATE stripe_webhook_events
-            SET wallet_id = ?,
-                amount_cents = ?,
+            SET wallet_id = %s,
+                amount_cents = %s,
                 status = 'processing',
                 attempts = attempts + 1,
                 last_error = NULL,
-                updated_at = ?
-            WHERE session_id = ?
+                updated_at = %s
+            WHERE session_id = %s
             """,
             (wallet_id, int(amount_cents), now, session_id),
         )
@@ -1186,14 +1189,15 @@ def _stripe_mark_checkout_webhook_failed(
     error_message: str,
 ) -> None:
     with get_db_connection() as conn:
-        conn.execute("PRAGMA busy_timeout=5000")
+        if not _db.IS_POSTGRES:
+            conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
             """
             UPDATE stripe_webhook_events
             SET status = 'failed',
-                last_error = ?,
-                updated_at = ?
-            WHERE session_id = ?
+                last_error = %s,
+                updated_at = %s
+            WHERE session_id = %s
             """,
             (str(error_message or "")[:1000], _utc_now_iso(), session_id),
         )
@@ -1208,12 +1212,14 @@ def _stripe_mark_checkout_webhook_processed(
 ) -> None:
     now = _utc_now_iso()
     with get_db_connection() as conn:
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("BEGIN IMMEDIATE")
+        if not _db.IS_POSTGRES:
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
-            INSERT OR IGNORE INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
             """,
             (session_id, wallet_id, int(amount_cents), now),
         )
@@ -1222,8 +1228,8 @@ def _stripe_mark_checkout_webhook_processed(
             UPDATE stripe_webhook_events
             SET status = 'processed',
                 last_error = NULL,
-                updated_at = ?
-            WHERE session_id = ?
+                updated_at = %s
+            WHERE session_id = %s
             """,
             (now, session_id),
         )
@@ -1237,13 +1243,13 @@ def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
             """
             SELECT COALESCE(SUM(amount_cents), 0) AS total
             FROM stripe_sessions
-            WHERE wallet_id = ? AND processed_at >= ?
+            WHERE wallet_id = %s AND processed_at >= %s
             """,
             (wallet_id, window_start),
         ).fetchone()
     if row is None:
         return 0
-    return int(row[0] or 0)
+    return int(row.get("total") or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1303,7 +1309,7 @@ def admin_platform_withdraw(
 ) -> JSONResponse:
     """Transfer funds from a platform pool into the authenticated admin's own wallet.
 
-    Body: ``{ "source": "platform"|"system_agents", "amount_cents": int, "memo"?: str }``
+    Body: ``{ "source": "platform"|"system_agents", "amount_cents": int, "memo"%s: str }``
     """
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -77,9 +76,9 @@ def curve_to_json(curve: dict[str, float] | None) -> str | None:
     return json.dumps({k: float(v) for k, v in curve.items()}, sort_keys=True)
 
 
-def _wallet_balance_conn(conn: sqlite3.Connection, wallet_id: str) -> int | None:
+def _wallet_balance_conn(conn: _db.DbConnection, wallet_id: str) -> int | None:
     row = conn.execute(
-        "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+        "SELECT balance_cents FROM wallets WHERE wallet_id = %s",
         (wallet_id,),
     ).fetchone()
     if row is None:
@@ -88,7 +87,7 @@ def _wallet_balance_conn(conn: sqlite3.Connection, wallet_id: str) -> int | None
 
 
 def _debit_wallet_conn(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     wallet_id: str,
     amount_cents: int,
     *,
@@ -107,8 +106,8 @@ def _debit_wallet_conn(
     updated = conn.execute(
         """
         UPDATE wallets
-        SET balance_cents = balance_cents - ?
-        WHERE wallet_id = ? AND balance_cents >= ?
+        SET balance_cents = balance_cents - %s
+        WHERE wallet_id = %s AND balance_cents >= %s
         """,
         (amount_cents, wallet_id, amount_cents),
     ).rowcount
@@ -129,7 +128,7 @@ def _debit_wallet_conn(
 
 
 def _credit_wallet_conn(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     wallet_id: str,
     amount_cents: int,
     *,
@@ -140,7 +139,7 @@ def _credit_wallet_conn(
     from core.payments import base as _payments_base
 
     updated = conn.execute(
-        "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
+        "UPDATE wallets SET balance_cents = balance_cents + %s WHERE wallet_id = %s",
         (amount_cents, wallet_id),
     ).rowcount
     if updated == 0:
@@ -191,7 +190,7 @@ def apply_curve_clawback(
     with _payments_base._conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute(
-            "SELECT 1 FROM transactions WHERE memo = ? LIMIT 1",
+            "SELECT 1 FROM transactions WHERE memo = %s LIMIT 1",
             (idempotency_key,),
         ).fetchone()
         if existing is not None:

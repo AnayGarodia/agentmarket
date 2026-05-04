@@ -61,7 +61,7 @@ def get_agent_call_ring(agent_id: str) -> list[dict[str, int]]:
     """Return the latency ring buffer for an agent. Raises ValueError if the agent is not found."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT call_latency_ring FROM agents WHERE agent_id = ?",
+            "SELECT call_latency_ring FROM agents WHERE agent_id = %s",
             (agent_id,),
         ).fetchone()
     if row is None:

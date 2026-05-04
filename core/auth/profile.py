@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import re
 import secrets
-import sqlite3
+
+from core import db as _db
 
 from .schema import (
     MAX_FULL_NAME_LEN,
@@ -81,22 +82,22 @@ def update_profile(
     if not updates:
         with _conn() as conn:
             row = conn.execute(
-                "SELECT * FROM users WHERE user_id = ?", (user_id,)
+                "SELECT * FROM users WHERE user_id = %s", (user_id,)
             ).fetchone()
         if row is None:
             raise ValueError("Account not found.")
         return _row_to_user_dict(row)
 
-    set_clause = ", ".join(f"{col} = ?" for col, _ in updates)
+    set_clause = ", ".join(f"{col} = %s" for col, _ in updates)
     params = [val for _, val in updates] + [user_id]
     with _conn() as conn:
         try:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(f"UPDATE users SET {set_clause} WHERE user_id = ?", params)
+            conn.execute(f"UPDATE users SET {set_clause} WHERE user_id = %s", params)
             row = conn.execute(
-                "SELECT * FROM users WHERE user_id = ?", (user_id,)
+                "SELECT * FROM users WHERE user_id = %s", (user_id,)
             ).fetchone()
-        except sqlite3.IntegrityError as exc:
+        except _db.IntegrityError as exc:
             message = str(exc).lower()
             if (
                 "users.email" in message
@@ -130,7 +131,7 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
 
     with _conn() as conn:
         row = conn.execute(
-            "SELECT password_hash, salt FROM users WHERE user_id = ?",
+            "SELECT password_hash, salt FROM users WHERE user_id = %s",
             (user_id,),
         ).fetchone()
     if row is None:
@@ -145,12 +146,12 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
     new_hash = _hash_password(new_password, new_salt)
     with _conn() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = ?, salt = ? WHERE user_id = ?",
+            "UPDATE users SET password_hash = %s, salt = %s WHERE user_id = %s",
             (new_hash, new_salt, user_id),
         )
         # Invalidate every API key so the user has to log in again everywhere.
         conn.execute(
-            "UPDATE api_keys SET is_active = 0 WHERE user_id = ? AND is_active = 1",
+            "UPDATE api_keys SET is_active = 0 WHERE user_id = %s AND is_active = 1",
             (user_id,),
         )
 
@@ -161,7 +162,7 @@ def set_stripe_customer_id(user_id: str, customer_id: str) -> None:
         raise ValueError("customer_id is required.")
     with _conn() as conn:
         conn.execute(
-            "UPDATE users SET stripe_customer_id = ? WHERE user_id = ?",
+            "UPDATE users SET stripe_customer_id = %s WHERE user_id = %s",
             (customer_id, user_id),
         )
 
@@ -170,7 +171,7 @@ def get_stripe_customer_id(user_id: str) -> str | None:
     """Return the Stripe customer ID for a user, or None if not yet created."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT stripe_customer_id FROM users WHERE user_id = ?",
+            "SELECT stripe_customer_id FROM users WHERE user_id = %s",
             (user_id,),
         ).fetchone()
     if row is None:

@@ -46,7 +46,7 @@ DISPUTE_OUTCOMES = {"caller_wins", "agent_wins", "split", "void"}
 JUDGE_KINDS = {"llm_primary", "llm_secondary", "human_admin"}
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     return _db.get_raw_connection(DB_PATH)
 
 
@@ -100,20 +100,21 @@ def init_disputes_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_disputes_filer_filed ON disputes(filed_by_owner_id, filed_at DESC)"
         )
-        dispute_cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(disputes)").fetchall()
-        }
-        if "filing_deposit_cents" not in dispute_cols:
+        # Add filing_deposit_cents if missing — idempotent via duplicate-column detection.
+        # PRAGMA table_info is SQLite-only; we use a direct ALTER and ignore the error instead.
+        try:
             conn.execute(
                 "ALTER TABLE disputes ADD COLUMN filing_deposit_cents INTEGER NOT NULL DEFAULT 0"
             )
+        except _db.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_dispute_judgments_dispute_created ON dispute_judgments(dispute_id, created_at ASC)"
         )
 
 
-def _row_to_dispute(row: sqlite3.Row) -> dict:
+def _row_to_dispute(row: dict) -> dict:
     data = dict(row)
     for field in ("filing_deposit_cents", "split_caller_cents", "split_agent_cents"):
         value = data.get(field)
@@ -166,7 +167,7 @@ def create_dispute(
     reason: str,
     evidence: str | None = None,
     filing_deposit_cents: int = 0,
-    conn: sqlite3.Connection | None = None,
+    conn: _db.DbConnection | None = None,
 ) -> dict:
     """Insert a new dispute row for a completed job.
 
@@ -186,7 +187,7 @@ def create_dispute(
     # Enforce that the filer is actually a party to the job, regardless of call site.
     with _conn() as _check_conn:
         job_row = _check_conn.execute(
-            "SELECT caller_owner_id, agent_owner_id FROM jobs WHERE job_id = ?",
+            "SELECT caller_owner_id, agent_owner_id FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
     if job_row is None:
@@ -211,17 +212,17 @@ def create_dispute(
         now,
     )
 
-    def _insert(created_conn: sqlite3.Connection) -> dict:
+    def _insert(created_conn: _db.DbConnection) -> dict:
         created_conn.execute(
             """
             INSERT INTO disputes
                 (dispute_id, job_id, filed_by_owner_id, side, reason, evidence, filing_deposit_cents, status, filed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)
             """,
             params,
         )
         row = created_conn.execute(
-            "SELECT * FROM disputes WHERE dispute_id = ?",
+            "SELECT * FROM disputes WHERE dispute_id = %s",
             (dispute_id,),
         ).fetchone()
         return _row_to_dispute(row) if row else {}
@@ -235,7 +236,7 @@ def create_dispute(
 def get_dispute(dispute_id: str) -> dict | None:
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM disputes WHERE dispute_id = ?",
+            "SELECT * FROM disputes WHERE dispute_id = %s",
             (dispute_id,),
         ).fetchone()
     return _row_to_dispute(row) if row else None
@@ -244,7 +245,7 @@ def get_dispute(dispute_id: str) -> dict | None:
 def get_dispute_by_job(job_id: str) -> dict | None:
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM disputes WHERE job_id = ?",
+            "SELECT * FROM disputes WHERE job_id = %s",
             (job_id,),
         ).fetchone()
     return _row_to_dispute(row) if row else None
@@ -253,7 +254,7 @@ def get_dispute_by_job(job_id: str) -> dict | None:
 def has_dispute_for_job(job_id: str) -> bool:
     with _conn() as conn:
         row = conn.execute(
-            "SELECT 1 FROM disputes WHERE job_id = ? LIMIT 1",
+            "SELECT 1 FROM disputes WHERE job_id = %s LIMIT 1",
             (job_id,),
         ).fetchone()
     return row is not None
@@ -267,9 +268,9 @@ def list_disputes(*, status: str | None = None, limit: int = 100) -> list[dict]:
             rows = conn.execute(
                 """
                 SELECT * FROM disputes
-                WHERE status = ?
+                WHERE status = %s
                 ORDER BY filed_at DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 (_validate_status(status), capped),
             ).fetchall()
@@ -278,7 +279,7 @@ def list_disputes(*, status: str | None = None, limit: int = 100) -> list[dict]:
                 """
                 SELECT * FROM disputes
                 ORDER BY filed_at DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 (capped,),
             ).fetchall()
@@ -292,8 +293,8 @@ def set_dispute_status(dispute_id: str, status: str) -> dict | None:
         conn.execute(
             """
             UPDATE disputes
-            SET status = ?
-            WHERE dispute_id = ?
+            SET status = %s
+            WHERE dispute_id = %s
             """,
             (normalized_status, dispute_id),
         )
@@ -308,8 +309,8 @@ def set_dispute_tied(dispute_id: str) -> dict | None:
             """
             UPDATE disputes
             SET status = 'tied',
-                tied_since = CASE WHEN tied_since IS NULL THEN ? ELSE tied_since END
-            WHERE dispute_id = ?
+                tied_since = CASE WHEN tied_since IS NULL THEN %s ELSE tied_since END
+            WHERE dispute_id = %s
             """,
             (now, dispute_id),
         )
@@ -329,9 +330,9 @@ def get_stale_tied_disputes(older_than_hours: int = 48, limit: int = 100) -> lis
             SELECT * FROM disputes
             WHERE status = 'tied'
               AND tied_since IS NOT NULL
-              AND tied_since <= ?
+              AND tied_since <= %s
             ORDER BY tied_since ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (cutoff, max(1, min(int(limit), 500))),
         ).fetchall()
@@ -345,8 +346,8 @@ def set_dispute_consensus(dispute_id: str, outcome: str) -> dict | None:
         conn.execute(
             """
             UPDATE disputes
-            SET status = 'consensus', outcome = ?
-            WHERE dispute_id = ?
+            SET status = 'consensus', outcome = %s
+            WHERE dispute_id = %s
             """,
             (normalized_outcome, dispute_id),
         )
@@ -376,12 +377,12 @@ def finalize_dispute(
         conn.execute(
             """
             UPDATE disputes
-            SET status = ?,
-                outcome = ?,
-                split_caller_cents = ?,
-                split_agent_cents = ?,
-                resolved_at = ?
-            WHERE dispute_id = ?
+            SET status = %s,
+                outcome = %s,
+                split_caller_cents = %s,
+                split_agent_cents = %s,
+                resolved_at = %s
+            WHERE dispute_id = %s
             """,
             (
                 normalized_status,
@@ -429,7 +430,7 @@ def record_judgment(
             """
             INSERT INTO dispute_judgments
                 (judgment_id, dispute_id, judge_kind, verdict, reasoning, model, admin_user_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 judgment["judgment_id"],
@@ -462,7 +463,7 @@ def append_audit_event(
     try:
         with _conn() as conn:
             row = conn.execute(
-                "SELECT audit_log FROM disputes WHERE dispute_id = ?",
+                "SELECT audit_log FROM disputes WHERE dispute_id = %s",
                 (dispute_id,),
             ).fetchone()
             if row is None:
@@ -474,7 +475,7 @@ def append_audit_event(
                 log = []
             log.append(entry)
             conn.execute(
-                "UPDATE disputes SET audit_log = ? WHERE dispute_id = ?",
+                "UPDATE disputes SET audit_log = %s WHERE dispute_id = %s",
                 (json.dumps(log), dispute_id),
             )
     except Exception:  # noqa: BLE001 — audit must not break callers
@@ -487,7 +488,7 @@ def get_judgments(dispute_id: str) -> list[dict]:
         rows = conn.execute(
             """
             SELECT * FROM dispute_judgments
-            WHERE dispute_id = ?
+            WHERE dispute_id = %s
             ORDER BY created_at ASC, judgment_id ASC
             """,
             (dispute_id,),
@@ -521,7 +522,7 @@ def get_dispute_context(dispute_id: str) -> dict | None:
             FROM disputes d
             JOIN jobs j ON j.job_id = d.job_id
             LEFT JOIN agents a ON a.agent_id = j.agent_id
-            WHERE d.dispute_id = ?
+            WHERE d.dispute_id = %s
             """,
             (dispute_id,),
         ).fetchone()

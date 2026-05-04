@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import uuid
 
 from core import logging_utils
@@ -92,12 +91,12 @@ def adjust_caller_trust(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         wallet = conn.execute(
-            "SELECT wallet_id, caller_trust FROM wallets WHERE owner_id = ?",
+            "SELECT wallet_id, caller_trust FROM wallets WHERE owner_id = %s",
             (normalized_owner_id,),
         ).fetchone()
         if wallet is None:
             conn.execute(
-                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, caller_trust, created_at) VALUES (?, ?, 0, 0.5, ?)",
+                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, caller_trust, created_at) VALUES (%s, %s, 0, 0.5, %s)",
                 (str(uuid.uuid4()), normalized_owner_id, _now()),
             )
             before = 0.5
@@ -107,14 +106,14 @@ def adjust_caller_trust(
             )
         after = max(0.0, min(1.0, before + float(delta)))
         conn.execute(
-            "UPDATE wallets SET caller_trust = ? WHERE owner_id = ?",
+            "UPDATE wallets SET caller_trust = %s WHERE owner_id = %s",
             (after, normalized_owner_id),
         )
         conn.execute(
             """
             INSERT INTO caller_trust_events
                 (event_id, owner_id, delta, before_value, after_value, reason, related_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 str(uuid.uuid4()),
@@ -152,7 +151,7 @@ def adjust_caller_trust_once(
             """
             SELECT 1
             FROM caller_trust_events
-            WHERE owner_id = ? AND reason = ? AND related_id = ?
+            WHERE owner_id = %s AND reason = %s AND related_id = %s
             LIMIT 1
             """,
             (owner_id, reason, related_id),
@@ -184,7 +183,7 @@ def record_judge_fee(
         existing = conn.execute(
             """
             SELECT 1 FROM transactions
-            WHERE related_tx_id = ? AND wallet_id = ? AND type = 'fee'
+            WHERE related_tx_id = %s AND wallet_id = %s AND type = 'fee'
             LIMIT 1
             """,
             (f"judge_fee:{charge_tx_id}", judge_wallet_id),
@@ -210,9 +209,9 @@ def record_judge_fee(
         )
 
 
-def _get_or_create_wallet_id_conn(conn: sqlite3.Connection, owner_id: str) -> str:
+def _get_or_create_wallet_id_conn(conn: _db.DbConnection, owner_id: str) -> str:
     row = conn.execute(
-        "SELECT wallet_id FROM wallets WHERE owner_id = ?",
+        "SELECT wallet_id FROM wallets WHERE owner_id = %s",
         (owner_id,),
     ).fetchone()
     if row is not None:
@@ -221,16 +220,16 @@ def _get_or_create_wallet_id_conn(conn: sqlite3.Connection, owner_id: str) -> st
     conn.execute(
         """
         INSERT INTO wallets (wallet_id, owner_id, balance_cents, caller_trust, created_at)
-        VALUES (?, ?, 0, 0.5, ?)
+        VALUES (%s, %s, 0, 0.5, %s)
         """,
         (wallet_id, owner_id, _now()),
     )
     return wallet_id
 
 
-def _wallet_balance_conn(conn: sqlite3.Connection, wallet_id: str) -> int:
+def _wallet_balance_conn(conn: _db.DbConnection, wallet_id: str) -> int:
     row = conn.execute(
-        "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+        "SELECT balance_cents FROM wallets WHERE wallet_id = %s",
         (wallet_id,),
     ).fetchone()
     if row is None:
@@ -239,7 +238,7 @@ def _wallet_balance_conn(conn: sqlite3.Connection, wallet_id: str) -> int:
 
 
 def _debit_wallet_conn(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     wallet_id: str,
     amount_cents: int,
     *,
@@ -254,8 +253,8 @@ def _debit_wallet_conn(
     updated = conn.execute(
         """
         UPDATE wallets
-        SET balance_cents = balance_cents - ?
-        WHERE wallet_id = ? AND balance_cents >= ?
+        SET balance_cents = balance_cents - %s
+        WHERE wallet_id = %s AND balance_cents >= %s
         """,
         (amount_cents, wallet_id, amount_cents),
     ).rowcount
@@ -274,7 +273,7 @@ def _debit_wallet_conn(
 
 
 def _credit_wallet_conn(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     wallet_id: str,
     amount_cents: int,
     *,
@@ -296,7 +295,7 @@ def _credit_wallet_conn(
     )
 
 
-def _dispute_context_conn(conn: sqlite3.Connection, dispute_id: str) -> sqlite3.Row:
+def _dispute_context_conn(conn: _db.DbConnection, dispute_id: str) -> dict:
     row = conn.execute(
         """
         SELECT
@@ -319,7 +318,7 @@ def _dispute_context_conn(conn: sqlite3.Connection, dispute_id: str) -> sqlite3.
             j.settled_at
         FROM disputes d
         JOIN jobs j ON j.job_id = d.job_id
-        WHERE d.dispute_id = ?
+        WHERE d.dispute_id = %s
         """,
         (dispute_id,),
     ).fetchone()
@@ -329,20 +328,20 @@ def _dispute_context_conn(conn: sqlite3.Connection, dispute_id: str) -> sqlite3.
 
 
 def _related_sum_conn(
-    conn: sqlite3.Connection, *, related_tx_id: str, wallet_id: str, tx_type: str
+    conn: _db.DbConnection, *, related_tx_id: str, wallet_id: str, tx_type: str
 ) -> int:
     row = conn.execute(
         """
         SELECT COALESCE(SUM(amount_cents), 0) AS total
         FROM transactions
-        WHERE related_tx_id = ? AND wallet_id = ? AND type = ?
+        WHERE related_tx_id = %s AND wallet_id = %s AND type = %s
         """,
         (related_tx_id, wallet_id, tx_type),
     ).fetchone()
     return int(row["total"] or 0)
 
 
-def _lock_dispute_funds_conn(conn: sqlite3.Connection, dispute_id: str) -> dict:
+def _lock_dispute_funds_conn(conn: _db.DbConnection, dispute_id: str) -> dict:
     """
     Lock dispute funds into escrow.
     If payout already happened, claw back from agent/platform into dispute escrow.
@@ -419,7 +418,7 @@ def _lock_dispute_funds_conn(conn: sqlite3.Connection, dispute_id: str) -> dict:
     }
 
 
-def lock_dispute_funds(dispute_id: str, conn: sqlite3.Connection | None = None) -> dict:
+def lock_dispute_funds(dispute_id: str, conn: _db.DbConnection | None = None) -> dict:
     if conn is not None:
         return _lock_dispute_funds_conn(conn, dispute_id)
     with _conn() as managed_conn:
@@ -428,7 +427,7 @@ def lock_dispute_funds(dispute_id: str, conn: sqlite3.Connection | None = None) 
 
 
 def _collect_dispute_filing_deposit_conn(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     *,
     dispute_id: str,
     filed_by_owner_id: str,
@@ -489,7 +488,7 @@ def collect_dispute_filing_deposit(
     *,
     filed_by_owner_id: str,
     amount_cents: int,
-    conn: sqlite3.Connection | None = None,
+    conn: _db.DbConnection | None = None,
 ) -> dict:
     """Debit the dispute filing deposit from the caller's wallet.
 
@@ -514,7 +513,7 @@ def collect_dispute_filing_deposit(
 
 
 def _release_dispute_filing_deposit_conn(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     *,
     dispute_id: str,
     outcome: str,
@@ -624,7 +623,7 @@ def post_dispute_settlement(
             """
             SELECT 1
             FROM transactions
-            WHERE related_tx_id = ? AND wallet_id = ? AND memo = ?
+            WHERE related_tx_id = %s AND wallet_id = %s AND memo = %s
             LIMIT 1
             """,
             (
@@ -876,7 +875,7 @@ def get_settlement_transactions(charge_tx_id: str) -> list:
             """
             SELECT *
             FROM transactions
-            WHERE tx_id = ? OR related_tx_id = ?
+            WHERE tx_id = %s OR related_tx_id = %s
             ORDER BY created_at ASC, tx_id ASC
             """,
             (charge_tx_id, charge_tx_id),
@@ -923,7 +922,7 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
             GROUP BY w.wallet_id
             HAVING w.balance_cents != ledger_balance_cents
             ORDER BY ABS(w.balance_cents - ledger_balance_cents) DESC, w.wallet_id ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (capped,),
         ).fetchall()
@@ -963,7 +962,7 @@ def record_reconciliation_run(max_mismatches: int = 100) -> dict:
             """
             INSERT INTO reconciliation_runs
                 (run_id, created_at, invariant_ok, drift_cents, mismatch_count, summary_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 run_id,
@@ -990,7 +989,7 @@ def list_reconciliation_runs(limit: int = 20) -> list:
             SELECT run_id, created_at, invariant_ok, drift_cents, mismatch_count, summary_json
             FROM reconciliation_runs
             ORDER BY created_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (capped,),
         ).fetchall()

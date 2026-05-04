@@ -1,14 +1,21 @@
-"""Job-event / idempotency / Stripe bookkeeping tables on the jobs SQLite DB."""
+"""Job-event / idempotency / Stripe bookkeeping tables.
+
+In PostgreSQL mode, all tables are created by migrations — init_ops_db() and
+init_stripe_db() are no-ops so that SQLite-specific syntax never runs against
+Postgres.
+"""
 
 from __future__ import annotations
 
-import sqlite3
-
 from core import jobs
-from core.db import get_db_connection
+from core.db import IS_POSTGRES, get_db_connection
 
 
-def migrate_job_event_deliveries_status_schema(conn: sqlite3.Connection) -> None:
+def migrate_job_event_deliveries_status_schema(conn) -> None:
+    # Historical one-time migration: renames dead_letter/retrying statuses.
+    # Postgres starts with a clean schema from migrations; skip entirely.
+    if IS_POSTGRES:
+        return
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'job_event_deliveries'"
     ).fetchone()
@@ -83,6 +90,9 @@ def migrate_job_event_deliveries_status_schema(conn: sqlite3.Connection) -> None
 
 
 def init_ops_db() -> None:
+    # Postgres: tables exist from migrations; inline SQLite DDL would fail.
+    if IS_POSTGRES:
+        return
     with jobs._conn() as conn:
         conn.execute(
             """
@@ -187,6 +197,8 @@ def init_ops_db() -> None:
 
 def init_stripe_db() -> None:
     """Create Stripe bookkeeping tables used for top-ups and webhook idempotency."""
+    if IS_POSTGRES:
+        return
     with get_db_connection() as conn:
         conn.execute(
             """

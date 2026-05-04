@@ -501,7 +501,7 @@ def _job_message_to_sse(message: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _event_row_to_dict(row: sqlite3.Row) -> dict:
+def _event_row_to_dict(row: dict) -> dict:
     d = dict(row)
     try:
         payload = json.loads(d.get("payload") or "{}")
@@ -532,7 +532,7 @@ def _record_job_event(
             INSERT INTO job_events
                 (job_id, agent_id, agent_owner_id, caller_owner_id,
                  event_type, actor_owner_id, payload, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 job["job_id"],
@@ -546,7 +546,7 @@ def _record_job_event(
             ),
         )
         row = conn.execute(
-            "SELECT * FROM job_events WHERE event_id = ?",
+            "SELECT * FROM job_events WHERE event_id = %s",
             (cur.lastrowid,),
         ).fetchone()
 
@@ -611,7 +611,7 @@ def _idempotency_begin(
             """
             SELECT request_hash, status, response_status, response_body
             FROM idempotency_requests
-            WHERE owner_id = ? AND scope = ? AND idempotency_key = ?
+            WHERE owner_id = %s AND scope = %s AND idempotency_key = %s
             """,
             (owner_id, scope, idempotency_key),
         ).fetchone()
@@ -646,7 +646,7 @@ def _idempotency_begin(
             """
             INSERT INTO idempotency_requests
                 (owner_id, scope, idempotency_key, request_hash, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'in_progress', ?, ?)
+            VALUES (%s, %s, %s, %s, 'in_progress', %s, %s)
             """,
             (owner_id, scope, idempotency_key, request_hash, now, now),
         )
@@ -670,10 +670,10 @@ def _idempotency_complete(
             """
             UPDATE idempotency_requests
             SET status = 'completed',
-                response_status = ?,
-                response_body = ?,
-                updated_at = ?
-            WHERE owner_id = ? AND scope = ? AND idempotency_key = ? AND status = 'in_progress'
+                response_status = %s,
+                response_body = %s,
+                updated_at = %s
+            WHERE owner_id = %s AND scope = %s AND idempotency_key = %s AND status = 'in_progress'
             """,
             (
                 int(status_code),
@@ -693,7 +693,7 @@ def _idempotency_abort(idempotency_state: dict | None) -> None:
         conn.execute(
             """
             DELETE FROM idempotency_requests
-            WHERE owner_id = ? AND scope = ? AND idempotency_key = ? AND status = 'in_progress'
+            WHERE owner_id = %s AND scope = %s AND idempotency_key = %s AND status = 'in_progress'
             """,
             (
                 idempotency_state["owner_id"],
@@ -727,7 +727,7 @@ def _run_idempotent_json_response(
     return JSONResponse(content=body, status_code=status_code)
 
 
-def _hook_row_to_dict(row: sqlite3.Row) -> dict:
+def _hook_row_to_dict(row: dict) -> dict:
     return dict(row)
 
 
@@ -857,12 +857,12 @@ def _create_job_event_hook(
             """
             INSERT INTO job_event_hooks
                 (hook_id, owner_id, target_url, secret, is_active, created_at)
-            VALUES (?, ?, ?, ?, 1, ?)
+            VALUES (%s, %s, %s, %s, 1, %s)
             """,
             (hook_id, owner_id, _validate_hook_url(target_url), normalized_secret, now),
         )
         row = conn.execute(
-            "SELECT * FROM job_event_hooks WHERE hook_id = ?",
+            "SELECT * FROM job_event_hooks WHERE hook_id = %s",
             (hook_id,),
         ).fetchone()
     return _hook_row_to_dict(row)
@@ -896,12 +896,12 @@ def _deactivate_job_event_hook(hook_id: str, owner_id: str | None = None) -> boo
     with jobs._conn() as conn:
         if owner_id is None:
             result = conn.execute(
-                "UPDATE job_event_hooks SET is_active = 0 WHERE hook_id = ?",
+                "UPDATE job_event_hooks SET is_active = 0 WHERE hook_id = %s",
                 (hook_id,),
             )
         else:
             result = conn.execute(
-                "UPDATE job_event_hooks SET is_active = 0 WHERE hook_id = ? AND owner_id = ?",
+                "UPDATE job_event_hooks SET is_active = 0 WHERE hook_id = %s AND owner_id = %s",
                 (hook_id, owner_id),
             )
         if result.rowcount <= 0:
@@ -910,10 +910,10 @@ def _deactivate_job_event_hook(hook_id: str, owner_id: str | None = None) -> boo
             """
             UPDATE job_event_deliveries
             SET status = 'cancelled',
-                next_attempt_at = ?,
-                updated_at = ?,
+                next_attempt_at = %s,
+                updated_at = %s,
                 last_error = COALESCE(last_error, 'hook deactivated')
-            WHERE hook_id = ?
+            WHERE hook_id = %s
               AND status = 'pending'
             """,
             (now, now, hook_id),

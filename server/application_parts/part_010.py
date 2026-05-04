@@ -1,3 +1,5 @@
+
+from core import db as _db
 # server.application shard 10 — jobs fail/retry + typed messages + SSE
 # stream + ratings (caller → agent, agent → caller) + disputes (get, file,
 # trust-dispute management) + platform-level ops endpoints.
@@ -929,7 +931,7 @@ def jobs_dispute(
         insufficient_phase = "clawback_lock"
         lock_summary = payments.lock_dispute_funds(created["dispute_id"], conn=conn)
         conn.execute("COMMIT")
-    except sqlite3.IntegrityError:
+    except _db.IntegrityError:
         conn.execute("ROLLBACK")
         raise HTTPException(
             status_code=409, detail="A dispute already exists for this job."

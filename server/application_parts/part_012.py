@@ -1,3 +1,5 @@
+
+from core import db as _db
 # server.application shard 12 — hosted skills API.
 #
 # Endpoints for OpenClaw skill builders:
@@ -158,7 +160,7 @@ def skills_create(
             break
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        except sqlite3.IntegrityError as exc:
+        except _db.IntegrityError as exc:
             last_error = exc
             candidate_name = f"{display_name} #{attempt + 1}"
     if agent_id is None:

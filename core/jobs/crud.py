@@ -144,7 +144,7 @@ def create_job(
                input_payload, created_at, updated_at, max_attempts, parent_job_id, tree_depth, parent_cascade_policy,
                clarification_timeout_seconds, clarification_timeout_policy, dispute_window_hours, judge_agent_id,
                callback_url, callback_secret, output_verification_window_seconds, output_verification_status, batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 job_id,
@@ -193,7 +193,7 @@ def list_jobs_for_batch(batch_id: str, caller_owner_id: str) -> list[dict]:
             """
             SELECT *
             FROM jobs
-            WHERE batch_id = ? AND caller_owner_id = ?
+            WHERE batch_id = %s AND caller_owner_id = %s
             ORDER BY created_at ASC, job_id ASC
             """,
             (normalized_batch_id, normalized_owner_id),
@@ -230,10 +230,10 @@ def list_child_jobs(
             f"""
             SELECT *
             FROM jobs
-            WHERE parent_job_id = ?
+            WHERE parent_job_id = %s
             {where_status}
             ORDER BY created_at ASC, job_id ASC
-            LIMIT ?
+            LIMIT %s
             """,
             tuple(params),
         ).fetchall()
@@ -242,7 +242,7 @@ def list_child_jobs(
 
 def get_job(job_id: str) -> dict | None:
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        row = conn.execute("SELECT * FROM jobs WHERE job_id = %s", (job_id,)).fetchone()
     return _row_to_dict(row) if row else None
 
 
@@ -289,7 +289,7 @@ def list_jobs_for_owner(
         params.append(status)
     if before_created_at:
         cursor_job_id = before_job_id or "\uffff"
-        where_clauses.append("(created_at < ? OR (created_at = ? AND job_id < ?))")
+        where_clauses.append("(created_at < %s OR (created_at = %s AND job_id < %s))")
         params.extend([before_created_at, before_created_at, cursor_job_id])
     where_sql = " AND ".join(where_clauses)
     params.append(limit)
@@ -300,7 +300,7 @@ def list_jobs_for_owner(
             SELECT * FROM jobs
             WHERE {where_sql}
             ORDER BY created_at DESC, job_id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             tuple(params),
         ).fetchall()
@@ -323,7 +323,7 @@ def list_jobs_for_agent(
         params.append(status)
     if before_created_at:
         cursor_job_id = before_job_id or "\uffff"
-        where_clauses.append("(created_at < ? OR (created_at = ? AND job_id < ?))")
+        where_clauses.append("(created_at < %s OR (created_at = %s AND job_id < %s))")
         params.extend([before_created_at, before_created_at, cursor_job_id])
     where_sql = " AND ".join(where_clauses)
     params.append(limit)
@@ -334,7 +334,7 @@ def list_jobs_for_agent(
             SELECT * FROM jobs
             WHERE {where_sql}
             ORDER BY created_at DESC, job_id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             tuple(params),
         ).fetchall()

@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import datetime, timedelta
 
@@ -91,7 +90,7 @@ def claim_job(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?",
+            "SELECT * FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
         if row is None:
@@ -136,10 +135,10 @@ def claim_job(
         conn.execute(
             """
             UPDATE jobs
-            SET status = ?, claim_owner_id = ?, claim_token = ?, claimed_at = ?,
-                lease_expires_at = ?, last_heartbeat_at = ?, attempt_count = ?,
-                next_retry_at = NULL, updated_at = ?
-            WHERE job_id = ?
+            SET status = %s, claim_owner_id = %s, claim_token = %s, claimed_at = %s,
+                lease_expires_at = %s, last_heartbeat_at = %s, attempt_count = %s,
+                next_retry_at = NULL, updated_at = %s
+            WHERE job_id = %s
             """,
             (
                 next_status,
@@ -204,7 +203,7 @@ def heartbeat_job_lease(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?",
+            "SELECT * FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
         if row is None:
@@ -231,16 +230,16 @@ def heartbeat_job_lease(
             """
             UPDATE jobs
             SET lease_expires_at = CASE
-                    WHEN lease_expires_at > ? THEN lease_expires_at
-                    ELSE ?
+                    WHEN lease_expires_at > %s THEN lease_expires_at
+                    ELSE %s
                 END,
-                last_heartbeat_at = ?,
-                updated_at = ?
-            WHERE job_id = ?
+                last_heartbeat_at = %s,
+                updated_at = %s
+            WHERE job_id = %s
               AND status IN ('running', 'awaiting_clarification')
-              AND claim_owner_id = ?
+              AND claim_owner_id = %s
               AND lease_expires_at IS NOT NULL
-              AND lease_expires_at > ?
+              AND lease_expires_at > %s
             """,
             (
                 lease_expires_at,
@@ -300,7 +299,7 @@ def release_job_claim(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?",
+            "SELECT * FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
         if row is None:
@@ -328,8 +327,8 @@ def release_job_claim(
                 claimed_at = NULL,
                 lease_expires_at = NULL,
                 last_heartbeat_at = NULL,
-                updated_at = ?
-            WHERE job_id = ?
+                updated_at = %s
+            WHERE job_id = %s
             """,
             (now, job_id),
         )
@@ -371,7 +370,7 @@ def schedule_job_retry(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?",
+            "SELECT * FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
         if row is None:
@@ -418,19 +417,19 @@ def schedule_job_retry(
         conn.execute(
             """
             UPDATE jobs
-            SET status = ?,
-                error_message = ?,
-                updated_at = ?,
-                completed_at = ?,
+            SET status = %s,
+                error_message = %s,
+                updated_at = %s,
+                completed_at = %s,
                 claim_owner_id = NULL,
                 claim_token = NULL,
                 claimed_at = NULL,
                 lease_expires_at = NULL,
                 last_heartbeat_at = NULL,
-                retry_count = ?,
-                next_retry_at = ?,
-                last_retry_at = ?
-            WHERE job_id = ?
+                retry_count = %s,
+                next_retry_at = %s,
+                last_retry_at = %s
+            WHERE job_id = %s
             """,
             (
                 next_status,
@@ -467,7 +466,7 @@ def mark_job_timeout(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?",
+            "SELECT * FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
         if row is None:
@@ -505,21 +504,21 @@ def mark_job_timeout(
         conn.execute(
             """
             UPDATE jobs
-            SET status = ?,
-                error_message = ?,
-                updated_at = ?,
-                completed_at = ?,
+            SET status = %s,
+                error_message = %s,
+                updated_at = %s,
+                completed_at = %s,
                 claim_owner_id = NULL,
                 claim_token = NULL,
                 claimed_at = NULL,
                 lease_expires_at = NULL,
                 last_heartbeat_at = NULL,
-                retry_count = ?,
-                next_retry_at = ?,
-                last_retry_at = ?,
-                timeout_count = ?,
-                last_timeout_at = ?
-            WHERE job_id = ?
+                retry_count = %s,
+                next_retry_at = %s,
+                last_retry_at = %s,
+                timeout_count = %s,
+                last_timeout_at = %s
+            WHERE job_id = %s
             """,
             (
                 next_status,
@@ -566,10 +565,10 @@ def list_jobs_due_for_retry(limit: int = 100, now: str | None = None) -> list:
               AND completed_at IS NULL
               AND settled_at IS NULL
               AND next_retry_at IS NOT NULL
-              AND next_retry_at <= ?
+              AND next_retry_at <= %s
               AND retry_count < max_attempts
             ORDER BY next_retry_at ASC, created_at ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (now_iso, limit),
         ).fetchall()
@@ -593,11 +592,11 @@ def mark_retry_ready(job_id: str, now: str | None = None) -> dict | None:
                 claimed_at = NULL,
                 lease_expires_at = NULL,
                 last_heartbeat_at = NULL,
-                updated_at = ?
-            WHERE job_id = ?
+                updated_at = %s
+            WHERE job_id = %s
               AND status = 'pending'
               AND next_retry_at IS NOT NULL
-              AND next_retry_at <= ?
+              AND next_retry_at <= %s
             """,
             (now_iso, job_id, now_iso),
         )
@@ -618,9 +617,9 @@ def list_jobs_with_expired_leases(limit: int = 100, now: str | None = None) -> l
               AND completed_at IS NULL
               AND settled_at IS NULL
               AND claim_owner_id IS NOT NULL
-              AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+              AND (lease_expires_at IS NULL OR lease_expires_at <= %s)
             ORDER BY lease_expires_at ASC, created_at ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (now_iso, limit),
         ).fetchall()
@@ -641,9 +640,9 @@ def list_jobs_with_expired_clarification_deadline(
               AND completed_at IS NULL
               AND settled_at IS NULL
               AND clarification_deadline_at IS NOT NULL
-              AND clarification_deadline_at <= ?
+              AND clarification_deadline_at <= %s
             ORDER BY clarification_deadline_at ASC, created_at ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (now_iso, limit),
         ).fetchall()
@@ -666,9 +665,9 @@ def list_jobs_past_sla(
             WHERE status IN ('pending', 'running', 'awaiting_clarification')
               AND completed_at IS NULL
               AND settled_at IS NULL
-              AND created_at <= ?
+              AND created_at <= %s
             ORDER BY created_at ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (threshold, limit),
         ).fetchall()
@@ -690,9 +689,9 @@ def list_jobs_with_expired_output_verification(
               AND settled_at IS NULL
               AND output_verification_status = 'pending'
               AND output_verification_deadline_at IS NOT NULL
-              AND output_verification_deadline_at <= ?
+              AND output_verification_deadline_at <= %s
             ORDER BY output_verification_deadline_at ASC, created_at ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (now_iso, limit),
         ).fetchall()
@@ -710,7 +709,7 @@ def list_completed_jobs_pending_settlement(limit: int = 100) -> list:
               AND completed_at IS NOT NULL
               AND settled_at IS NULL
             ORDER BY completed_at ASC, created_at ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (limit,),
         ).fetchall()
@@ -747,26 +746,26 @@ def update_job_status(
         conn.execute(
             """
             UPDATE jobs
-            SET status = ?, output_payload = ?, error_message = ?,
-                updated_at = ?, completed_at = COALESCE(completed_at, ?),
-                next_retry_at = CASE WHEN ? = 1 THEN NULL ELSE next_retry_at END,
-                claim_owner_id = CASE WHEN ? = 1 THEN NULL ELSE claim_owner_id END,
-                claim_token = CASE WHEN ? = 1 THEN NULL ELSE claim_token END,
-                lease_expires_at = CASE WHEN ? = 1 THEN NULL ELSE lease_expires_at END,
-                last_heartbeat_at = CASE WHEN ? = 1 THEN NULL ELSE last_heartbeat_at END,
+            SET status = %s, output_payload = %s, error_message = %s,
+                updated_at = %s, completed_at = COALESCE(completed_at, %s),
+                next_retry_at = CASE WHEN %s = 1 THEN NULL ELSE next_retry_at END,
+                claim_owner_id = CASE WHEN %s = 1 THEN NULL ELSE claim_owner_id END,
+                claim_token = CASE WHEN %s = 1 THEN NULL ELSE claim_token END,
+                lease_expires_at = CASE WHEN %s = 1 THEN NULL ELSE lease_expires_at END,
+                last_heartbeat_at = CASE WHEN %s = 1 THEN NULL ELSE last_heartbeat_at END,
                 clarification_requested_at = CASE
-                    WHEN ? = 1 OR ? != 'awaiting_clarification' THEN NULL
+                    WHEN %s = 1 OR %s != 'awaiting_clarification' THEN NULL
                     ELSE clarification_requested_at
                 END,
                 clarification_deadline_at = CASE
-                    WHEN ? = 1 OR ? != 'awaiting_clarification' THEN NULL
+                    WHEN %s = 1 OR %s != 'awaiting_clarification' THEN NULL
                     ELSE clarification_deadline_at
                 END,
-                output_signature      = CASE WHEN ? = 1 THEN ? ELSE output_signature END,
-                output_signature_alg  = CASE WHEN ? = 1 THEN ? ELSE output_signature_alg END,
-                output_signed_by_did  = CASE WHEN ? = 1 THEN ? ELSE output_signed_by_did END,
-                output_signed_at      = CASE WHEN ? = 1 THEN ? ELSE output_signed_at END
-            WHERE job_id = ? AND (? = 0 OR completed_at IS NULL)
+                output_signature      = CASE WHEN %s = 1 THEN %s ELSE output_signature END,
+                output_signature_alg  = CASE WHEN %s = 1 THEN %s ELSE output_signature_alg END,
+                output_signed_by_did  = CASE WHEN %s = 1 THEN %s ELSE output_signed_by_did END,
+                output_signed_at      = CASE WHEN %s = 1 THEN %s ELSE output_signed_at END
+            WHERE job_id = %s AND (%s = 0 OR completed_at IS NULL)
             """,
             (
                 status,
@@ -805,8 +804,8 @@ def mark_settled(job_id: str) -> bool:
         result = conn.execute(
             """
             UPDATE jobs
-            SET settled_at = ?
-            WHERE job_id = ? AND settled_at IS NULL
+            SET settled_at = %s
+            WHERE job_id = %s AND settled_at IS NULL
             """,
             (now, job_id),
         )
@@ -822,7 +821,7 @@ def initialize_output_verification_state(job_id: str) -> dict | None:
     now = _now()
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        row = conn.execute("SELECT * FROM jobs WHERE job_id = %s", (job_id,)).fetchone()
         if row is None:
             return None
         raw = dict(row)
@@ -868,8 +867,8 @@ def initialize_output_verification_state(job_id: str) -> dict | None:
                     output_verification_decided_at = NULL,
                     output_verification_decision_owner_id = NULL,
                     output_verification_reason = NULL,
-                    updated_at = ?
-                WHERE job_id = ?
+                    updated_at = %s
+                WHERE job_id = %s
                 """,
                 (now, job_id),
             )
@@ -886,12 +885,12 @@ def initialize_output_verification_state(job_id: str) -> dict | None:
             """
             UPDATE jobs
             SET output_verification_status = 'pending',
-                output_verification_deadline_at = ?,
+                output_verification_deadline_at = %s,
                 output_verification_decided_at = NULL,
                 output_verification_decision_owner_id = NULL,
                 output_verification_reason = NULL,
-                updated_at = ?
-            WHERE job_id = ?
+                updated_at = %s
+            WHERE job_id = %s
             """,
             (deadline, now, job_id),
         )
@@ -917,7 +916,7 @@ def set_output_verification_decision(
     now = _now()
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        row = conn.execute("SELECT * FROM jobs WHERE job_id = %s", (job_id,)).fetchone()
         if row is None:
             return None
         raw = dict(row)
@@ -931,12 +930,12 @@ def set_output_verification_decision(
         conn.execute(
             """
             UPDATE jobs
-            SET output_verification_status = ?,
-                output_verification_decided_at = ?,
-                output_verification_decision_owner_id = ?,
-                output_verification_reason = ?,
-                updated_at = ?
-            WHERE job_id = ?
+            SET output_verification_status = %s,
+                output_verification_decided_at = %s,
+                output_verification_decision_owner_id = %s,
+                output_verification_reason = %s,
+                updated_at = %s
+            WHERE job_id = %s
             """,
             (
                 next_status,
@@ -964,14 +963,14 @@ def mark_output_verification_expired(
             """
             UPDATE jobs
             SET output_verification_status = 'expired',
-                output_verification_decided_at = COALESCE(output_verification_decided_at, ?),
-                output_verification_decision_owner_id = COALESCE(output_verification_decision_owner_id, ?),
+                output_verification_decided_at = COALESCE(output_verification_decided_at, %s),
+                output_verification_decision_owner_id = COALESCE(output_verification_decision_owner_id, %s),
                 output_verification_reason = COALESCE(output_verification_reason, 'Verification window expired without caller decision.'),
-                updated_at = ?
-            WHERE job_id = ?
+                updated_at = %s
+            WHERE job_id = %s
               AND output_verification_status = 'pending'
               AND output_verification_deadline_at IS NOT NULL
-              AND output_verification_deadline_at <= ?
+              AND output_verification_deadline_at <= %s
             """,
             (
                 now,
@@ -987,7 +986,7 @@ def mark_output_verification_expired(
 
 
 def _message_correlation_exists_conn(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     job_id: str,
     correlation_id: str,
     msg_type: str | None = None,
@@ -1000,7 +999,7 @@ def _message_correlation_exists_conn(
             """
             SELECT 1
             FROM job_messages
-            WHERE job_id = ? AND correlation_id = ? AND type = ?
+            WHERE job_id = %s AND correlation_id = %s AND type = %s
             LIMIT 1
             """,
             (job_id, correlation, msg_type),
@@ -1010,7 +1009,7 @@ def _message_correlation_exists_conn(
             """
             SELECT 1
             FROM job_messages
-            WHERE job_id = ? AND correlation_id = ?
+            WHERE job_id = %s AND correlation_id = %s
             LIMIT 1
             """,
             (job_id, correlation),

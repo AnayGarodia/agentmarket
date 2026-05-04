@@ -12,7 +12,6 @@ parsed metadata, and the system prompt the executor uses at run time.
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -27,7 +26,7 @@ _DEFAULT_MAX_OUTPUT_TOKENS = 1500
 _MAX_OUTPUT_TOKENS_HARD_CAP = 4000
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     return _db.get_raw_connection(_resolved_db_path())
 
 
@@ -96,7 +95,7 @@ def create_hosted_skill(
                 (skill_id, agent_id, owner_id, slug, raw_md, system_prompt,
                  parsed_metadata_json, model_chain, temperature, max_output_tokens,
                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 skill_id,
@@ -116,7 +115,7 @@ def create_hosted_skill(
     return get_hosted_skill(skill_id) or {}
 
 
-def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+def _row_to_dict(row: dict | None) -> dict[str, Any] | None:
     if row is None:
         return None
     out = dict(row)
@@ -138,7 +137,7 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 def get_hosted_skill(skill_id: str) -> dict[str, Any] | None:
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM hosted_skills WHERE skill_id = ?",
+            "SELECT * FROM hosted_skills WHERE skill_id = %s",
             (skill_id,),
         ).fetchone()
     return _row_to_dict(row)
@@ -147,7 +146,7 @@ def get_hosted_skill(skill_id: str) -> dict[str, Any] | None:
 def get_hosted_skill_by_agent_id(agent_id: str) -> dict[str, Any] | None:
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM hosted_skills WHERE agent_id = ?",
+            "SELECT * FROM hosted_skills WHERE agent_id = %s",
             (agent_id,),
         ).fetchone()
     return _row_to_dict(row)
@@ -162,9 +161,9 @@ def list_hosted_skills_for_owner(
         rows = conn.execute(
             """
             SELECT * FROM hosted_skills
-            WHERE owner_id = ?
+            WHERE owner_id = %s
             ORDER BY created_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (owner_id, capped),
         ).fetchall()
@@ -174,7 +173,7 @@ def list_hosted_skills_for_owner(
 def delete_hosted_skill(skill_id: str) -> bool:
     with _conn() as conn:
         result = conn.execute(
-            "DELETE FROM hosted_skills WHERE skill_id = ?",
+            "DELETE FROM hosted_skills WHERE skill_id = %s",
             (skill_id,),
         )
     return result.rowcount > 0
@@ -191,6 +190,6 @@ def list_pending_skill_agent_ids() -> list[str]:
     try:
         with _conn() as conn:
             rows = conn.execute("SELECT agent_id FROM hosted_skills").fetchall()
-    except sqlite3.OperationalError:
+    except _db.OperationalError:
         return []
     return [str(r["agent_id"]) for r in rows]

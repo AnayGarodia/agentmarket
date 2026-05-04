@@ -19,7 +19,8 @@ import json
 import logging
 import random
 import secrets
-import sqlite3
+
+from core import db as _db
 import threading
 import time
 import uuid
@@ -80,7 +81,7 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     user_id,
                     normalized_username,
@@ -93,7 +94,7 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
             )
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     key_id,
                     user_id,
@@ -104,7 +105,7 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
                     now,
                 ),
             )
-        except sqlite3.IntegrityError as exc:
+        except _db.IntegrityError as exc:
             message = str(exc).lower()
             if (
                 "users.email" in message
@@ -152,11 +153,11 @@ def login_user(
     with _conn() as conn:
         if email:
             row = conn.execute(
-                "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)
+                "SELECT * FROM users WHERE email = %s", (email.lower().strip(),)
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT * FROM users WHERE username = ?", (str(username).strip(),)
+                "SELECT * FROM users WHERE username = %s", (str(username).strip(),)
             ).fetchone()
     if row is None:
         return None
@@ -182,7 +183,7 @@ def login_user(
                 """
                 SELECT key_id, key_prefix
                 FROM api_keys
-                WHERE user_id = ? AND name = 'Session key' AND is_active = 1
+                WHERE user_id = %s AND name = 'Session key' AND is_active = 1
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -197,7 +198,7 @@ def login_user(
         # Either explicit rotation or no existing key: revoke prior sessions and mint.
         with _conn() as conn:
             conn.execute(
-                "UPDATE api_keys SET is_active = 0 WHERE user_id = ? AND name = 'Session key' AND is_active = 1",
+                "UPDATE api_keys SET is_active = 0 WHERE user_id = %s AND name = 'Session key' AND is_active = 1",
                 (user["user_id"],),
             )
         result = _create_key_for_user(user["user_id"], "Session key")
@@ -234,7 +235,7 @@ def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool
 
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE email = ?", (normalized_email,)
+            "SELECT * FROM users WHERE email = %s", (normalized_email,)
         ).fetchone()
 
     if row is not None:
@@ -245,7 +246,7 @@ def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool
         # Revoke prior session keys, mint a fresh one — same pattern as login_user.
         with _conn() as conn:
             conn.execute(
-                "UPDATE api_keys SET is_active = 0 WHERE user_id = ? AND name = 'Session key' AND is_active = 1",
+                "UPDATE api_keys SET is_active = 0 WHERE user_id = %s AND name = 'Session key' AND is_active = 1",
                 (user["user_id"],),
             )
         result = _create_key_for_user(user["user_id"], "Session key")
@@ -276,7 +277,7 @@ def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool
     with _conn() as conn:
         while (
             conn.execute(
-                "SELECT 1 FROM users WHERE username = ?", (candidate,)
+                "SELECT 1 FROM users WHERE username = %s", (candidate,)
             ).fetchone()
             is not None
         ):
@@ -295,7 +296,7 @@ def get_user_by_id(user_id: str) -> dict | None:
     """Fetch a user record by ID. Returns None if not found. Password hash is stripped from the result."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE user_id = ?", (user_id,)
+            "SELECT * FROM users WHERE user_id = %s", (user_id,)
         ).fetchone()
     if not row:
         return None
@@ -312,7 +313,7 @@ def update_user_role(user_id: str, role: str) -> None:
             f"Invalid role '{role}'. Must be one of: builder, hirer, both."
         )
     with _conn() as conn:
-        conn.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+        conn.execute("UPDATE users SET role = %s WHERE user_id = %s", (role, user_id))
 
 
 def record_legal_acceptance(
@@ -337,24 +338,24 @@ def record_legal_acceptance(
     accepted_at = datetime.now(timezone.utc).isoformat()
     with _conn() as conn:
         existing = conn.execute(
-            "SELECT user_id FROM users WHERE user_id = ?", (str(user_id),)
+            "SELECT user_id FROM users WHERE user_id = %s", (str(user_id),)
         ).fetchone()
         if existing is None:
             return None
         conn.execute(
             """
             UPDATE users
-            SET terms_version_accepted = ?,
-                privacy_version_accepted = ?,
-                legal_accepted_at = ?
-            WHERE user_id = ?
+            SET terms_version_accepted = %s,
+                privacy_version_accepted = %s,
+                legal_accepted_at = %s
+            WHERE user_id = %s
             """,
             (accepted_terms, accepted_privacy, accepted_at, str(user_id)),
         )
         row = conn.execute(
             """
             SELECT terms_version_accepted, privacy_version_accepted, legal_accepted_at
-            FROM users WHERE user_id = ?
+            FROM users WHERE user_id = %s
             """,
             (str(user_id),),
         ).fetchone()
@@ -388,7 +389,7 @@ def _create_key_for_user(
     with _conn() as conn:
         conn.execute(
             "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, per_job_cap_cents, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 key_id,
                 user_id,
@@ -423,7 +424,7 @@ def count_user_active_keys(user_id: str) -> int:
     """Return the number of active non-session API keys for a user."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ? AND is_active = 1 AND name != 'Session key'",
+            "SELECT COUNT(*) AS n FROM api_keys WHERE user_id = %s AND is_active = 1 AND name != 'Session key'",
             (user_id,),
         ).fetchone()
     return int(row["n"]) if row else 0
@@ -474,7 +475,7 @@ def _flush_last_used(key_id: str) -> None:
     try:
         with _conn() as conn:
             conn.execute(
-                "UPDATE api_keys SET last_used_at = ? WHERE key_id = ?",
+                "UPDATE api_keys SET last_used_at = %s WHERE key_id = %s",
                 (_now(), key_id),
             )
     except Exception:
@@ -522,7 +523,7 @@ def verify_api_key(raw_key: str) -> dict | None:
                    u.terms_version_accepted, u.privacy_version_accepted, u.legal_accepted_at
             FROM api_keys ak
             JOIN users u ON ak.user_id = u.user_id
-            WHERE ak.key_hash = ? AND ak.is_active = 1 AND u.status = 'active'
+            WHERE ak.key_hash = %s AND ak.is_active = 1 AND u.status = 'active'
             """,
             (key_hash,),
         ).fetchone()
@@ -561,7 +562,7 @@ def api_key_is_revoked(raw_key: str) -> bool:
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     with _conn() as conn:
         row = conn.execute(
-            "SELECT is_active FROM api_keys WHERE key_hash = ?",
+            "SELECT is_active FROM api_keys WHERE key_hash = %s",
             (key_hash,),
         ).fetchone()
     return row is not None and int(row["is_active"] or 0) == 0
@@ -604,12 +605,12 @@ def accept_legal_terms(
         result = conn.execute(
             """
             UPDATE users
-            SET terms_version_accepted = ?,
-                privacy_version_accepted = ?,
-                legal_accepted_at = ?,
-                legal_accept_ip = ?,
-                legal_accept_user_agent = ?
-            WHERE user_id = ?
+            SET terms_version_accepted = %s,
+                privacy_version_accepted = %s,
+                legal_accepted_at = %s,
+                legal_accept_ip = %s,
+                legal_accept_user_agent = %s
+            WHERE user_id = %s
             """,
             (
                 normalized_terms,
@@ -626,7 +627,7 @@ def accept_legal_terms(
             """
             SELECT user_id, terms_version_accepted, privacy_version_accepted, legal_accepted_at
             FROM users
-            WHERE user_id = ?
+            WHERE user_id = %s
             """,
             (normalized_user_id,),
         ).fetchone()
@@ -657,7 +658,7 @@ def create_agent_api_key(agent_id: str, name: str = "Agent key") -> dict:
         conn.execute(
             """
             INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, key_type, name, created_at, revoked_at)
-            VALUES (?, ?, ?, ?, 'worker', ?, ?, NULL)
+            VALUES (%s, %s, %s, %s, 'worker', %s, %s, NULL)
             """,
             (
                 key_id,
@@ -697,7 +698,7 @@ def create_agent_caller_api_key(agent_id: str, name: str = "Caller key") -> dict
         conn.execute(
             """
             INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, key_type, name, created_at, revoked_at)
-            VALUES (?, ?, ?, ?, 'caller', ?, ?, NULL)
+            VALUES (%s, %s, %s, %s, 'caller', %s, %s, NULL)
             """,
             (
                 key_id,
@@ -739,11 +740,11 @@ def verify_agent_api_key(raw_key: str) -> dict | None:
                 SELECT ak.key_id, ak.agent_id, ak.key_type, a.owner_id, a.status AS agent_status
                 FROM agent_keys ak
                 JOIN agents a ON a.agent_id = ak.agent_id
-                WHERE ak.key_hash = ? AND ak.revoked_at IS NULL
+                WHERE ak.key_hash = %s AND ak.revoked_at IS NULL
                 """,
                 (key_hash,),
             ).fetchone()
-        except sqlite3.OperationalError:
+        except _db.OperationalError:
             return None
     if row is None:
         return None
@@ -766,7 +767,7 @@ def list_api_keys(user_id: str) -> list:
     with _conn() as conn:
         rows = conn.execute(
             "SELECT key_id, key_prefix, name, scopes, max_spend_cents, per_job_cap_cents, created_at, last_used_at, is_active"
-            " FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+            " FROM api_keys WHERE user_id = %s ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
     keys: list[dict] = []
@@ -797,7 +798,7 @@ def list_agent_api_keys(agent_id: str) -> list[dict]:
             """
             SELECT key_id, agent_id, key_prefix, name, created_at, revoked_at
             FROM agent_keys
-            WHERE agent_id = ?
+            WHERE agent_id = %s
             ORDER BY created_at DESC
             """,
             (normalized_agent_id,),
@@ -813,7 +814,7 @@ def list_agent_api_keys(agent_id: str) -> list[dict]:
 def revoke_api_key(key_id: str, user_id: str) -> bool:
     with _conn() as conn:
         result = conn.execute(
-            "UPDATE api_keys SET is_active = 0 WHERE key_id = ? AND user_id = ? AND is_active = 1",
+            "UPDATE api_keys SET is_active = 0 WHERE key_id = %s AND user_id = %s AND is_active = 1",
             (key_id, user_id),
         )
     return result.rowcount > 0
@@ -858,7 +859,7 @@ def rotate_api_key(
             """
             SELECT key_id, name, scopes, max_spend_cents, per_job_cap_cents
             FROM api_keys
-            WHERE key_id = ? AND user_id = ? AND is_active = 1
+            WHERE key_id = %s AND user_id = %s AND is_active = 1
             """,
             (key_id, user_id),
         ).fetchone()
@@ -904,7 +905,7 @@ def rotate_api_key(
                 created_at,
                 is_active
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
             """,
             (
                 new_key_id,
@@ -922,7 +923,7 @@ def rotate_api_key(
             """
             UPDATE api_keys
             SET is_active = 0
-            WHERE key_id = ? AND user_id = ?
+            WHERE key_id = %s AND user_id = %s
             """,
             (key_id, user_id),
         )
@@ -965,7 +966,7 @@ def create_password_reset_token(email: str) -> str | None:
 
     with _conn() as conn:
         row = conn.execute(
-            "SELECT user_id FROM users WHERE LOWER(email) = ? AND status = 'active'",
+            "SELECT user_id FROM users WHERE LOWER(email) = %s AND status = 'active'",
             (normalized,),
         ).fetchone()
     if row is None:
@@ -982,11 +983,11 @@ def create_password_reset_token(email: str) -> str | None:
     with _conn() as conn:
         # Invalidate any previous unused tokens for this user
         conn.execute(
-            "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+            "UPDATE password_reset_tokens SET used_at = %s WHERE user_id = %s AND used_at IS NULL",
             (_now(), user_id),
         )
         conn.execute(
-            "INSERT INTO password_reset_tokens (token_id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO password_reset_tokens (token_id, user_id, token_hash, expires_at) VALUES (%s, %s, %s, %s)",
             (token_id, user_id, token_hash, expires_at),
         )
 
@@ -1020,8 +1021,8 @@ def consume_password_reset_token(email: str, otp: str, new_password: str) -> Non
             SELECT prt.token_id, prt.user_id, prt.expires_at, prt.used_at
             FROM password_reset_tokens prt
             JOIN users u ON prt.user_id = u.user_id
-            WHERE prt.token_hash = ?
-              AND LOWER(u.email) = ?
+            WHERE prt.token_hash = %s
+              AND LOWER(u.email) = %s
               AND u.status = 'active'
             """,
             (token_hash, normalized_email),
@@ -1043,16 +1044,16 @@ def consume_password_reset_token(email: str, otp: str, new_password: str) -> Non
 
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
-            "UPDATE users SET password_hash = ?, salt = ? WHERE user_id = ?",
+            "UPDATE users SET password_hash = %s, salt = %s WHERE user_id = %s",
             (new_hash, salt, user_id),
         )
         conn.execute(
-            "UPDATE password_reset_tokens SET used_at = ? WHERE token_id = ?",
+            "UPDATE password_reset_tokens SET used_at = %s WHERE token_id = %s",
             (now_iso, token_id),
         )
         # Revoke all existing API keys so old sessions are invalidated
         conn.execute(
-            "UPDATE api_keys SET is_active = 0 WHERE user_id = ?",
+            "UPDATE api_keys SET is_active = 0 WHERE user_id = %s",
             (user_id,),
         )
 
@@ -1104,7 +1105,7 @@ def issue_signup_verification(
 
     with _conn() as conn:
         existing = conn.execute(
-            "SELECT user_id FROM users WHERE LOWER(email) = ?",
+            "SELECT user_id FROM users WHERE LOWER(email) = %s",
             (normalized_email,),
         ).fetchone()
     if existing is not None:
@@ -1123,14 +1124,14 @@ def issue_signup_verification(
     with _conn() as conn:
         # Invalidate prior unconsumed tokens for this email so only the latest works.
         conn.execute(
-            "UPDATE signup_verification_tokens SET consumed_at = ? "
-            "WHERE LOWER(email) = ? AND consumed_at IS NULL",
+            "UPDATE signup_verification_tokens SET consumed_at = %s "
+            "WHERE LOWER(email) = %s AND consumed_at IS NULL",
             (now, normalized_email),
         )
         conn.execute(
             "INSERT INTO signup_verification_tokens "
             "(token_id, email, username, password_hash, salt, role, code_hash, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 token_id,
                 normalized_email,
@@ -1157,7 +1158,7 @@ def reissue_signup_verification_otp(email: str) -> str | None:
     with _conn() as conn:
         row = conn.execute(
             "SELECT token_id FROM signup_verification_tokens "
-            "WHERE LOWER(email) = ? AND consumed_at IS NULL "
+            "WHERE LOWER(email) = %s AND consumed_at IS NULL "
             "ORDER BY created_at DESC LIMIT 1",
             (normalized_email,),
         ).fetchone()
@@ -1173,8 +1174,8 @@ def reissue_signup_verification_otp(email: str) -> str | None:
 
     with _conn() as conn:
         conn.execute(
-            "UPDATE signup_verification_tokens SET code_hash = ?, expires_at = ?, created_at = ? "
-            "WHERE token_id = ?",
+            "UPDATE signup_verification_tokens SET code_hash = %s, expires_at = %s, created_at = %s "
+            "WHERE token_id = %s",
             (code_hash, expires_at, now, row["token_id"]),
         )
 
@@ -1203,7 +1204,7 @@ def consume_signup_verification(email: str, otp: str) -> dict:
         row = conn.execute(
             "SELECT token_id, email, username, password_hash, salt, role, expires_at, consumed_at "
             "FROM signup_verification_tokens "
-            "WHERE LOWER(email) = ? AND code_hash = ? "
+            "WHERE LOWER(email) = %s AND code_hash = %s "
             "ORDER BY created_at DESC LIMIT 1",
             (normalized_email, code_hash),
         ).fetchone()
@@ -1219,12 +1220,12 @@ def consume_signup_verification(email: str, otp: str) -> dict:
 
         # Re-check email is still free (someone might have registered concurrently).
         existing = conn.execute(
-            "SELECT user_id FROM users WHERE LOWER(email) = ?",
+            "SELECT user_id FROM users WHERE LOWER(email) = %s",
             (normalized_email,),
         ).fetchone()
         if existing is not None:
             conn.execute(
-                "UPDATE signup_verification_tokens SET consumed_at = ? WHERE token_id = ?",
+                "UPDATE signup_verification_tokens SET consumed_at = %s WHERE token_id = %s",
                 (now_iso, row["token_id"]),
             )
             raise SignupVerificationError("An account with that email already exists.")
@@ -1238,7 +1239,7 @@ def consume_signup_verification(email: str, otp: str) -> dict:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     user_id,
                     row["username"],
@@ -1251,7 +1252,7 @@ def consume_signup_verification(email: str, otp: str) -> dict:
             )
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     key_id,
                     user_id,
@@ -1263,10 +1264,10 @@ def consume_signup_verification(email: str, otp: str) -> dict:
                 ),
             )
             conn.execute(
-                "UPDATE signup_verification_tokens SET consumed_at = ? WHERE token_id = ?",
+                "UPDATE signup_verification_tokens SET consumed_at = %s WHERE token_id = %s",
                 (now_iso, row["token_id"]),
             )
-        except sqlite3.IntegrityError as exc:
+        except _db.IntegrityError as exc:
             message = str(exc).lower()
             if (
                 "users.email" in message

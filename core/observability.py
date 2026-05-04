@@ -12,9 +12,9 @@ Designed to add zero overhead when the metrics table isn't available yet
 from __future__ import annotations
 
 import logging
-import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Generator
 
 from core import db as _db
@@ -64,18 +64,19 @@ def record_call(
     Silently skips if the metrics table doesn't exist yet (pre-migration).
     """
     try:
-        conn: sqlite3.Connection = _db.get_raw_connection(_db.DB_PATH)
+        conn: _db.DbConnection = _db.get_raw_connection(_db.DB_PATH)
         conn.execute(
             """
             INSERT INTO tool_invocation_metrics
                 (agent_id, caller_id, latency_ms, bytes_in, bytes_out, cached, created_at)
             VALUES
-                (?, ?, ?, ?, ?, ?, datetime('now'))
+                (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (agent_id, caller_id, latency_ms, bytes_in, bytes_out, int(cached)),
+            (agent_id, caller_id, latency_ms, bytes_in, bytes_out, int(cached),
+             datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
-    except sqlite3.OperationalError as exc:
+    except _db.OperationalError as exc:
         # Table missing pre-migration — ignore.
         if "no such table" not in str(exc):
             logger.debug("observability: metric write failed: %s", exc)

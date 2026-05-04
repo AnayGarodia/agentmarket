@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -30,7 +29,7 @@ def _resolved_db_path() -> str:
     return DB_PATH
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     return _db.get_raw_connection(_resolved_db_path())
 
 
@@ -127,7 +126,7 @@ def get_cached(
             """
             SELECT output_json, expires_at
             FROM agent_result_cache
-            WHERE cache_key = ?
+            WHERE cache_key = %s
             """,
             (key,),
         ).fetchone()
@@ -135,12 +134,12 @@ def get_cached(
             return None
         expires_at = str(row["expires_at"] or "").strip()
         if expires_at and expires_at <= _now().isoformat():
-            conn.execute("DELETE FROM agent_result_cache WHERE cache_key = ?", (key,))
+            conn.execute("DELETE FROM agent_result_cache WHERE cache_key = %s", (key,))
             return None
         try:
             return json.loads(row["output_json"])
         except (json.JSONDecodeError, TypeError):
-            conn.execute("DELETE FROM agent_result_cache WHERE cache_key = ?", (key,))
+            conn.execute("DELETE FROM agent_result_cache WHERE cache_key = %s", (key,))
             return None
 
 
@@ -214,7 +213,7 @@ def set_cached(
         conn.execute(
             """
             INSERT INTO agent_result_cache (cache_key, agent_id, output_json, created_at, expires_at, job_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT(cache_key) DO UPDATE SET
                 agent_id = excluded.agent_id,
                 output_json = excluded.output_json,
@@ -238,7 +237,7 @@ def evict_expired() -> int:
     init_cache_db()
     with _conn() as conn:
         result = conn.execute(
-            "DELETE FROM agent_result_cache WHERE expires_at < ?",
+            "DELETE FROM agent_result_cache WHERE expires_at < %s",
             (_now().isoformat(),),
         )
     return int(result.rowcount or 0)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -23,7 +22,7 @@ def _resolved_db_path() -> str:
     return DB_PATH
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     return _db.get_raw_connection(_resolved_db_path())
 
 
@@ -63,7 +62,7 @@ def _decode_json(raw: str | None, default):
         return default
 
 
-def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
+def _row_to_dict(row: dict | None) -> dict | None:
     if row is None:
         return None
     payload = dict(row)
@@ -99,7 +98,7 @@ def create_compare(
                 status,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, 'running', ?)
+            VALUES (%s, %s, %s, %s, %s, 'running', %s)
             """,
             (
                 compare_id,
@@ -125,7 +124,7 @@ def get_compare(compare_id: str) -> dict | None:
     init_db()
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM compare_sessions WHERE compare_id = ?",
+            "SELECT * FROM compare_sessions WHERE compare_id = %s",
             (str(compare_id).strip(),),
         ).fetchone()
     return _row_to_dict(row)
@@ -140,8 +139,8 @@ def mark_complete(compare_id: str) -> dict | None:
             """
             UPDATE compare_sessions
             SET status = 'complete',
-                completed_at = COALESCE(completed_at, ?)
-            WHERE compare_id = ?
+                completed_at = COALESCE(completed_at, %s)
+            WHERE compare_id = %s
             """,
             (now, str(compare_id).strip()),
         )
@@ -156,7 +155,7 @@ def select_winner(compare_id: str, winner_agent_id: str) -> dict | None:
     now = _now()
     with _conn() as conn:
         row = conn.execute(
-            "SELECT winner_agent_id FROM compare_sessions WHERE compare_id = ?",
+            "SELECT winner_agent_id FROM compare_sessions WHERE compare_id = %s",
             (normalized_compare_id,),
         ).fetchone()
         if row is None:
@@ -167,10 +166,10 @@ def select_winner(compare_id: str, winner_agent_id: str) -> dict | None:
         conn.execute(
             """
             UPDATE compare_sessions
-            SET winner_agent_id = COALESCE(winner_agent_id, ?),
+            SET winner_agent_id = COALESCE(winner_agent_id, %s),
                 status = 'complete',
-                completed_at = COALESCE(completed_at, ?)
-            WHERE compare_id = ?
+                completed_at = COALESCE(completed_at, %s)
+            WHERE compare_id = %s
             """,
             (normalized_winner, now, normalized_compare_id),
         )

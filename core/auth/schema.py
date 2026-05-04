@@ -22,7 +22,6 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-import sqlite3
 import sys
 from datetime import datetime, timezone
 
@@ -61,7 +60,7 @@ def _resolved_db_path() -> str:
     return DB_PATH
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     """Thread-local connection with WAL mode to match registry/payments."""
     conn = _db.get_raw_connection(_resolved_db_path())
     _local.conn = conn
@@ -72,29 +71,42 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table_name,),
-    ).fetchone()
+def _table_exists(conn: _db.DbConnection, table_name: str) -> bool:
+    if _db.IS_POSTGRES:
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s",
+            (table_name,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = %s",
+            (table_name,),
+        ).fetchone()
     return row is not None
 
 
 _ALLOWED_PRAGMA_TABLES = frozenset({"users", "api_keys", "agent_keys"})
 
 
-def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+def _table_columns(conn: _db.DbConnection, table_name: str) -> set[str]:
     if table_name not in _ALLOWED_PRAGMA_TABLES:
         raise ValueError(
             f"Disallowed table name for schema introspection: {table_name!r}"
         )
+    if _db.IS_POSTGRES:
+        rows = conn.execute(
+            "SELECT column_name AS name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s",
+            (table_name,),
+        ).fetchall()
+        return {row["name"] for row in rows}
     return {
         row["name"]
         for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     }
 
 
-def _create_users_table(conn: sqlite3.Connection, table_name: str = "users") -> None:
+def _create_users_table(conn: _db.DbConnection, table_name: str = "users") -> None:
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             user_id       TEXT PRIMARY KEY,
@@ -114,7 +126,7 @@ def _create_users_table(conn: sqlite3.Connection, table_name: str = "users") -> 
 
 
 def _create_api_keys_table(
-    conn: sqlite3.Connection, table_name: str = "api_keys"
+    conn: _db.DbConnection, table_name: str = "api_keys"
 ) -> None:
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
@@ -134,7 +146,7 @@ def _create_api_keys_table(
 
 
 def _create_agent_keys_table(
-    conn: sqlite3.Connection, table_name: str = "agent_keys"
+    conn: _db.DbConnection, table_name: str = "agent_keys"
 ) -> None:
     # ``key_type`` is 'worker' (legacy `azk_` keys, valid for claim/heartbeat/complete)
     # or 'caller' (new `azac_` keys, valid for hiring other agents on behalf of this
@@ -154,7 +166,7 @@ def _create_agent_keys_table(
     """)
 
 
-def _ensure_users_schema(conn: sqlite3.Connection) -> None:
+def _ensure_users_schema(conn: _db.DbConnection) -> None:
     if not _table_exists(conn, "users"):
         _create_users_table(conn)
         return
@@ -298,7 +310,7 @@ def _normalize_legacy_api_key_row(
     )
 
 
-def _migrate_api_keys_table(conn: sqlite3.Connection) -> None:
+def _migrate_api_keys_table(conn: _db.DbConnection) -> None:
     rows = conn.execute(
         "SELECT rowid AS _legacy_rowid, * FROM api_keys ORDER BY rowid"
     ).fetchall()
@@ -317,7 +329,7 @@ def _migrate_api_keys_table(conn: sqlite3.Connection) -> None:
             """
             INSERT INTO api_keys__canonical
                 (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, per_job_cap_cents, created_at, last_used_at, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             normalized,
         )
@@ -326,7 +338,7 @@ def _migrate_api_keys_table(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE api_keys__canonical RENAME TO api_keys")
 
 
-def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
+def _ensure_api_keys_schema(conn: _db.DbConnection) -> None:
     if not _table_exists(conn, "api_keys"):
         _create_api_keys_table(conn)
         return
@@ -367,7 +379,7 @@ def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         UPDATE api_keys
-        SET key_prefix = ? || substr(key_hash, 1, 9)
+        SET key_prefix = %s || substr(key_hash, 1, 9)
         WHERE key_prefix IS NULL OR TRIM(key_prefix) = ''
         """,
         (KEY_PREFIX,),
@@ -416,7 +428,7 @@ def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
+def _ensure_agent_keys_schema(conn: _db.DbConnection) -> None:
     if not _table_exists(conn, "agent_keys"):
         _create_agent_keys_table(conn)
         return
@@ -464,7 +476,7 @@ def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
                 """
                 INSERT INTO agent_keys__canonical
                     (key_id, agent_id, key_hash, key_prefix, name, created_at, revoked_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (key_id, agent_id, key_hash, key_prefix, name, created_at, revoked_at),
             )

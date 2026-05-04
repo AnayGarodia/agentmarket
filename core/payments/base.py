@@ -19,7 +19,6 @@
 
 import logging
 import os
-import sqlite3
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -176,7 +175,7 @@ def compute_success_distribution(
     }
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _db.DbConnection:
     """Return a thread-local SQLite connection with WAL mode."""
     return _db.get_raw_connection(_resolved_db_path())
 
@@ -185,7 +184,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _add_column_if_missing(conn: sqlite3.Connection, ddl: str) -> None:
+def _add_column_if_missing(conn: _db.DbConnection, ddl: str) -> None:
     """Run ALTER TABLE ADD COLUMN and ignore duplicate-column errors.
 
     Some CI runners have shown instability around repeated PRAGMA table_info reads
@@ -194,7 +193,7 @@ def _add_column_if_missing(conn: sqlite3.Connection, ddl: str) -> None:
     """
     try:
         conn.execute(ddl)
-    except sqlite3.OperationalError as exc:
+    except _db.OperationalError as exc:
         if "duplicate column name" not in str(exc).lower():
             raise
 
@@ -315,7 +314,7 @@ def init_payments_db() -> None:
 
 
 def _insert_tx(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     wallet_id: str,
     tx_type: str,
     amount_cents: int,
@@ -337,7 +336,7 @@ def _insert_tx(
         """
         INSERT INTO transactions
             (tx_id, wallet_id, type, amount_cents, related_tx_id, agent_id, charged_by_key_id, memo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             tx_id,
@@ -352,14 +351,14 @@ def _insert_tx(
         ),
     )
     conn.execute(
-        "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
+        "UPDATE wallets SET balance_cents = balance_cents + %s WHERE wallet_id = %s",
         (amount_cents, wallet_id),
     )
     return tx_id
 
 
 def _insert_tx_only(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     wallet_id: str,
     tx_type: str,
     amount_cents: int,
@@ -377,7 +376,7 @@ def _insert_tx_only(
         """
         INSERT INTO transactions
             (tx_id, wallet_id, type, amount_cents, related_tx_id, agent_id, charged_by_key_id, memo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             tx_id,
@@ -395,7 +394,7 @@ def _insert_tx_only(
 
 
 def _resolve_charged_by_key_id(
-    conn: sqlite3.Connection,
+    conn: _db.DbConnection,
     charged_by_key_id: str | None,
     related_tx_id: str | None,
 ) -> str | None:
@@ -409,7 +408,7 @@ def _resolve_charged_by_key_id(
         """
         SELECT charged_by_key_id
         FROM transactions
-        WHERE tx_id = ?
+        WHERE tx_id = %s
         LIMIT 1
         """,
         (related,),
@@ -441,7 +440,7 @@ def get_or_create_wallet(
     """
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM wallets WHERE owner_id = ?", (owner_id,)
+            "SELECT * FROM wallets WHERE owner_id = %s", (owner_id,)
         ).fetchone()
         if row:
             return dict(row)
@@ -452,12 +451,12 @@ def get_or_create_wallet(
                 "INSERT INTO wallets ("
                 " wallet_id, owner_id, balance_cents, caller_trust, created_at,"
                 " parent_wallet_id, display_label"
-                ") VALUES (?, ?, 0, 0.5, ?, ?, ?)",
+                ") VALUES (%s, %s, 0, 0.5, %s, %s, %s)",
                 (wallet_id, owner_id, created_at, parent_wallet_id, display_label),
             )
-        except sqlite3.IntegrityError:
+        except _db.IntegrityError:
             row = conn.execute(
-                "SELECT * FROM wallets WHERE owner_id = ?", (owner_id,)
+                "SELECT * FROM wallets WHERE owner_id = %s", (owner_id,)
             ).fetchone()
             return dict(row)
         return {
@@ -477,7 +476,7 @@ def get_or_create_wallet(
 def get_wallet(wallet_id: str) -> dict | None:
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)
+            "SELECT * FROM wallets WHERE wallet_id = %s", (wallet_id,)
         ).fetchone()
     return dict(row) if row else None
 
@@ -486,7 +485,7 @@ def get_wallet_by_owner(owner_id: str) -> dict | None:
     """Look up a wallet by owner_id (user_id or 'platform')."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM wallets WHERE owner_id = ?", (owner_id,)
+            "SELECT * FROM wallets WHERE owner_id = %s", (owner_id,)
         ).fetchone()
     return dict(row) if row else None
 
@@ -507,15 +506,15 @@ def set_wallet_daily_spend_limit(
         updated = conn.execute(
             """
             UPDATE wallets
-            SET daily_spend_limit_cents = ?
-            WHERE wallet_id = ?
+            SET daily_spend_limit_cents = %s
+            WHERE wallet_id = %s
             """,
             (normalized_limit, wallet_id),
         ).rowcount
         if updated == 0:
             raise ValueError(f"Wallet '{wallet_id}' not found.")
         row = conn.execute(
-            "SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)
+            "SELECT * FROM wallets WHERE wallet_id = %s", (wallet_id,)
         ).fetchone()
     return dict(row)
 
@@ -542,16 +541,16 @@ def update_wallet_caller_trust(owner_id: str, trust_score: float) -> dict | None
         raise ValueError("trust_score must be in [0, 1].")
     with _conn() as conn:
         row = conn.execute(
-            "SELECT wallet_id FROM wallets WHERE owner_id = ?", (str(owner_id),)
+            "SELECT wallet_id FROM wallets WHERE owner_id = %s", (str(owner_id),)
         ).fetchone()
         if row is None:
             return None
         conn.execute(
-            "UPDATE wallets SET caller_trust = ? WHERE owner_id = ?",
+            "UPDATE wallets SET caller_trust = %s WHERE owner_id = %s",
             (normalized, str(owner_id)),
         )
         updated = conn.execute(
-            "SELECT * FROM wallets WHERE owner_id = ?", (str(owner_id),)
+            "SELECT * FROM wallets WHERE owner_id = %s", (str(owner_id),)
         ).fetchone()
     return dict(updated) if updated is not None else None
 
@@ -564,12 +563,12 @@ def charge(wallet_id: str, amount_cents: int, memo: str = "") -> str:
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT balance_cents FROM wallets WHERE wallet_id = ?", (wallet_id,)
+            "SELECT balance_cents FROM wallets WHERE wallet_id = %s", (wallet_id,)
         ).fetchone()
         if row is None:
             raise ValueError(f"Wallet '{wallet_id}' not found.")
         updated = conn.execute(
-            "UPDATE wallets SET balance_cents = balance_cents - ? WHERE wallet_id = ? AND balance_cents >= ?",
+            "UPDATE wallets SET balance_cents = balance_cents - %s WHERE wallet_id = %s AND balance_cents >= %s",
             (amount_cents, wallet_id, amount_cents),
         ).rowcount
         if updated == 0:
@@ -585,9 +584,9 @@ def get_wallet_transactions(wallet_id: str, limit: int = 20) -> list:
         rows = conn.execute(
             """
             SELECT * FROM transactions
-            WHERE wallet_id = ?
+            WHERE wallet_id = %s
             ORDER BY created_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (wallet_id, min(limit, 100)),  # cap at 100 for safety
         ).fetchall()
@@ -610,7 +609,7 @@ def get_agent_earnings_breakdown(wallet_id: str) -> list[dict]:
                 COUNT(*)           AS call_count,
                 MAX(created_at)    AS last_earned_at
             FROM transactions
-            WHERE wallet_id = ?
+            WHERE wallet_id = %s
               AND type = 'payout'
               AND agent_id IS NOT NULL
             GROUP BY agent_id
@@ -630,13 +629,13 @@ def list_connect_withdrawals(wallet_id: str, limit: int = 20) -> list[dict]:
                 """
                 SELECT transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at
                 FROM stripe_connect_transfers
-                WHERE wallet_id = ?
+                WHERE wallet_id = %s
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 (wallet_id, capped),
             ).fetchall()
-        except sqlite3.OperationalError:
+        except _db.OperationalError:
             # Older databases without the Stripe Connect migration should
             # degrade to an empty history instead of failing wallet views.
             return []
@@ -671,17 +670,17 @@ def admin_transfer(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         src = conn.execute(
-            "SELECT balance_cents FROM wallets WHERE wallet_id = ?", (from_wallet_id,)
+            "SELECT balance_cents FROM wallets WHERE wallet_id = %s", (from_wallet_id,)
         ).fetchone()
         if src is None:
             raise ValueError(f"Source wallet '{from_wallet_id}' not found.")
         dst = conn.execute(
-            "SELECT wallet_id FROM wallets WHERE wallet_id = ?", (to_wallet_id,)
+            "SELECT wallet_id FROM wallets WHERE wallet_id = %s", (to_wallet_id,)
         ).fetchone()
         if dst is None:
             raise ValueError(f"Destination wallet '{to_wallet_id}' not found.")
         updated = conn.execute(
-            "UPDATE wallets SET balance_cents = balance_cents - ? WHERE wallet_id = ? AND balance_cents >= ?",
+            "UPDATE wallets SET balance_cents = balance_cents - %s WHERE wallet_id = %s AND balance_cents >= %s",
             (amount_cents, from_wallet_id, amount_cents),
         ).rowcount
         if updated == 0:
@@ -696,7 +695,7 @@ def admin_transfer(
             f"[admin-transfer] {memo}",
         )
         conn.execute(
-            "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
+            "UPDATE wallets SET balance_cents = balance_cents + %s WHERE wallet_id = %s",
             (int(amount_cents), to_wallet_id),
         )
         credit_id = _insert_tx_only(
@@ -723,7 +722,7 @@ def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> 
         raise ValueError("Single deposit capped at 1,000,000¢ (10,000 USD).")
     with _conn() as conn:
         wallet = conn.execute(
-            "SELECT wallet_id FROM wallets WHERE wallet_id = ?", (wallet_id,)
+            "SELECT wallet_id FROM wallets WHERE wallet_id = %s", (wallet_id,)
         ).fetchone()
         if wallet is None:
             raise ValueError(f"Wallet '{wallet_id}' not found.")
@@ -761,7 +760,7 @@ def pre_call_charge(
         row = conn.execute(
             "SELECT balance_cents, daily_spend_limit_cents,"
             " parent_wallet_id, guarantor_enabled, guarantor_cap_cents"
-            " FROM wallets WHERE wallet_id = ?",
+            " FROM wallets WHERE wallet_id = %s",
             (caller_wallet_id,),
         ).fetchone()
         if row is None:
@@ -786,10 +785,10 @@ def pre_call_charge(
                 """
                 SELECT COALESCE(SUM(amount_cents), 0) AS used_cents
                 FROM transactions
-                WHERE wallet_id = ?
+                WHERE wallet_id = %s
                   AND type = 'deposit'
                   AND memo LIKE 'guarantor:%'
-                  AND created_at >= ?
+                  AND created_at >= %s
                 """,
                 (caller_wallet_id, since_iso),
             ).fetchone()
@@ -804,7 +803,7 @@ def pre_call_charge(
                 pass
             else:
                 parent_row = conn.execute(
-                    "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+                    "SELECT balance_cents FROM wallets WHERE wallet_id = %s",
                     (parent_wallet_id,),
                 ).fetchone()
                 parent_balance = (
@@ -838,8 +837,8 @@ def pre_call_charge(
                 """
                 SELECT COALESCE(SUM(-amount_cents), 0) AS net_spent_cents
                 FROM transactions
-                WHERE wallet_id = ?
-                  AND charged_by_key_id = ?
+                WHERE wallet_id = %s
+                  AND charged_by_key_id = %s
                   AND type IN ('charge', 'refund')
                 """,
                 (caller_wallet_id, normalized_key_id),
@@ -862,9 +861,9 @@ def pre_call_charge(
                 """
                 SELECT COALESCE(SUM(-amount_cents), 0) AS net_spent_cents
                 FROM transactions
-                WHERE wallet_id = ?
+                WHERE wallet_id = %s
                   AND type IN ('charge', 'refund')
-                  AND created_at >= ?
+                  AND created_at >= %s
                 """,
                 (caller_wallet_id, since_iso),
             ).fetchone()
@@ -882,8 +881,8 @@ def pre_call_charge(
         updated = conn.execute(
             """
             UPDATE wallets
-            SET balance_cents = balance_cents - ?
-            WHERE wallet_id = ? AND balance_cents >= ?
+            SET balance_cents = balance_cents - %s
+            WHERE wallet_id = %s AND balance_cents >= %s
             """,
             (price_cents, caller_wallet_id, price_cents),
         ).rowcount
@@ -891,7 +890,7 @@ def pre_call_charge(
             # Re-read the balance because the backstop branch above may have
             # topped it up (in which case the UPDATE would have succeeded).
             current_row = conn.execute(
-                "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+                "SELECT balance_cents FROM wallets WHERE wallet_id = %s",
                 (caller_wallet_id,),
             ).fetchone()
             current_balance = (
@@ -940,7 +939,7 @@ def post_call_payout(
             """
             SELECT 1
             FROM transactions
-            WHERE related_tx_id = ? AND type = 'refund'
+            WHERE related_tx_id = %s AND type = 'refund'
             LIMIT 1
             """,
             (charge_tx_id,),
@@ -970,7 +969,7 @@ def post_call_payout(
                     f"Agent payout for call {charge_tx_id[:8]}",
                 )
                 applied = True
-        except sqlite3.IntegrityError:
+        except _db.IntegrityError:
             pass  # idempotency: payout already recorded
         try:
             if fee_cents > 0:
@@ -984,7 +983,7 @@ def post_call_payout(
                     f"Platform fee for call {charge_tx_id[:8]}",
                 )
                 applied = True
-        except sqlite3.IntegrityError:
+        except _db.IntegrityError:
             pass  # idempotency: fee already recorded
     logging_utils.log_event(
         _LOG,
@@ -1022,7 +1021,7 @@ def post_call_refund(
             """
             SELECT 1
             FROM transactions
-            WHERE related_tx_id = ? AND type IN ('payout', 'fee')
+            WHERE related_tx_id = %s AND type IN ('payout', 'fee')
             LIMIT 1
             """,
             (charge_tx_id,),
@@ -1051,7 +1050,7 @@ def post_call_refund(
                 f"Refund for failed call {charge_tx_id[:8]}",
             )
             applied = True
-        except sqlite3.IntegrityError:
+        except _db.IntegrityError:
             pass  # idempotency: refund already recorded
     logging_utils.log_event(
         _LOG,
@@ -1128,7 +1127,7 @@ def post_call_partial_settle(
         conn.execute("BEGIN IMMEDIATE")
         # Idempotency: skip if any settlement already recorded for this charge
         already = conn.execute(
-            "SELECT 1 FROM transactions WHERE related_tx_id = ? LIMIT 1",
+            "SELECT 1 FROM transactions WHERE related_tx_id = %s LIMIT 1",
             (charge_tx_id,),
         ).fetchone()
         if already is not None:
@@ -1167,7 +1166,7 @@ def post_call_partial_settle(
                     f"Platform fee for partial call {charge_tx_id[:8]}",
                 )
                 applied = True
-        except sqlite3.IntegrityError:
+        except _db.IntegrityError:
             pass  # idempotency: already recorded
 
     logging_utils.log_event(

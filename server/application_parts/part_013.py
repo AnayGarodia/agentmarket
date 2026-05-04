@@ -186,7 +186,7 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         if account_id:
             with get_db_connection() as _ac_conn:
                 _ac_conn.execute(
-                    "UPDATE wallets SET stripe_connect_enabled = ? WHERE stripe_connect_account_id = ?",
+                    "UPDATE wallets SET stripe_connect_enabled = %s WHERE stripe_connect_account_id = %s",
                     (1 if fully_enabled else 0, account_id),
                 )
                 _ac_conn.commit()
@@ -280,7 +280,7 @@ def connect_onboard(
             raise HTTPException(status_code=status_code, detail=payload)
         with get_db_connection() as _ac_conn:
             _ac_conn.execute(
-                "UPDATE wallets SET stripe_connect_account_id = ? WHERE wallet_id = ?",
+                "UPDATE wallets SET stripe_connect_account_id = %s WHERE wallet_id = %s",
                 (existing_account_id, wallet["wallet_id"]),
             )
             _ac_conn.commit()
@@ -344,7 +344,7 @@ def connect_status(
     if charges_enabled != bool(wallet.get("stripe_connect_enabled", 0)):
         with get_db_connection() as _ac_conn:
             _ac_conn.execute(
-                "UPDATE wallets SET stripe_connect_enabled = ? WHERE wallet_id = ?",
+                "UPDATE wallets SET stripe_connect_enabled = %s WHERE wallet_id = %s",
                 (1 if charges_enabled else 0, wallet["wallet_id"]),
             )
             _ac_conn.commit()
@@ -466,7 +466,7 @@ def withdraw(
         with get_db_connection() as _tr_conn:
             _tr_conn.execute(
                 "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s)",
                 (
                     str(uuid.uuid4()),
                     wallet["wallet_id"],
@@ -614,9 +614,9 @@ def list_billing_topups(
             """
             SELECT session_id, wallet_id, amount_cents, processed_at
             FROM stripe_sessions
-            WHERE wallet_id = ?
+            WHERE wallet_id = %s
             ORDER BY processed_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (wallet["wallet_id"], safe_limit),
         ).fetchall()

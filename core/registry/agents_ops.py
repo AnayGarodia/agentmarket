@@ -30,7 +30,8 @@ from __future__ import annotations
 import json
 import math
 import re
-import sqlite3
+
+from core import db as _db
 import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -113,7 +114,7 @@ def register_agent(
     Insert a new agent listing. Returns the agent_id.
     Pass agent_id explicitly for deterministic IDs (e.g. self-registration).
     By default this also writes an embedding row in the same request.
-    Raises sqlite3.IntegrityError if agent_id already exists.
+    Raises _db.IntegrityError if agent_id already exists.
     """
     try:
         price = float(price_per_call_usd)
@@ -240,7 +241,7 @@ def register_agent(
                  trust_decay_multiplier, last_decay_at, created_at,
                  model_provider, model_id, pricing_model, pricing_config, kind,
                  pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve, cacheable)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 aid,
@@ -291,11 +292,11 @@ def register_agent(
                 conn.execute(
                     """
                     UPDATE agents
-                    SET did = ?,
-                        signing_public_key = ?,
-                        signing_private_key = ?,
-                        signing_keys_created_at = ?
-                    WHERE agent_id = ?
+                    SET did = %s,
+                        signing_public_key = %s,
+                        signing_private_key = %s,
+                        signing_keys_created_at = %s
+                    WHERE agent_id = %s
                     """,
                     (
                         agent_did_value,
@@ -305,7 +306,7 @@ def register_agent(
                         aid,
                     ),
                 )
-            except sqlite3.OperationalError as exc:
+            except _db.OperationalError as exc:
                 # Column may not exist on a database that hasn't picked up
                 # migration 0015 yet — log and continue. Backfill on the
                 # next startup will retry.
@@ -371,8 +372,8 @@ def set_agent_pricing(
         updated = conn.execute(
             """
             UPDATE agents
-            SET pricing_model = ?, pricing_config = ?
-            WHERE agent_id = ?
+            SET pricing_model = %s, pricing_config = %s
+            WHERE agent_id = %s
             """,
             (normalized_model, serialized, agent_id),
         ).rowcount
@@ -394,14 +395,14 @@ def update_call_stats(
             """
             UPDATE agents
             SET total_calls    = total_calls + 1,
-                avg_latency_ms = (avg_latency_ms * total_calls + ?) / (total_calls + 1),
-                successful_calls = successful_calls + ?
-            WHERE agent_id = ?
+                avg_latency_ms = (avg_latency_ms * total_calls + %s) / (total_calls + 1),
+                successful_calls = successful_calls + %s
+            WHERE agent_id = %s
             """,
             (latency_ms, 1 if success else 0, agent_id),
         )
         row = conn.execute(
-            "SELECT price_per_call_cents, price_per_call_usd, call_latency_ring FROM agents WHERE agent_id = ?",
+            "SELECT price_per_call_cents, price_per_call_usd, call_latency_ring FROM agents WHERE agent_id = %s",
             (agent_id,),
         ).fetchone()
         if row is None:
@@ -414,7 +415,7 @@ def update_call_stats(
                 else _price_usd_to_cents(row["price_per_call_usd"])
             )
         conn.execute(
-            "UPDATE agents SET call_latency_ring = ? WHERE agent_id = ?",
+            "UPDATE agents SET call_latency_ring = %s WHERE agent_id = %s",
             (
                 append_call_ring_sample(
                     row["call_latency_ring"],
@@ -476,12 +477,12 @@ def set_agent_status(
     with _conn() as conn:
         if normalized_status == "suspended" and reason is not None:
             conn.execute(
-                "UPDATE agents SET status = ?, suspension_reason = ? WHERE agent_id = ?",
+                "UPDATE agents SET status = %s, suspension_reason = %s WHERE agent_id = %s",
                 (normalized_status, str(reason)[:500], agent_id),
             )
         else:
             conn.execute(
-                "UPDATE agents SET status = ? WHERE agent_id = ?",
+                "UPDATE agents SET status = %s WHERE agent_id = %s",
                 (normalized_status, agent_id),
             )
     return get_agent(agent_id, include_unapproved=True)
@@ -497,7 +498,7 @@ def list_pending_review_agents(limit: int = 200) -> list[dict]:
             FROM agents
             WHERE review_status = 'pending_review'
             ORDER BY created_at DESC, agent_id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (capped,),
         ).fetchall()
@@ -532,11 +533,11 @@ def set_agent_review_decision(
         updated = conn.execute(
             """
             UPDATE agents
-            SET review_status = ?,
-                review_note = ?,
-                reviewed_at = ?,
-                reviewed_by = ?
-            WHERE agent_id = ?
+            SET review_status = %s,
+                review_note = %s,
+                reviewed_at = %s,
+                reviewed_by = %s
+            WHERE agent_id = %s
             """,
             (
                 target_status,
@@ -554,7 +555,7 @@ def set_agent_review_decision(
 def set_agent_verified(agent_id: str, verified: bool) -> dict | None:
     with _conn() as conn:
         conn.execute(
-            "UPDATE agents SET verified = ? WHERE agent_id = ?",
+            "UPDATE agents SET verified = %s WHERE agent_id = %s",
             (1 if verified else 0, agent_id),
         )
     return get_agent(agent_id, include_unapproved=True)
@@ -587,11 +588,11 @@ def set_agent_endpoint_health(
         conn.execute(
             """
             UPDATE agents
-            SET endpoint_health_status = ?,
-                endpoint_consecutive_failures = ?,
-                endpoint_last_checked_at = ?,
-                endpoint_last_error = ?
-            WHERE agent_id = ?
+            SET endpoint_health_status = %s,
+                endpoint_consecutive_failures = %s,
+                endpoint_last_checked_at = %s,
+                endpoint_last_error = %s
+            WHERE agent_id = %s
             """,
             (
                 normalized_status,
@@ -606,7 +607,7 @@ def set_agent_endpoint_health(
                 """
                 UPDATE agents
                 SET status = 'suspended', suspension_reason = 'health_check'
-                WHERE agent_id = ? AND status = 'active'
+                WHERE agent_id = %s AND status = 'active'
                 """,
                 (agent_id,),
             )
@@ -621,7 +622,7 @@ def set_agent_endpoint_health(
                 """
                 UPDATE agents
                 SET status = 'active', suspension_reason = NULL
-                WHERE agent_id = ? AND status = 'suspended' AND suspension_reason = 'health_check'
+                WHERE agent_id = %s AND status = 'suspended' AND suspension_reason = 'health_check'
                 """,
                 (agent_id,),
             )
@@ -648,7 +649,7 @@ def set_agent_output_examples(
         raise ValueError("output_examples must be a list of objects or null.")
     with _conn() as conn:
         conn.execute(
-            "UPDATE agents SET output_examples = ? WHERE agent_id = ?",
+            "UPDATE agents SET output_examples = %s WHERE agent_id = %s",
             (normalized_examples, agent_id),
         )
     return get_agent(agent_id, include_unapproved=True)
@@ -664,7 +665,7 @@ def append_agent_output_example(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT output_examples FROM agents WHERE agent_id = ?",
+            "SELECT output_examples FROM agents WHERE agent_id = %s",
             (agent_id,),
         ).fetchone()
         if row is None:
@@ -684,7 +685,7 @@ def append_agent_output_example(
         if len(next_examples) > capped:
             next_examples = next_examples[:capped]
         conn.execute(
-            "UPDATE agents SET output_examples = ? WHERE agent_id = ?",
+            "UPDATE agents SET output_examples = %s WHERE agent_id = %s",
             (json.dumps(next_examples), agent_id),
         )
     return get_agent(agent_id, include_unapproved=True)
@@ -693,7 +694,7 @@ def append_agent_output_example(
 def touch_agent_decay(agent_id: str, at_iso: str) -> None:
     with _conn() as conn:
         conn.execute(
-            "UPDATE agents SET last_decay_at = ? WHERE agent_id = ?",
+            "UPDATE agents SET last_decay_at = %s WHERE agent_id = %s",
             (str(at_iso or _CANONICAL_CREATED_AT), agent_id),
         )
 
@@ -703,7 +704,7 @@ def set_agent_decay_multiplier(agent_id: str, multiplier: float, at_iso: str) ->
     parsed = max(0.0, min(1.0, parsed))
     with _conn() as conn:
         conn.execute(
-            "UPDATE agents SET trust_decay_multiplier = ?, last_decay_at = ? WHERE agent_id = ?",
+            "UPDATE agents SET trust_decay_multiplier = %s, last_decay_at = %s WHERE agent_id = %s",
             (parsed, str(at_iso or _CANONICAL_CREATED_AT), agent_id),
         )
 
@@ -725,7 +726,7 @@ def get_agents_by_owner(owner_id: str) -> list:
     """Return all agents owned by the given owner_id."""
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM agents WHERE owner_id = ? ORDER BY created_at",
+            "SELECT * FROM agents WHERE owner_id = %s ORDER BY created_at",
             (owner_id,),
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
@@ -735,7 +736,7 @@ def count_owner_agents(owner_id: str) -> int:
     """Return the number of non-deleted agents owned by this user."""
     with _conn() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM agents WHERE owner_id = ? AND (status IS NULL OR status != 'deleted')",
+            "SELECT COUNT(*) AS n FROM agents WHERE owner_id = %s AND (status IS NULL OR status != 'deleted')",
             (owner_id,),
         ).fetchone()
     return int(row["n"]) if row else 0
@@ -763,7 +764,7 @@ def update_agent(
     """
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM agents WHERE agent_id = ? AND owner_id = ?",
+            "SELECT * FROM agents WHERE agent_id = %s AND owner_id = %s",
             (agent_id, owner_id),
         ).fetchone()
         if row is None:
@@ -817,11 +818,11 @@ def update_agent(
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [agent_id, owner_id]
         conn.execute(
-            f"UPDATE agents SET {set_clause} WHERE agent_id = ? AND owner_id = ?",
+            f"UPDATE agents SET {set_clause} WHERE agent_id = %s AND owner_id = %s",
             values,
         )
         updated_row = conn.execute(
-            "SELECT * FROM agents WHERE agent_id = ?", (agent_id,)
+            "SELECT * FROM agents WHERE agent_id = %s", (agent_id,)
         ).fetchone()
     return _row_to_dict(updated_row) if updated_row else None
 
@@ -833,7 +834,7 @@ def delist_agent(agent_id: str, owner_id: str) -> bool:
     """
     with _conn() as conn:
         result = conn.execute(
-            "UPDATE agents SET status = 'deleted' WHERE agent_id = ? AND owner_id = ? AND status != 'deleted'",
+            "UPDATE agents SET status = 'deleted' WHERE agent_id = %s AND owner_id = %s AND status != 'deleted'",
             (agent_id, owner_id),
         )
     return result.rowcount > 0
@@ -843,7 +844,7 @@ def update_agent_health(agent_id: str, status: str, checked_at: str) -> None:
     """Record the result of a health check probe."""
     with _conn() as conn:
         conn.execute(
-            "UPDATE agents SET last_health_status = ?, last_health_check_at = ? WHERE agent_id = ?",
+            "UPDATE agents SET last_health_status = %s, last_health_check_at = %s WHERE agent_id = %s",
             (status, checked_at, agent_id),
         )
 
@@ -851,7 +852,7 @@ def update_agent_health(agent_id: str, status: str, checked_at: str) -> None:
 def agent_exists_by_name(name: str) -> bool:
     """Return True if any agent with this name is already registered."""
     with _conn() as conn:
-        row = conn.execute("SELECT 1 FROM agents WHERE name = ?", (name,)).fetchone()
+        row = conn.execute("SELECT 1 FROM agents WHERE name = %s", (name,)).fetchone()
     return row is not None
 
 
@@ -863,7 +864,7 @@ def sync_agent_embedding(agent_id: str) -> bool:
     """
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM agents WHERE agent_id = ?",
+            "SELECT * FROM agents WHERE agent_id = %s",
             (agent_id,),
         ).fetchone()
         if row is None:
@@ -895,7 +896,7 @@ def backfill_missing_embeddings(limit: int | None = None) -> dict[str, int]:
         """
         params: tuple[int, ...] = ()
         if limit is not None:
-            query += " LIMIT ?"
+            query += " LIMIT %s"
             params = (limit,)
         rows = conn.execute(query, params).fetchall()
 
