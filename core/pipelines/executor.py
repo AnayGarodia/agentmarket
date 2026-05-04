@@ -10,6 +10,7 @@ from typing import Any, Callable
 import requests
 
 from core import fastpath, jobs, payments, registry, url_security
+from core.functional import Err, Ok, Result
 from server import pricing_helpers
 
 from . import db
@@ -95,6 +96,17 @@ def validate_definition(definition: dict) -> dict:
 
     terminal_nodes = [node["id"] for node in nodes if not outgoing[node["id"]]]
     return {"nodes": nodes, "ordered_nodes": ordered, "terminal_nodes": terminal_nodes}
+
+
+def validate_definition_result(definition: dict) -> "Result[dict, str]":
+    """Result-returning variant of :func:`validate_definition`.
+
+    Returns ``Ok(normalised_definition)`` or ``Err(message)``.
+    """
+    try:
+        return Ok(validate_definition(definition))
+    except ValueError as exc:
+        return Err(str(exc))
 
 
 def _agent_price_and_distribution(agent: dict, payload: dict) -> tuple[int, dict, dict]:

@@ -18,6 +18,8 @@ import json
 import uuid
 from datetime import datetime, timedelta
 
+from core.functional import Err, Ok, Result
+
 from .crud import (
     get_job,
     is_worker_authorized,
@@ -60,6 +62,18 @@ def _lease_is_expired(job_row: dict, now_dt: datetime) -> bool:
     return lease_expires_at <= now_dt
 
 
+def _validate_claim_params(
+    claim_owner_id: str, lease_seconds: int
+) -> "Result[tuple[str, int], str]":
+    """Pure guard for claim_job inputs. Returns Ok((owner_id, lease_seconds)) or Err(msg)."""
+    owner_id = (claim_owner_id or "").strip()
+    if not owner_id:
+        return Err("claim_owner_id must be a non-empty string.")
+    if lease_seconds <= 0:
+        return Err("lease_seconds must be > 0.")
+    return Ok((owner_id, lease_seconds))
+
+
 def claim_job(
     job_id: str,
     claim_owner_id: str,
@@ -77,11 +91,10 @@ def claim_job(
     ``pending`` state (already claimed or does not exist).
     Raises ``ValueError`` for invalid arguments.
     """
-    owner_id = (claim_owner_id or "").strip()
-    if not owner_id:
-        raise ValueError("claim_owner_id must be a non-empty string.")
-    if lease_seconds <= 0:
-        raise ValueError("lease_seconds must be > 0.")
+    _params = _validate_claim_params(claim_owner_id, lease_seconds)
+    if isinstance(_params, Err):
+        raise ValueError(_params.error)
+    owner_id, lease_seconds = _params.value
 
     now_dt = _now_dt()
     now = now_dt.isoformat()

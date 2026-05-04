@@ -51,6 +51,8 @@ import math
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Mapping
 
+from core.functional import Err, Ok, Result
+
 VALID_PRICING_MODELS = ("fixed", "per_unit", "tiered")
 _CENTS_PER_USD = Decimal("100")
 
@@ -202,6 +204,20 @@ def validate_pricing_config(
         canonical["tiers"] = tiers
     canonical["pricing_model"] = model
     return canonical
+
+
+def validate_pricing_config_result(
+    pricing_model: str, pricing_config: Any
+) -> "Result[dict[str, Any] | None, str]":
+    """Result-returning variant of :func:`validate_pricing_config`.
+
+    Returns ``Ok(canonical_config)`` or ``Err(message)``.  Use this in new
+    code so validation errors are explicit rather than caught exceptions.
+    """
+    try:
+        return Ok(validate_pricing_config(pricing_model, pricing_config))
+    except VariablePricingError as exc:
+        return Err(str(exc))
 
 
 def parse_pricing_config(raw: Any) -> dict[str, Any]:

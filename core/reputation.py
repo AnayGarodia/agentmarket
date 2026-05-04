@@ -661,17 +661,16 @@ def enrich_agent_record(agent: dict) -> dict:
         {agent_id: _normalize_decay_multiplier(agent.get("trust_decay_multiplier"))},
     )
     dispute_count = dispute_counts.get(agent_id, 0)
-    enriched = dict(agent)
-    enriched["trust_score"] = metrics["trust_score"]
-    enriched["quality_rating_count"] = metrics["rating_count"]
-    enriched["quality_rating_avg"] = metrics["average_quality_rating"]
-    enriched["confidence_score"] = metrics["confidence_score"]
-    enriched["reputation"] = metrics
-    enriched["dispute_rate"] = (
-        round(dispute_count / total_calls, 4) if total_calls > 0 else None
-    )
-    enriched["by_client"] = client_trust_map.get(agent_id, {})
-    return enriched
+    return {
+        **agent,
+        "trust_score": metrics["trust_score"],
+        "quality_rating_count": metrics["rating_count"],
+        "quality_rating_avg": metrics["average_quality_rating"],
+        "confidence_score": metrics["confidence_score"],
+        "reputation": metrics,
+        "dispute_rate": round(dispute_count / total_calls, 4) if total_calls > 0 else None,
+        "by_client": client_trust_map.get(agent_id, {}),
+    }
 
 
 def enrich_agent_records(agents: list[dict]) -> list[dict]:
@@ -722,17 +721,16 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
         )
 
         dc = dispute_counts.get(agent["agent_id"], 0)
-        enriched = dict(agent)
-        enriched["trust_score"] = metrics["trust_score"]
-        enriched["quality_rating_count"] = metrics["rating_count"]
-        enriched["quality_rating_avg"] = metrics["average_quality_rating"]
-        enriched["confidence_score"] = metrics["confidence_score"]
-        enriched["reputation"] = metrics
-        enriched["dispute_rate"] = (
-            round(dc / total_calls, 4) if total_calls > 0 else None
-        )
-        enriched["by_client"] = client_trust_map.get(str(agent["agent_id"]), {})
-        enriched_records.append(enriched)
+        enriched_records.append({
+            **agent,
+            "trust_score": metrics["trust_score"],
+            "quality_rating_count": metrics["rating_count"],
+            "quality_rating_avg": metrics["average_quality_rating"],
+            "confidence_score": metrics["confidence_score"],
+            "reputation": metrics,
+            "dispute_rate": round(dc / total_calls, 4) if total_calls > 0 else None,
+            "by_client": client_trust_map.get(str(agent["agent_id"]), {}),
+        })
     return enriched_records
 
 

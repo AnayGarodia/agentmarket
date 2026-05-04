@@ -1,12 +1,17 @@
 """
 url_security.py — Shared outbound URL validation (SSRF guard).
 
-Both the HTTP app (``server.application``) and core/onboarding.py need to reject URLs that target
-private / loopback / reserved IPs, credentialed URLs, and localhost. The
-logic lives here so there is exactly one implementation.
-
-The validator raises plain ``ValueError``. Callers that need a domain-specific
-exception type (e.g. ``MetadataValidationError``) should catch and re-raise.
+# OWNS: SSRF validation for all outbound URLs (agent endpoints, webhooks, git paths)
+# NOT OWNS: business logic for what to do after validation fails
+# INVARIANTS:
+#   - validate_outbound_url / validate_agent_endpoint_url always raise on bad input
+#     (legacy API, kept for existing callers)
+#   - validate_outbound_url_result / validate_agent_endpoint_url_result return Result
+#     (preferred in new code — no hidden control flow)
+#   - DNS resolution is I/O and belongs here; callers handle the Result at the boundary
+# DECISIONS:
+#   - Result variants wrap the raising variants rather than duplicating logic —
+#     single implementation path prevents the two APIs diverging silently
 """
 
 from __future__ import annotations
@@ -15,6 +20,8 @@ import ipaddress
 import os
 import socket
 from urllib.parse import unquote, urlparse
+
+from core.functional import Err, Ok, Result
 
 _ENV_ALLOW_PRIVATE_VALUES = {"1", "true", "yes"}
 
@@ -183,3 +190,39 @@ def validate_outbound_url(
             "ALLOW_PRIVATE_OUTBOUND_URLS=1."
         )
     return normalized
+
+
+# ---------------------------------------------------------------------------
+# Result-returning variants — preferred in new code
+# ---------------------------------------------------------------------------
+
+
+def validate_outbound_url_result(
+    url: str,
+    field_name: str,
+    *,
+    allow_private: bool | None = None,
+) -> "Result[str, str]":
+    """Result-returning variant of :func:`validate_outbound_url`.
+
+    Returns ``Ok(normalized_url)`` or ``Err(message)``.  Use this in new
+    code so validation failures are explicit in the type signature rather
+    than hidden control flow via ``ValueError``.
+    """
+    try:
+        return Ok(validate_outbound_url(url, field_name, allow_private=allow_private))
+    except ValueError as exc:
+        return Err(str(exc))
+
+
+def validate_agent_endpoint_url_result(
+    url: str,
+    field_name: str = "endpoint_url",
+    *,
+    allow_private: bool | None = None,
+) -> "Result[str, str]":
+    """Result-returning variant of :func:`validate_agent_endpoint_url`."""
+    try:
+        return Ok(validate_agent_endpoint_url(url, field_name, allow_private=allow_private))
+    except ValueError as exc:
+        return Err(str(exc))

@@ -32,6 +32,7 @@ import math
 import re
 
 from core import db as _db
+from core.functional import Err, Ok, Result
 import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -75,6 +76,67 @@ TRUST_SCORE_WEIGHT_HYBRID = 0.15
 INVERSE_PRICE_WEIGHT_HYBRID = 0.10
 
 
+def _validate_agent_scalar_params(
+    price_per_call_usd: float,
+    endpoint_health_status: str,
+    status: str,
+    review_status: str | None,
+    is_internal: bool,
+    pricing_model: str | None,
+    pricing_config: Any,
+) -> "Result[dict, str]":
+    """Pure guard for scalar agent params. Returns Ok(normalized_scalars) or Err(message).
+
+    Validates and normalises only the fields that can be checked without DB access.
+    The caller substitutes the returned scalars back in, keeping the full registration
+    logic in one place.
+    """
+    try:
+        price = float(price_per_call_usd)
+    except (TypeError, ValueError):
+        return Err("price_per_call_usd must be a non-negative number.")
+    if not math.isfinite(price):
+        return Err("price_per_call_usd must be a finite non-negative number.")
+    if price < 0:
+        return Err("price_per_call_usd must be non-negative.")
+
+    normalized_health_status = str(endpoint_health_status or "unknown").strip().lower()
+    if normalized_health_status not in {"unknown", "healthy", "degraded"}:
+        return Err("endpoint_health_status must be one of: unknown, healthy, degraded.")
+
+    normalized_status = str(status or "active").strip().lower()
+    if normalized_status not in {"active", "suspended", "banned"}:
+        return Err("status must be one of: active, suspended, banned.")
+
+    _review = str(review_status or "").strip().lower()
+    normalized_review_status = _review or ("approved" if is_internal else "pending_review")
+    if normalized_review_status not in REVIEW_STATUSES:
+        return Err("review_status must be one of: " + ", ".join(sorted(REVIEW_STATUSES)) + ".")
+
+    try:
+        normalized_pricing_model = normalize_pricing_model(pricing_model)
+    except VariablePricingError as exc:
+        return Err(str(exc))
+
+    pricing_config_json: str | None = None
+    if normalized_pricing_model != "fixed":
+        try:
+            canonical_config = validate_pricing_config(normalized_pricing_model, pricing_config)
+        except VariablePricingError as exc:
+            return Err(str(exc))
+        if canonical_config is not None:
+            pricing_config_json = json.dumps(canonical_config, sort_keys=True)
+
+    return Ok({
+        "price": price,
+        "normalized_health_status": normalized_health_status,
+        "normalized_status": normalized_status,
+        "normalized_review_status": normalized_review_status,
+        "normalized_pricing_model": normalized_pricing_model,
+        "pricing_config_json": pricing_config_json,
+    })
+
+
 def register_agent(
     name: str,
     description: str,
@@ -116,19 +178,27 @@ def register_agent(
     By default this also writes an embedding row in the same request.
     Raises _db.IntegrityError if agent_id already exists.
     """
-    try:
-        price = float(price_per_call_usd)
-    except (TypeError, ValueError):
-        raise ValueError("price_per_call_usd must be a non-negative number.")
-    if not math.isfinite(price):
-        raise ValueError("price_per_call_usd must be a finite non-negative number.")
-    if price < 0:
-        raise ValueError("price_per_call_usd must be non-negative.")
-
     aid = agent_id or str(uuid.uuid4())
     normalized_owner_id = (owner_id or f"agent:{aid}").strip()
     if not normalized_owner_id:
         raise ValueError("owner_id must be a non-empty string.")
+
+    is_internal = internal_only or str(endpoint_url or "").strip().startswith("internal://")
+
+    # Run all pure scalar validation before touching the DB.
+    _scalars = _validate_agent_scalar_params(
+        price_per_call_usd, endpoint_health_status, status, review_status,
+        is_internal, pricing_model, pricing_config,
+    )
+    if isinstance(_scalars, Err):
+        raise ValueError(_scalars.error)
+    price = _scalars.value["price"]
+    normalized_health_status = _scalars.value["normalized_health_status"]
+    normalized_status = _scalars.value["normalized_status"]
+    normalized_review_status = _scalars.value["normalized_review_status"]
+    normalized_pricing_model = _scalars.value["normalized_pricing_model"]
+    pricing_config_json = _scalars.value["pricing_config_json"]
+
     created_at = datetime.now(timezone.utc).isoformat()
     normalized_tags = _parse_tags(tags)
     normalized_schema = _parse_input_schema(input_schema)
@@ -157,24 +227,6 @@ def register_agent(
     except ValueError as exc:
         raise ValueError(str(exc))
     payout_curve_json = _pc.curve_to_json(parsed_curve)
-    normalized_health_status = str(endpoint_health_status or "unknown").strip().lower()
-    if normalized_health_status not in {"unknown", "healthy", "degraded"}:
-        raise ValueError(
-            "endpoint_health_status must be one of: unknown, healthy, degraded."
-        )
-    normalized_status = str(status or "active").strip().lower()
-    if normalized_status not in {"active", "suspended", "banned"}:
-        raise ValueError("status must be one of: active, suspended, banned.")
-    is_internal = internal_only or str(endpoint_url or "").strip().startswith(
-        "internal://"
-    )
-    normalized_review_status = str(review_status or "").strip().lower()
-    if not normalized_review_status:
-        normalized_review_status = "approved" if is_internal else "pending_review"
-    if normalized_review_status not in REVIEW_STATUSES:
-        raise ValueError(
-            "review_status must be one of: " + ", ".join(sorted(REVIEW_STATUSES)) + "."
-        )
     normalized_review_note = str(review_note or "").strip() or None
     normalized_reviewed_at = str(reviewed_at or "").strip() or None
     normalized_reviewed_by = str(reviewed_by or "").strip() or None
@@ -184,20 +236,6 @@ def register_agent(
     if normalized_decay_multiplier <= 0:
         normalized_decay_multiplier = 1.0
     internal_only_int = 1 if internal_only else 0
-    try:
-        normalized_pricing_model = normalize_pricing_model(pricing_model)
-    except VariablePricingError as exc:
-        raise ValueError(str(exc))
-    pricing_config_json: str | None = None
-    if normalized_pricing_model != "fixed":
-        try:
-            canonical_config = validate_pricing_config(
-                normalized_pricing_model, pricing_config
-            )
-        except VariablePricingError as exc:
-            raise ValueError(str(exc))
-        if canonical_config is not None:
-            pricing_config_json = json.dumps(canonical_config, sort_keys=True)
     source_text = ""
     embedding_vector: list[float] | None = None
     if embed_listing:

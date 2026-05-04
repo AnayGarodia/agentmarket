@@ -26,6 +26,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from core import db as _db
 from core import logging_utils
+from core.functional import Err, Ok, Result
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
@@ -736,6 +737,23 @@ def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> 
 # ---------------------------------------------------------------------------
 
 
+def _validate_pre_call_params(
+    price_cents: int,
+    charged_by_key_id: str | None,
+    max_spend_cents: int | None,
+) -> "Result[tuple[str | None, int | None], str]":
+    """Pure guard for pre_call_charge inputs. Returns Ok((key_id, max_spend)) or Err(msg)."""
+    if price_cents < 0:
+        return Err("price_cents must be non-negative.")
+    normalized_key_id = str(charged_by_key_id or "").strip() or None
+    normalized_max_spend: int | None = None
+    if max_spend_cents is not None:
+        normalized_max_spend = int(max_spend_cents)
+        if normalized_max_spend < 0:
+            return Err("max_spend_cents must be >= 0.")
+    return Ok((normalized_key_id, normalized_max_spend))
+
+
 def pre_call_charge(
     caller_wallet_id: str,
     price_cents: int,
@@ -749,14 +767,10 @@ def pre_call_charge(
     Returns charge_tx_id. Raises InsufficientBalanceError if underfunded.
     DB lock held only for this short read-check-write sequence.
     """
-    if price_cents < 0:
-        raise ValueError("price_cents must be non-negative.")
-    normalized_key_id = str(charged_by_key_id or "").strip() or None
-    normalized_max_spend = None
-    if max_spend_cents is not None:
-        normalized_max_spend = int(max_spend_cents)
-        if normalized_max_spend < 0:
-            raise ValueError("max_spend_cents must be >= 0.")
+    _params = _validate_pre_call_params(price_cents, charged_by_key_id, max_spend_cents)
+    if isinstance(_params, Err):
+        raise ValueError(_params.error)
+    normalized_key_id, normalized_max_spend = _params.value
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
