@@ -7,28 +7,29 @@ Run:
     uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
 
-import json
-import os
 import asyncio
 import base64
-import math
-import hmac
-import hashlib
-import logging
-import re
-import ipaddress
 import collections
+import hashlib
+import hmac
+import ipaddress
+import json
+import logging
+import math
+import os
+import re
 import sqlite3
 import threading
 import time
 import uuid
-from contextvars import Token
-from queue import Empty, Queue
-from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
-from decimal import Decimal, ROUND_HALF_UP
+from contextvars import Token
+from datetime import datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
+from queue import Empty, Queue
 from typing import Any, Callable
 from urllib.parse import urlparse
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - fcntl unavailable on some platforms
@@ -48,16 +49,20 @@ if _SENTRY_DSN:
         import sentry_sdk
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.starlette import StarletteIntegration
+
         sentry_sdk.init(
             dsn=_SENTRY_DSN,
             integrations=[StarletteIntegration(), FastApiIntegration()],
-            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            traces_sample_rate=float(
+                os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")
+            ),
             environment=os.environ.get("ENVIRONMENT", "production"),
             send_default_pii=False,
         )
     except Exception as _sentry_exc:
         logging.warning("Sentry init failed: %s", _sentry_exc)
 
+import groq as _groq
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -65,105 +70,105 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-import groq as _groq
-
+from agents import ai_red_teamer as agent_ai_red_teamer
+from agents import arxiv_research as agent_arxiv_research
+from agents import browser_agent as agent_browser_agent
 from agents import codereview as agent_codereview
 from agents import cve_lookup as agent_cve_lookup
-from agents import image_generator as agent_image_generator
-from agents import video_storyboard as agent_video_storyboard
-from agents import wiki as agent_wiki
-from agents import arxiv_research as agent_arxiv_research
-from agents import python_executor as agent_python_executor
-from agents import web_researcher as agent_web_researcher
-from agents import hn_digest as agent_hn_digest
-from agents import dns_inspector as agent_dns_inspector
-from agents import dependency_auditor as agent_dependency_auditor
-from agents import multi_file_executor as agent_multi_file_executor
-from agents import linter_agent as agent_linter_agent
-from agents import shell_executor as agent_shell_executor
-from agents import type_checker as agent_type_checker
 from agents import db_sandbox as agent_db_sandbox
-from agents import visual_regression as agent_visual_regression
-from agents import live_endpoint_tester as agent_live_endpoint_tester
-from agents import browser_agent as agent_browser_agent
-from agents import multi_language_executor as agent_multi_language_executor
-from agents import semantic_codebase_search as agent_semantic_codebase_search
-from agents import ai_red_teamer as agent_ai_red_teamer
-from agents import secret_scanner as agent_secret_scanner
-from agents import json_schema_validator as agent_json_schema_validator
-from agents import regex_tester as agent_regex_tester
-from agents import sql_explainer as agent_sql_explainer
+from agents import dependency_auditor as agent_dependency_auditor
+from agents import dns_inspector as agent_dns_inspector
 from agents import git_diff_analyzer as agent_git_diff_analyzer
+from agents import hn_digest as agent_hn_digest
+from agents import image_generator as agent_image_generator
+from agents import json_schema_validator as agent_json_schema_validator
+from agents import linter_agent as agent_linter_agent
+from agents import live_endpoint_tester as agent_live_endpoint_tester
+from agents import multi_file_executor as agent_multi_file_executor
+from agents import multi_language_executor as agent_multi_language_executor
+from agents import python_executor as agent_python_executor
+from agents import regex_tester as agent_regex_tester
+from agents import secret_scanner as agent_secret_scanner
+from agents import semantic_codebase_search as agent_semantic_codebase_search
+from agents import shell_executor as agent_shell_executor
+from agents import sql_explainer as agent_sql_explainer
+from agents import type_checker as agent_type_checker
+from agents import video_storyboard as agent_video_storyboard
+from agents import visual_regression as agent_visual_regression
+from agents import web_researcher as agent_web_researcher
+from agents import wiki as agent_wiki
 from core import auth as _auth
-from core import embeddings
-from core import onboarding
-from core import payments
-from core.db import close_all_connections as _close_all_db_connections
-from core.db import get_db_connection
-from core.openapi_responses import pick_error_responses as _error_responses
-from server.builtin_agents import specs as _builtin_specs
-from server.error_handlers import register_exception_handlers
-from server.routes import system as _system_routes
-from core import registry
-from core.registry import auto_hire as _auto_hire
-from core import jobs
-from core import disputes
-from core import judges
-from core import models as core_models
-from core import reputation
-from core import error_codes
-from core import compare
-from core.migrate import apply_migrations
-from core import logging_utils
+from core import cache as _cache
+from core import (
+    compare,
+    disputes,
+    embeddings,
+    error_codes,
+    jobs,
+    judges,
+    logging_utils,
+    mcp_manifest,
+    onboarding,
+    payments,
+    pipelines,
+    recipes,
+    registry,
+    reputation,
+    tool_adapters,
+)
 from core import email as _email
-from core import url_security as _url_security
+from core import feature_flags as _feature_flags
 from core import hosted_skills as _hosted_skills
+from core import models as core_models
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
-from core import cache as _cache
-from core import feature_flags as _feature_flags
-from core import pipelines
-from core import recipes
-from core import mcp_manifest
-from core import tool_adapters
-from scripts.financial_cli import run as _run_financial
+from core import url_security as _url_security
+from core.db import close_all_connections as _close_all_db_connections
+from core.db import get_db_connection
+from core.migrate import apply_migrations
 from core.models import (
+    AdminDisputeRuleRequest,
+    AgentKeyCreateRequest,
     AgentRegisterRequest,
+    AgentReviewDecisionRequest,
+    AgentSuspendRequest,
+    AuthLegalAcceptRequest,
     CodeReviewRequest,
     CreateKeyRequest,
     DepositRequest,
     FinancialRequest,
+    GoogleAuthRequest,
     HookDeliveryProcessRequest,
     JobCancelRequest,
     JobClaimRequest,
     JobCompleteRequest,
     JobCreateRequest,
+    JobDisputeRequest,
     JobEventHookCreateRequest,
     JobFailRequest,
     JobHeartbeatRequest,
-    JobDisputeRequest,
-    JobVerificationDecisionRequest,
     JobMessageRequest,
     JobRateCallerRequest,
     JobRatingRequest,
     JobReleaseRequest,
     JobRetryRequest,
     JobsSweepRequest,
+    JobVerificationDecisionRequest,
     MCPInvokeRequest,
-    AdminDisputeRuleRequest,
     OnboardingValidateRequest,
     ReconciliationRunRequest,
     RegistrySearchRequest,
     RotateKeyRequest,
-    AgentKeyCreateRequest,
-    AgentReviewDecisionRequest,
-    AgentSuspendRequest,
-    AuthLegalAcceptRequest,
-    GoogleAuthRequest,
     UserLoginRequest,
     UserRegisterRequest,
     WikiRequest,
 )
+from core.openapi_responses import pick_error_responses as _error_responses
+from core.registry import auto_hire as _auto_hire
+from scripts.financial_cli import run as _run_financial
+from server.builtin_agents import specs as _builtin_specs
+from server.error_handlers import register_exception_handlers
+from server.routes import system as _system_routes
 
 _LOG_LEVEL_NAME = (os.environ.get("LOG_LEVEL", "INFO") or "INFO").strip().upper()
 _LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.INFO)
@@ -175,15 +180,16 @@ _LOG = logging.getLogger(__name__)
 
 class _SecretRedactFilter(logging.Filter):
     """Strip API key values and sensitive env-var patterns from log records."""
+
     _PATTERNS = re.compile(
-        r'((?:az_|azk_|sk_live_|sk_test_|Bearer\s+)[A-Za-z0-9_\-]{8,})',
+        r"((?:az_|azk_|sk_live_|sk_test_|Bearer\s+)[A-Za-z0-9_\-]{8,})",
         re.IGNORECASE,
     )
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = self._PATTERNS.sub('[REDACTED]', str(record.msg))
+        record.msg = self._PATTERNS.sub("[REDACTED]", str(record.msg))
         record.args = tuple(
-            self._PATTERNS.sub('[REDACTED]', str(a)) if isinstance(a, str) else a
+            self._PATTERNS.sub("[REDACTED]", str(a)) if isinstance(a, str) else a
             for a in (record.args or ())
         )
         return True
@@ -213,7 +219,9 @@ def _acquire_background_worker_lock() -> bool:
     try:
         handle = open(lock_path, "a+", encoding="utf-8")
     except OSError as exc:
-        _LOG.warning("Failed to open background worker lock file %s: %s", lock_path, exc)
+        _LOG.warning(
+            "Failed to open background worker lock file %s: %s", lock_path, exc
+        )
         return True
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -253,15 +261,18 @@ _MASTER_KEY = os.environ.get("API_KEY")
 if not _MASTER_KEY:
     raise RuntimeError("API_KEY is not set. Add it to your .env file.")
 
-_SERVER_BASE_URL   = os.environ.get("SERVER_BASE_URL", "http://localhost:8000").rstrip("/")
+_SERVER_BASE_URL = os.environ.get("SERVER_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 _FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", _SERVER_BASE_URL).rstrip("/")
 
 # Stripe
-_STRIPE_SECRET_KEY      = os.environ.get("STRIPE_SECRET_KEY", "").strip()
-_STRIPE_WEBHOOK_SECRET  = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+_STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+_STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
 _STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY", "").strip()
 try:
     import stripe as _stripe_lib
+
     _STRIPE_AVAILABLE = True
 except ImportError:
     _stripe_lib = None
@@ -272,53 +283,48 @@ except ImportError:
 # prefix so the rest of the shards continue to compile unchanged.
 from server.builtin_agents import constants as _builtin_constants
 
-_FINANCIAL_AGENT_ID                 = _builtin_constants.FINANCIAL_AGENT_ID
-_CODEREVIEW_AGENT_ID                = _builtin_constants.CODEREVIEW_AGENT_ID
-_WIKI_AGENT_ID                      = _builtin_constants.WIKI_AGENT_ID
-_CVELOOKUP_AGENT_ID                 = _builtin_constants.CVELOOKUP_AGENT_ID
-_QUALITY_JUDGE_AGENT_ID             = _builtin_constants.QUALITY_JUDGE_AGENT_ID
-_IMAGE_GENERATOR_AGENT_ID           = _builtin_constants.IMAGE_GENERATOR_AGENT_ID
-_VIDEO_STORYBOARD_AGENT_ID          = _builtin_constants.VIDEO_STORYBOARD_AGENT_ID
-_ARXIV_RESEARCH_AGENT_ID            = _builtin_constants.ARXIV_RESEARCH_AGENT_ID
-_PYTHON_EXECUTOR_AGENT_ID           = _builtin_constants.PYTHON_EXECUTOR_AGENT_ID
-_WEB_RESEARCHER_AGENT_ID            = _builtin_constants.WEB_RESEARCHER_AGENT_ID
-_HN_DIGEST_AGENT_ID                 = _builtin_constants.HN_DIGEST_AGENT_ID
-_DNS_INSPECTOR_AGENT_ID             = _builtin_constants.DNS_INSPECTOR_AGENT_ID
-_DEPENDENCY_AUDITOR_AGENT_ID        = _builtin_constants.DEPENDENCY_AUDITOR_AGENT_ID
-_MULTI_FILE_EXECUTOR_AGENT_ID       = _builtin_constants.MULTI_FILE_EXECUTOR_AGENT_ID
-_LINTER_AGENT_ID                    = _builtin_constants.LINTER_AGENT_ID
-_SHELL_EXECUTOR_AGENT_ID            = _builtin_constants.SHELL_EXECUTOR_AGENT_ID
-_TYPE_CHECKER_AGENT_ID              = _builtin_constants.TYPE_CHECKER_AGENT_ID
-_DB_SANDBOX_AGENT_ID                = _builtin_constants.DB_SANDBOX_AGENT_ID
-_VISUAL_REGRESSION_AGENT_ID         = _builtin_constants.VISUAL_REGRESSION_AGENT_ID
-_LIVE_ENDPOINT_TESTER_AGENT_ID      = _builtin_constants.LIVE_ENDPOINT_TESTER_AGENT_ID
-_BROWSER_AGENT_ID                   = _builtin_constants.BROWSER_AGENT_ID
-_MULTI_LANGUAGE_EXECUTOR_AGENT_ID   = _builtin_constants.MULTI_LANGUAGE_EXECUTOR_AGENT_ID
-_SEMANTIC_CODEBASE_SEARCH_AGENT_ID  = _builtin_constants.SEMANTIC_CODEBASE_SEARCH_AGENT_ID
-_AI_RED_TEAMER_AGENT_ID             = _builtin_constants.AI_RED_TEAMER_AGENT_ID
-_SECRET_SCANNER_AGENT_ID            = _builtin_constants.SECRET_SCANNER_AGENT_ID
-_JSON_SCHEMA_VALIDATOR_AGENT_ID     = _builtin_constants.JSON_SCHEMA_VALIDATOR_AGENT_ID
-_REGEX_TESTER_AGENT_ID              = _builtin_constants.REGEX_TESTER_AGENT_ID
-_SQL_EXPLAINER_AGENT_ID             = _builtin_constants.SQL_EXPLAINER_AGENT_ID
-_GIT_DIFF_ANALYZER_AGENT_ID         = _builtin_constants.GIT_DIFF_ANALYZER_AGENT_ID
-_GITHUB_FETCHER_AGENT_ID            = _builtin_constants.GITHUB_FETCHER_AGENT_ID
-_PR_REVIEWER_AGENT_ID               = _builtin_constants.PR_REVIEWER_AGENT_ID
-_TEST_GENERATOR_AGENT_ID            = _builtin_constants.TEST_GENERATOR_AGENT_ID
-_SPEC_WRITER_AGENT_ID               = _builtin_constants.SPEC_WRITER_AGENT_ID
-_CHANGELOG_AGENT_ID                 = _builtin_constants.CHANGELOG_AGENT_ID
-_PACKAGE_FINDER_AGENT_ID            = _builtin_constants.PACKAGE_FINDER_AGENT_ID
+_FINANCIAL_AGENT_ID = _builtin_constants.FINANCIAL_AGENT_ID
+_CODEREVIEW_AGENT_ID = _builtin_constants.CODEREVIEW_AGENT_ID
+_WIKI_AGENT_ID = _builtin_constants.WIKI_AGENT_ID
+_CVELOOKUP_AGENT_ID = _builtin_constants.CVELOOKUP_AGENT_ID
+_QUALITY_JUDGE_AGENT_ID = _builtin_constants.QUALITY_JUDGE_AGENT_ID
+_IMAGE_GENERATOR_AGENT_ID = _builtin_constants.IMAGE_GENERATOR_AGENT_ID
+_VIDEO_STORYBOARD_AGENT_ID = _builtin_constants.VIDEO_STORYBOARD_AGENT_ID
+_ARXIV_RESEARCH_AGENT_ID = _builtin_constants.ARXIV_RESEARCH_AGENT_ID
+_PYTHON_EXECUTOR_AGENT_ID = _builtin_constants.PYTHON_EXECUTOR_AGENT_ID
+_WEB_RESEARCHER_AGENT_ID = _builtin_constants.WEB_RESEARCHER_AGENT_ID
+_HN_DIGEST_AGENT_ID = _builtin_constants.HN_DIGEST_AGENT_ID
+_DNS_INSPECTOR_AGENT_ID = _builtin_constants.DNS_INSPECTOR_AGENT_ID
+_DEPENDENCY_AUDITOR_AGENT_ID = _builtin_constants.DEPENDENCY_AUDITOR_AGENT_ID
+_MULTI_FILE_EXECUTOR_AGENT_ID = _builtin_constants.MULTI_FILE_EXECUTOR_AGENT_ID
+_LINTER_AGENT_ID = _builtin_constants.LINTER_AGENT_ID
+_SHELL_EXECUTOR_AGENT_ID = _builtin_constants.SHELL_EXECUTOR_AGENT_ID
+_TYPE_CHECKER_AGENT_ID = _builtin_constants.TYPE_CHECKER_AGENT_ID
+_DB_SANDBOX_AGENT_ID = _builtin_constants.DB_SANDBOX_AGENT_ID
+_VISUAL_REGRESSION_AGENT_ID = _builtin_constants.VISUAL_REGRESSION_AGENT_ID
+_LIVE_ENDPOINT_TESTER_AGENT_ID = _builtin_constants.LIVE_ENDPOINT_TESTER_AGENT_ID
+_BROWSER_AGENT_ID = _builtin_constants.BROWSER_AGENT_ID
+_MULTI_LANGUAGE_EXECUTOR_AGENT_ID = _builtin_constants.MULTI_LANGUAGE_EXECUTOR_AGENT_ID
+_SEMANTIC_CODEBASE_SEARCH_AGENT_ID = (
+    _builtin_constants.SEMANTIC_CODEBASE_SEARCH_AGENT_ID
+)
+_AI_RED_TEAMER_AGENT_ID = _builtin_constants.AI_RED_TEAMER_AGENT_ID
+_SECRET_SCANNER_AGENT_ID = _builtin_constants.SECRET_SCANNER_AGENT_ID
+_JSON_SCHEMA_VALIDATOR_AGENT_ID = _builtin_constants.JSON_SCHEMA_VALIDATOR_AGENT_ID
+_REGEX_TESTER_AGENT_ID = _builtin_constants.REGEX_TESTER_AGENT_ID
+_SQL_EXPLAINER_AGENT_ID = _builtin_constants.SQL_EXPLAINER_AGENT_ID
+_GIT_DIFF_ANALYZER_AGENT_ID = _builtin_constants.GIT_DIFF_ANALYZER_AGENT_ID
 
-_SUNSET_DEPRECATED_AGENT_IDS        = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
-_normalize_endpoint_ref             = _builtin_constants.normalize_endpoint_ref
-_BUILTIN_INTERNAL_ENDPOINTS         = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS
-_BUILTIN_LEGACY_ROUTE_ENDPOINTS     = _builtin_constants.BUILTIN_LEGACY_ROUTE_ENDPOINTS
-_BUILTIN_ENDPOINT_TO_AGENT_ID       = _builtin_constants.BUILTIN_ENDPOINT_TO_AGENT_ID
-_BUILTIN_AGENT_IDS                  = _builtin_constants.BUILTIN_AGENT_IDS
-_CURATED_PUBLIC_BUILTIN_AGENT_IDS   = _builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
-_CURATED_BUILTIN_AGENT_IDS          = _builtin_constants.CURATED_BUILTIN_AGENT_IDS
-_BUILTIN_WORKER_OWNER_ID            = _builtin_constants.BUILTIN_WORKER_OWNER_ID
-_SYSTEM_USERNAME                    = _builtin_constants.SYSTEM_USERNAME
-_SYSTEM_USER_EMAIL                  = _builtin_constants.SYSTEM_USER_EMAIL
+_normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
+_BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS
+_BUILTIN_LEGACY_ROUTE_ENDPOINTS = _builtin_constants.BUILTIN_LEGACY_ROUTE_ENDPOINTS
+_BUILTIN_ENDPOINT_TO_AGENT_ID = _builtin_constants.BUILTIN_ENDPOINT_TO_AGENT_ID
+_BUILTIN_AGENT_IDS = _builtin_constants.BUILTIN_AGENT_IDS
+_CURATED_PUBLIC_BUILTIN_AGENT_IDS = _builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
+_CURATED_BUILTIN_AGENT_IDS = _builtin_constants.CURATED_BUILTIN_AGENT_IDS
+_BUILTIN_WORKER_OWNER_ID = _builtin_constants.BUILTIN_WORKER_OWNER_ID
+_SYSTEM_USERNAME = _builtin_constants.SYSTEM_USERNAME
+_SYSTEM_USER_EMAIL = _builtin_constants.SYSTEM_USER_EMAIL
 
 _CALLER_CACHE_MISSING = object()
 _IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
@@ -391,7 +397,9 @@ def _mcp_log_invocation(
     duration_ms: int,
     success: bool,
 ) -> None:
-    input_hash = hashlib.sha256(input_json.encode("utf-8", errors="replace")).hexdigest()
+    input_hash = hashlib.sha256(
+        input_json.encode("utf-8", errors="replace")
+    ).hexdigest()
     row_id = str(uuid.uuid4())
     now = _utc_now_iso()
     try:
@@ -402,13 +410,24 @@ def _mcp_log_invocation(
                     (id, agent_id, caller_key_id, tool_name, input_hash, invoked_at, duration_ms, success)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (row_id, agent_id, caller_key_id, tool_name, input_hash, now, duration_ms, int(success)),
+                (
+                    row_id,
+                    agent_id,
+                    caller_key_id,
+                    tool_name,
+                    input_hash,
+                    now,
+                    duration_ms,
+                    int(success),
+                ),
             )
     except Exception:
         _LOG.warning("Failed to write MCP invocation log for tool '%s'", tool_name)
 
 
-def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+def _env_int(
+    name: str, default: int, minimum: int | None = None, maximum: int | None = None
+) -> int:
     raw = os.environ.get(name)
     if raw is None:
         value = default
@@ -424,7 +443,12 @@ def _env_int(name: str, default: int, minimum: int | None = None, maximum: int |
     return value
 
 
-def _env_float(name: str, default: float, minimum: float | None = None, maximum: float | None = None) -> float:
+def _env_float(
+    name: str,
+    default: float,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
     raw = os.environ.get(name)
     if raw is None:
         value = float(default)
@@ -469,7 +493,9 @@ def _parse_ip_allowlist(name: str, raw: str | None) -> list[Any]:
                 prefix = 32 if ip_obj.version == 4 else 128
                 network = ipaddress.ip_network(f"{candidate}/{prefix}", strict=False)
         except ValueError as exc:
-            raise RuntimeError(f"{name} contains invalid IP/CIDR value {candidate!r}.") from exc
+            raise RuntimeError(
+                f"{name} contains invalid IP/CIDR value {candidate!r}."
+            ) from exc
         networks.append(network)
     return networks
 
@@ -541,7 +567,9 @@ _HOOK_DELIVERY_CLAIM_LEASE_SECONDS = _env_int(
     maximum=300,
 )
 if _HOOK_DELIVERY_MAX_DELAY_SECONDS < _HOOK_DELIVERY_BASE_DELAY_SECONDS:
-    raise RuntimeError("HOOK_DELIVERY_MAX_DELAY_SECONDS must be >= HOOK_DELIVERY_BASE_DELAY_SECONDS.")
+    raise RuntimeError(
+        "HOOK_DELIVERY_MAX_DELAY_SECONDS must be >= HOOK_DELIVERY_BASE_DELAY_SECONDS."
+    )
 _HOOK_DELIVERY_ENABLED = _HOOK_DELIVERY_INTERVAL_SECONDS > 0
 _DISPUTE_FILE_WINDOW_SECONDS = _env_int(
     "DISPUTE_FILE_WINDOW_SECONDS",
@@ -662,8 +690,12 @@ _SLO_HOOK_SUCCESS_RATE_MIN = _env_float(
     minimum=0.0,
     maximum=1.0,
 )
-_ENVIRONMENT = str(os.environ.get("ENVIRONMENT", "development") or "development").strip().lower()
-_ALLOW_PRIVATE_OUTBOUND_URLS = os.environ.get("ALLOW_PRIVATE_OUTBOUND_URLS", "0").strip().lower() in {
+_ENVIRONMENT = (
+    str(os.environ.get("ENVIRONMENT", "development") or "development").strip().lower()
+)
+_ALLOW_PRIVATE_OUTBOUND_URLS = os.environ.get(
+    "ALLOW_PRIVATE_OUTBOUND_URLS", "0"
+).strip().lower() in {
     "1",
     "true",
     "yes",

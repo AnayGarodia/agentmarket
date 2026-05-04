@@ -664,26 +664,6 @@ def test_registry_hides_deprecated_builtin_agents(client):
     assert "Visual Regression" not in names
 
 
-def test_startup_suspends_sunset_deprecated_agents(client):
-    legacy_agent_id = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
-    registry.register_agent(
-        agent_id=legacy_agent_id,
-        name="Changelog Agent",
-        description="legacy changelog wrapper",
-        endpoint_url="https://agents.example.com/changelog",
-        price_per_call_usd=0.02,
-        tags=["deprecated", "legacy"],
-        input_schema={"type": "object", "properties": {"package": {"type": "string"}}},
-        review_status="approved",
-        status="active",
-    )
-    assert registry.get_agent(legacy_agent_id, include_unapproved=True)["status"] == "active"
-
-    server.ensure_builtin_agents_registered()
-
-    assert registry.get_agent(legacy_agent_id, include_unapproved=True)["status"] == "suspended"
-
-
 def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(client):
     with auth._conn() as conn:
         system_row = conn.execute(

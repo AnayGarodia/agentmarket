@@ -2,6 +2,7 @@
 
 > **Start with `AGENTS.md`** for the quick brief. This file is the deep reference — read it before touching money flows, auth, migrations, or the MCP surface.
 > Current priorities and roadmap live in `.agents/TODO.md` and `.agents/ROADMAP.md`.
+> Operational reference (deploy, nginx, prod env, packaging, Stripe webhook) lives in `docs/runbooks/deploy.md`.
 
 Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.**
 
@@ -11,22 +12,43 @@ Live at **[https://aztea.ai](https://aztea.ai)**
 
 ## Honest status
 
-Full status table lives in `.agents/ROADMAP.md`. Keep it updated — when you ship something, update both this sentence and that file in the same PR.
-
-**Be honest about the gap when shipping.** Hiding the gap loses more trust than admitting it.
+Full status table lives in `.agents/ROADMAP.md`. Keep it updated — when you ship something, update both this sentence and that file in the same PR. **Be honest about the gap when shipping.** Hiding the gap loses more trust than admitting it.
 
 ---
 
-## Non-negotiable engineering rules
+## Engineering style — agents must follow
 
-These apply to every change, no exceptions:
+These rules apply to every change in this repo, no exceptions. Some are CI-enforced; others are reviewer-enforced. None are optional.
 
-- **Never delete migrations.** Add new ones with the next sequence number.
-- **Never force-push main.** Always create a new commit.
-- **Never open raw `sqlite3.connect()`.** Use `core/db.py` exclusively.
-- **Never store floats in the ledger.** Integer cents only.
-- **Frontend errors must be inline.** Toasts for success only; inline error state for failures.
-- **Document every non-trivial module in agent-optimized format.** Every Python module with business logic and every non-trivial React component must have a structured block at the top — no narrative prose. Use exactly these four fields (omit any that would be empty):
+### Hard rules (CI enforces — do not bypass)
+
+- **File length:** hard limit 1000 lines. Soft warn at 500 for new files. If a new file crosses 500, split before adding more. `scripts/check_file_line_budget.py` enforces the hard limit.
+- **Function length:** max ~80 statements, cyclomatic complexity ≤ 10. Split before extending. If a function needs scrolling to understand, it's too long.
+- **Catch blocks:** never empty, never bare `except:`. Either handle the error explicitly (with structured logging) or re-raise. Empty catches and vague `console.log` calls hide bugs across sessions.
+- **No silent fallbacks.** Every except path either logs structured error context with the actual exception, or re-raises. Don't swallow.
+- **Magic numbers:** name them. Money, ratio, timeout, and limit constants live as module-level `UPPER_SNAKE` with a one-line comment. Allowlist: `0`, `1`, `-1`, `2`, simple HTTP status codes.
+- **Money paths:** never `float()` in `core/payments/` or in any settlement code. Integer cents only. CI greps for floats in money modules.
+
+### Soft rules (you must follow — reviewer will flag)
+
+- **Trace every caller in the same change.** When you alter a function signature, grep the codebase and update every caller in the same diff. Partial changes that compile but leave the codebase inconsistent are worse than no change. Never defer this.
+- **Search before creating.** Before adding a utility, helper, or formatter, grep the codebase first. Duplicates are a tax we already pay (`fmtDate` lives in 10+ files because someone skipped this).
+- **Re-read after writing.** After writing code, re-read the full file. Match the file's existing style and patterns, not your defaults.
+- **Boy scout rule.** When you touch old code, leave it slightly better — a clearer name, a removed redundancy, a tightened comment, a deleted dead branch. Compounded across a year, this is the only realistic way the codebase stays navigable.
+- **Comment WHY, never WHAT.** Well-named identifiers describe what the code does. Comment a non-obvious constraint, an invariant, a workaround for a specific bug, behavior that would surprise a reader. Never reference the current task ("added for issue #123") — that belongs in the PR description.
+- **Add a comment before touching unclear code.** When existing code's intent isn't clear, write the explanation first (in a comment), then change the code. The comment survives the next session.
+- **Prefer explicit over implicit.** Avoid magic numbers, default-parameter tricks, and behavior that depends on call order. Every assumption should be visible in the code, not inferred from context.
+- **Simplest code that solves the problem.** Clever code that requires inference will be misread in a future session. Three similar lines beat a premature abstraction.
+- **Never leave a task half-done.** If a refactor needs 12 call-site edits, do all 12 in one change. A half-applied refactor is more harmful than not starting.
+
+### Design preferences
+
+- **Pure functions where possible.** A function that takes inputs and returns outputs, with no side effects, is trivially testable, movable, and understandable later. Push side effects to the edges (HTTP routes, DB writes, filesystem).
+- **One-way dependencies.** Business logic in `core/` must not import from `server/routes/`, `frontend/`, or HTTP/transport layers. The arrow goes outward, never inward.
+- **Make illegal states unrepresentable.** Use enums, discriminated unions, and types that exclude invalid combinations rather than scattering defensive runtime checks. A pydantic model with strict literals beats four `if status not in {...}: raise`.
+- **One thing per function.** A function should do one thing, and that thing should be obvious from its name without reading the body. If you need a comment to explain *what* it does, it's doing too much.
+- **Configuration ≠ code.** Secrets, env-specific values, and feature flags change for different reasons, on different schedules, by different people. They belong in `.env` and `core/feature_flags.py` — never inlined.
+- **Document non-trivial modules in agent-optimized format.** Every Python module with business logic and every non-trivial React component must have a structured block at the top — no narrative prose. Use exactly these four fields (omit any that would be empty):
 
   ```python
   # OWNS: what this module is responsible for
@@ -37,13 +59,20 @@ These apply to every change, no exceptions:
   ```
 
   `INVARIANTS` = never touch. `DECISIONS` = understand before changing, but you're allowed. `KNOWN DEBT` = actively encouraged to fix. This distinction matters: an agent must not freeze on broken code because a comment made it look intentional.
+
+### Operational rules
+
+- **Never delete migrations.** Add new ones with the next sequence number.
+- **Never force-push main.** Always create a new commit.
+- **Never open raw `sqlite3.connect()`.** Use `core/db.py` exclusively.
+- **Frontend errors must be inline.** Toasts for success only; inline error state for failures.
 - **Keep operational runbooks current.** When you add a feature that touches money, runtime dependencies, or a buyer surface, update the relevant runbook in `docs/runbooks/` in the same commit.
 
 ---
 
 ## Repository map
 
-Every Python source file is kept **< 1000 lines**. Large modules are split into cohesive packages whose `__init__.py` re-exports the merged public surface so `import core.jobs as jobs` (and similar) continue to behave like a single module. `scripts/check_file_line_budget.py` enforces this rule.
+Every Python source file is **< 1000 lines** (see Engineering style above). Large modules are split into cohesive packages whose `__init__.py` re-exports the merged public surface so `import core.jobs as jobs` continues to behave like a single module. `scripts/check_file_line_budget.py` enforces this.
 
 ```
 server/
@@ -52,13 +81,13 @@ server/
   application_parts/part_000.py  Imports, env/config, logging, Sentry, agent IDs + constants
   application_parts/part_001.py  Migrations, FastAPI app + lifespan, CORS, /api/* compat shim,
                                  security headers, request tracing, Prometheus metrics
-  application_parts/part_006.py  Background sweeper, onboarding routes, auth routes (first to register routes)
+  application_parts/part_006.py  Background sweeper, onboarding routes, auth routes
   application_parts/part_012.py  Hosted skills API (SKILL.md upload/run/list)
   application_parts/part_013.py  SPA fallback: serves frontend/dist/index.html for non-API paths
-  builtin_agents/                Built-in IDs (constants.py), schemas (schemas.py), and registration specs
+  builtin_agents/                Built-in IDs (constants.py), schemas (schemas.py), specs
   builtin_agents/constants.py    All AGENT_ID constants, BUILTIN_INTERNAL_ENDPOINTS,
                                  CURATED_PUBLIC_BUILTIN_AGENT_IDS, DEPRECATED_BUILTIN_AGENT_IDS
-  builtin_agents/specs.py        Merges specs_part1 + specs_part2; returns only curated public builtins
+  builtin_agents/specs.py        Merges specs_part1 + specs_part2; returns curated public builtins
   error_handlers.py              Shared HTTPException / validation / rate-limit handlers
   persistence/ops_schema.py      ops + stripe event tables initialisation
   routes/system.py               Small sub-router for system routes
@@ -72,284 +101,114 @@ agents/                          Built-in agent implementations (one module each
   python_executor.py             Subprocess sandbox (real Python execution)
   web_researcher.py              HTTP fetch + HTML strip + LLM analysis
   image_generator.py             OpenAI / Replicate image gen
-  media_generation.py            Shared media helpers (used by image/video agents)
-  db_sandbox.py                  SQLite sandbox (real query execution, isolated tempfile DB)
+  media_generation.py            Shared media helpers
+  db_sandbox.py                  SQLite sandbox (isolated tempfile DB)
   visual_regression.py           Screenshot diff via Playwright (requires chromium)
   live_endpoint_tester.py        Live HTTP probe + latency histogram + assertion engine
-  browser_agent.py               Playwright-based headless browsing (requires chromium)
-  linter_agent.py                ruff (Python) / eslint (JS/TS) linter — no LLM
+  browser_agent.py               Playwright-based headless browsing
+  linter_agent.py                ruff / eslint linter — no LLM
   type_checker.py                mypy / tsc static type checking — no LLM
   shell_executor.py              Bounded subprocess shell execution
   multi_file_executor.py         Multi-file Python sandbox in isolated tempdir
   multi_language_executor.py     Polyglot code execution (Node/Deno/Bun/Go/Rust)
   semantic_codebase_search.py    Embedding-based code search over local or git-cloned repo
-  ai_red_teamer.py               Adversarial prompt / security testing against registered agents
+  ai_red_teamer.py               Adversarial prompt / security testing
   dependency_auditor.py          Package CVE + license audit via live NVD data
-  dns_inspector.py               DNS record, SSL cert, and HTTP metadata live lookup
+  dns_inspector.py               DNS record, SSL cert, HTTP metadata live lookup
   (deprecated — sunset 2026-07-26: github_fetcher, pr_reviewer, test_generator,
-   spec_writer, changelog_agent, package_finder — LLM-only wrappers kept for
-   backward compat but excluded from the public marketplace)
+   spec_writer, changelog_agent, package_finder)
 
 core/
   db.py                          SQLite connection manager — WAL, thread-local pool, PRAGMAs
   migrate.py                     Idempotent migration runner (apply_migrations)
-  auth/                          Users + scoped keys (schema.py, users.py) merged into core.auth
-  registry/                      Agent listings (core_schema.py, agents_ops.py) + embeddings cache
+  auth/                          Users + scoped keys (schema.py, users.py)
+  registry/                      Agent listings + auto-hire decision logic + embeddings cache
   jobs/                          Async job lifecycle: db.py, crud.py, leases.py, messaging.py
   payments/                      Wallets + insert-only ledger (base.py) + dispute helpers (trust_disputes.py)
   models/                        Pydantic v2 contracts: core_types, job_requests, messages_ops, responses
   mcp_manifest.py                registry → MCP tool manifest (snake_case keys, no prefix)
   embeddings.py                  sentence-transformers backend
-  disputes.py                    Dispute lifecycle and bilateral caller ratings (atomic insert + escrow clawback)
+  disputes.py                    Dispute lifecycle and bilateral caller ratings
   judges.py                      LLM-based dispute + quality judge logic
   reputation.py                  Trust scores — SOLE owner of the caller_ratings table
   onboarding.py                  agent.md parsing/validation/ingestion
   error_codes.py                 Machine-readable error taxonomy
   url_security.py                SSRF validation for all outbound URLs
-  payout_curve.py                Quality-adjusted payout clawbacks (agent→caller compensating entries)
-  compare.py                     Compare-job orchestration (same task across N agents side-by-side)
+  payout_curve.py                Quality-adjusted payout clawbacks (compensating entries)
+  compare.py                     Compare-job orchestration (same task across N agents)
   pipelines/                     Multi-step pipeline execution and persistence
   recipes.py                     Saved pipeline templates
-  tool_adapters.py               Shared MCP-manifest builders for OpenAI-tools / Gemini-tools / A2A adapters
-  feature_flags.py               Runtime feature toggles (env-based, no caching — safe to reload via SIGHUP)
-  skill_executor.py              Hosted SKILL.md execution engine (routes skill:// endpoint calls)
+  tool_adapters.py               Shared MCP-manifest builders (OpenAI / Gemini / A2A adapters)
+  feature_flags.py               Runtime feature toggles (env-based, no caching)
+  skill_executor.py              Hosted SKILL.md execution engine
   skill_parser.py                SKILL.md parser / validator
   hosted_skills.py               DB layer for uploaded skills
   identity.py                    Agent DID / Ed25519 key generation and signing
   crypto.py                      Signing primitives used by identity.py
-  cache.py                       Result cache for deduplication (TTL-based, keyed by agent + payload hash)
-  output_shaping.py              Response normalisation / truncation before serialisation
+  cache.py                       Result cache for deduplication (TTL-based)
+  output_shaping.py              Response normalisation / truncation
   observability.py               Prometheus metrics helpers, Sentry breadcrumb helpers
-  fastpath.py                    Short-circuit fast-path for cache-hit and zero-price calls
-  email.py                       SMTP email dispatch (8 templates; no-ops silently if SMTP_HOST unset)
-  compare.py                     Compare-job routing and result aggregation
+  fastpath.py                    Short-circuit for cache-hit and zero-price calls
+  email.py                       SMTP email dispatch (no-ops silently if SMTP_HOST unset)
   llm/
     base.py                      Message, CompletionRequest, LLMResponse, LLMProvider Protocol, Usage
     errors.py                    LLMError hierarchy: rate limit, timeout, auth, bad response
-    registry.py                  PROVIDERS dict, resolve(spec), DEFAULT_CHAIN, list_providers()
-    fallback.py                  run_with_fallback() — chain-tries providers, skips unavailable, retries on rate limit
+    registry.py                  PROVIDERS dict, resolve(spec), DEFAULT_CHAIN
+    fallback.py                  run_with_fallback() — chain-tries providers, retries on rate limit
     providers/                   groq, openai, anthropic, cohere, bedrock, openai_compatible (25+ via env)
 
 migrations/
   0001_initial.sql               Canonical schema — all CREATE TABLE / INDEX
-  0002–0031_*.sql                Incremental additions (applied once on startup via schema_migrations table)
+  0002–0031_*.sql                Incremental additions (applied once via schema_migrations table)
 
 sdks/
   python-sdk/                    AzteaClient (hire), AgentServer (@handler + polling loop)
-  python/                        Resource-oriented HTTP SDK (aztea package; used by the TUI adapter)
+  python/                        Resource-oriented HTTP SDK (used by the TUI adapter)
   typescript/                    TypeScript SDK
 
-tui/
-  pyproject.toml                 Standalone package aztea-tui (Textual); console entry aztea-tui
-  README.md                      Install, key bindings, architecture (screens, views, AzteaAPI adapter)
-  aztea_tui/app.py               Textual AzteaApp: login vs main from config.load_config()
-  aztea_tui/api.py               AzteaAPI — async façade over blocking AzteaClient
-  aztea_tui/screens/             LoginScreen, MainScreen (sidebar + ContentSwitcher)
-  aztea_tui/views/               Agents, jobs, wallet, my agents
-  aztea_tui/widgets/             Header bar, hire modal, live job polling
+tui/                             Standalone Textual app: aztea-tui (Python). See tui/README.md.
 
 frontend/
   src/api.js                     All API calls go through here; normalises errors, handles 401 lifecycle
   src/context/MarketContext.jsx  Global state: agents, wallet, jobs, runs; 20s polling refresh
   src/context/AuthContext.jsx    Session state and API-key management
-  src/features/auth/AuthPanel.jsx  Login / register with username + password rules enforced before request
+  src/features/auth/AuthPanel.jsx  Login / register
   src/features/agents/           AgentCard, AgentInputForm, TrustGauge
-  src/features/agents/results/   ResultRenderer + per-agent result components (CodeReviewResult, etc.)
+  src/features/agents/results/   ResultRenderer + per-agent result components
   src/features/jobs/JobTimeline  Job status timeline component
-  src/pages/                     One file per route (AgentDetailPage, JobDetailPage, WalletPage, etc.)
-  src/ui/                        Design-system primitives: Button, Card, Badge, Input, Pill, Select, etc.
-  src/ui/motion/                 Animation primitives: Reveal, Stagger, NumberMorph, ContainerScroll, etc.
-  src/utils/inputGuards.js       Client-side validators: public HTTPS URLs, price ceilings, invoke payload
-  src/theme/tokens.css           CSS custom properties for all colours, spacing, radii, and typography
+  src/pages/                     One file per route
+  src/ui/                        Design-system primitives: Button, Card, Badge, Input, Pill, Select
+  src/ui/motion/                 Animation primitives: Reveal, Stagger, NumberMorph, ContainerScroll
+  src/utils/inputGuards.js       Client-side validators
+  src/utils/format.js            fmtDate, fmtUsd, fmtMs, relativeTime — import here, never redefine
+  src/theme/tokens.css           CSS custom properties for all colours, spacing, radii, typography
 
 scripts/
   aztea_mcp_server.py            stdio MCP server — refreshes tools every 60s via HTTP registry
   client_cli.py                  CLI shim over Python SDK
   check_file_line_budget.py      CI enforcement for the 1000-line rule
-  split_python_by_ast.py         Helper that shards oversized modules on top-level AST boundaries
 
 tests/
   integration/                   Split integration suite — helpers in support.py and helpers.py
-  test_bug_regressions.py        Regression tests for previously fixed bugs (money paths, agent contracts)
-  test_agent_real_tool.py        Agent contract tests: structured errors, graceful no-LLM fallback
+  test_bug_regressions.py        Regression tests for previously fixed bugs
+  test_agent_real_tool.py        Agent contract tests
   test_mcp_manifest.py           MCP manifest correctness and schema-mutation safety
-  …                              Unit tests for jobs, payments, registry, auth, LLM, SDK
 
 docs/
-  runbooks/                      Operational runbooks — ledger drift, runtime prereqs, smoke tests
+  runbooks/                      Operational runbooks (deploy, ledger drift, runtime prereqs, smoke test)
   api-reference.md               Full HTTP API reference
   quickstart.md                  MCP / Claude Code quickstart
   agent-builder.md               Guide for registering and running agents
   orchestrator-guide.md          Multi-agent pipeline guide
   mcp-integration.md             MCP server setup and tool catalogue
-  skill-md-reference.md          SKILL.md format reference for hosted skills
+  skill-md-reference.md          SKILL.md format reference
   stripe-setup.md                Stripe Connect and webhook configuration
-  errors.md                      Error code taxonomy and client handling guide
+  errors.md                      Error code taxonomy
   reputation.md                  Trust score formula and rating mechanics
 
 docker-compose.yml               Dev compose (no SSL, mounts ./data)
-docker-compose.prod.yml          Prod compose (nginx + API, named volume for DB)
-nginx.prod.conf                  nginx reverse proxy — /api/* → FastAPI, /* → React SPA
 Makefile                         Dev shortcuts: make dev / test / docker / migrate
 ```
-
----
-
-## Production deployment
-
-### Cloudflare + EC2 (typical)
-
-- **DNS:** Point the hostname to the EC2 public IP. With Cloudflare proxy (orange cloud) on, set SSL/TLS to **Full (strict)** — this requires a valid cert on the origin (certbot + nginx).
-- **Client IP:** Terminate at nginx, forward `X-Forwarded-For` / `X-Real-IP`, configure `TRUSTED_PROXY_IPS` so `slowapi` and admin checks see the real client IP.
-- **Env URLs:** `SERVER_BASE_URL`, `FRONTEND_BASE_URL`, and `CORS_ALLOW_ORIGINS` must use the public `https://` hostname, not the raw EC2 IP.
-
-### Infrastructure
-
-- **Server:** AWS EC2 Ubuntu — `/home/aztea/app`
-- **Stack:** systemd service (`aztea.service`) running uvicorn directly — no Docker in production
-- **Process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1`
-- **Database:** SQLite WAL at the path set in `.env` (`DB_PATH`), on the host filesystem
-- **Reverse proxy:** Caddy at `/etc/caddy/Caddyfile` is a thin reverse proxy to uvicorn on `127.0.0.1:8000`. It does NOT serve static files. **FastAPI owns SPA fallback** via the catch-all `@app.get("/{full_path:path}")` in `server/application_parts/part_013.py`: maps existing `frontend/dist/*` files to themselves, returns `index.html` for everything else, and 404s anything matching `_SPA_API_PREFIXES`.
-- **SSL:** Managed by certbot on the host; nginx handles termination.
-
-**Verify what's actually deployed:** SSH key is `~/Downloads/aztea_key.pem`, user is `ubuntu@3.145.5.228` (per `.env` `DEPLOY_SSH_KEY` / `DEPLOY_HOST`). Compare `sha256sum /home/aztea/app/frontend/dist/assets/*.js` against your local `dist/` to confirm the build that was published. The release script does `git push` + EC2 `git fetch && git reset --hard origin/main`, so **uncommitted local changes never deploy** — commit first, then run the script.
-
-### Deploying a new version
-
-SSH into the server, then:
-
-```bash
-cd /home/aztea/app
-
-# 1. Pull as the service user — NEVER sudo git pull (makes files root-owned,
-#    breaks the systemd unit that runs as `aztea`).
-sudo -u aztea git fetch origin main
-sudo -u aztea git reset --hard origin/main
-
-# 2. Rebuild the React frontend
-cd frontend && npm ci && npm run build && cd ..
-
-# 3. Restart the API (migrations run automatically on startup)
-sudo systemctl kill -s SIGKILL aztea   # force-kill if stuck in shutdown
-sudo systemctl start aztea
-
-# 4. Verify
-sudo systemctl status aztea
-sudo journalctl -u aztea -n 50
-```
-
-**If the service stops cleanly** (not stuck), `restart` is fine:
-
-```bash
-sudo systemctl restart aztea
-```
-
-Migrations run automatically on startup via `core/migrate.py` — no manual step needed.
-
-### Recommended nginx config
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name aztea.ai www.aztea.ai;
-
-    root /home/aztea/app/frontend/dist;
-    index index.html;
-
-    # Hashed Vite assets — long cache
-    location ~* ^/assets/.*\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|webp|ico|map)$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-        try_files $uri =404;
-    }
-
-    # API + server routes → uvicorn (strip the /api prefix)
-    location ~ ^/(api|auth|admin|agents|jobs|registry|wallets|ops|mcp|public|config|stripe|llm|health|metrics|onboarding|disputes|reputation|runs|webhooks|skills|openapi.json)(/|$) {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-    }
-
-    # SPA fallback for client-side routes
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
-
-### Useful server commands
-
-```bash
-# Live logs
-sudo journalctl -u aztea -f
-
-# Last 100 lines of logs
-sudo journalctl -u aztea -n 100
-
-# Restart API
-sudo systemctl restart aztea
-
-# Force kill if stuck (background threads blocking shutdown)
-sudo systemctl kill -s SIGKILL aztea && sudo systemctl start aztea
-
-# Check service status
-sudo systemctl status aztea
-
-# Manual DB backup
-sqlite3 /path/to/registry.db ".backup /path/to/registry.db.bak"
-
-# Open a Python shell with app context
-cd /home/aztea/app && source venv/bin/activate && python
-
-# Run reconciliation manually
-curl -H "Authorization: Bearer $API_KEY" -X POST https://aztea.ai/ops/payments/reconcile
-```
-
-### Environment variables (prod)
-
-Stored in `.env` on the server (never committed). Key vars:
-
-```
-# Core
-ENVIRONMENT=production
-API_KEY=                        # master key — openssl rand -hex 32
-SERVER_BASE_URL=https://aztea.ai
-FRONTEND_BASE_URL=https://aztea.ai
-CORS_ALLOW_ORIGINS=https://aztea.ai
-AZTEA_FRONTEND_URL=https://aztea.ai
-
-# Stripe (use live keys in prod)
-STRIPE_SECRET_KEY=sk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-STRIPE_PUBLISHABLE_KEY=pk_live_...
-
-# LLM (at least one required)
-GROQ_API_KEY=
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-AZTEA_LLM_DEFAULT_CHAIN=groq,openai,anthropic
-
-# Optional features
-AZTEA_ENABLE_LIVE_DISPUTE_JUDGES=1
-AZTEA_ENABLE_LIVE_QUALITY_JUDGE=1
-
-# Email (if unset, all email silently no-ops)
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASSWORD=
-SMTP_FROM=noreply@aztea.ai
-```
-
-### Stripe webhook
-
-Endpoint: `POST https://aztea.ai/stripe/webhook`
-Register in the Stripe dashboard; set `STRIPE_WEBHOOK_SECRET` to the signing secret.
-Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
 ---
 
@@ -362,12 +221,12 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 - **Double-settlement guard.** `pre_call_charge`, `post_call_payout`, and `post_call_refund` each have race guards (rowcount checks on wallet UPDATE). Every new settlement path must replicate the guard.
 - **Dispute atomicity.** Dispute insert + escrow clawback MUST happen in one SQLite transaction. Lock failure rolls back the dispute row — see `core/disputes.py`.
 - **Payout-curve clawbacks** use `charge`/`refund` ledger types only — never custom transaction types. Idempotency key: `payout_curve:{job_id}`. See `core/payout_curve.py`.
-- **wallets.balance_cents is a cache.** It must be updated in the same SQL transaction as the ledger row that changes it. Validated by reconciliation runs (`POST /ops/payments/reconcile`).
+- **`wallets.balance_cents` is a cache.** It must be updated in the same SQL transaction as the ledger row that changes it. Validated by reconciliation runs (`POST /ops/payments/reconcile`).
 
 ### Database
 
 - **Single connection manager.** All modules use `core/db.py`. Never open a raw `sqlite3.connect()` anywhere.
-- **WAL mode + thread-local pool.** `DB_MAX_CONNECTIONS` (default 32) caps connections. Network I/O to downstream agents happens **between** transactions — never hold a write lock during an HTTP call.
+- **WAL mode + thread-local pool.** `DB_MAX_CONNECTIONS` (default 32) caps connections. Network I/O happens **between** transactions — never hold a write lock during an HTTP call.
 - **`caller_ratings` lives only in `reputation.py`.** `disputes.py` does not declare it. Do not re-declare or migrate this table elsewhere.
 - **Migrations are idempotent.** Each `.sql` file is applied once via a `schema_migrations` table. Never re-use a migration filename; always add a new one.
 
@@ -380,23 +239,24 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 ### Privacy / work-example recording
 
 - **Sensitive agents must never replay caller inputs.** `_record_public_work_example()` in `server/application_parts/part_003.py` drops on three independent gates: (a) hardcoded `_SENSITIVE_EXAMPLE_AGENT_IDS`, (b) the `examples_sensitive: True` flag on the spec, (c) the `Security` category. New scanner / credential / PII-handling agents must set both (b) and the Security category.
+
 ### Routing
 
 - **FastAPI swagger lives under `/api/docs`**, not `/docs`. The SPA owns `/docs`. `app = FastAPI(docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")` is enforced in `part_001.py`. Any new public-facing path must not collide with FastAPI's defaults.
-- **Add new SPA-only paths to `_SPA_API_PREFIXES` only if they should 404 as JSON**. Otherwise FastAPI's catch-all will serve `index.html` and React Router resolves them — exactly what you want.
+- **Add new SPA-only paths to `_SPA_API_PREFIXES` only if they should 404 as JSON**. Otherwise FastAPI's catch-all will serve `index.html` and React Router resolves them.
 
 ### LLM layer
 
 - **`LLMResponse.text` — not `.content`.** Every agent module must use `raw.text`. Using `.content` silently returns `None` at runtime.
 - **Never pass `model=` to `CompletionRequest` when using `run_with_fallback`.** The fallback chain selects the model. Pass `model=""` or omit it.
 - **Provider-agnostic.** Don't hardcode a provider or model in any built-in agent. Use `run_with_fallback(req)` which tries `AZTEA_LLM_DEFAULT_CHAIN` (env-overridable).
-- **Graceful LLM degradation.** If synthesis fails because no LLM provider is configured, agents that performed real retrieval must still return the retrieval output rather than raising an exception. See `agents/arxiv_research.py` for the pattern.
+- **Graceful LLM degradation.** If synthesis fails because no LLM provider is configured, agents that performed real retrieval must still return the retrieval output rather than raising. See `agents/arxiv_research.py` for the pattern.
 
 ### Built-in agents
 
-- Agent IDs are **deterministic UUID v5** from namespace `6ba7b810-9dad-11d1-80b4-00c04fd430c8` + `aztea.builtin.{slug}`. Constants live in `server/builtin_agents/constants.py`.
-- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. The six deprecated agents (`github_fetcher`, `pr_reviewer`, `test_generator`, `spec_writer`, `changelog_agent`, `package_finder`) sunset on **2026-07-26** — do not add new ones of this type.
-- Each new built-in agent needs: module in `agents/`, entry in `BUILTIN_INTERNAL_ENDPOINTS`, spec in `specs_part1.py` or `specs_part2.py`, case in `_execute_builtin_agent()`, and a structured error envelope (see "Adding a new built-in agent").
+- Agent IDs are **deterministic UUID v5** from namespace `6ba7b810-9dad-11d1-80b4-00c04fd430c8` + `aztea.builtin.{slug}`. Constants live in `server/builtin_agents/constants.py` (single source of truth).
+- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. The six deprecated agents sunset on **2026-07-26** — do not add new LLM-only agents.
+- Each new built-in agent needs: module in `agents/`, entry in `BUILTIN_INTERNAL_ENDPOINTS`, spec in `specs_part1.py` or `specs_part2.py`, case in `_execute_builtin_agent()`, and a structured error envelope.
 - **Work examples** are stored via `_record_public_work_example()`. Pass `private_task=True` to skip recording. Ring buffer capped at `_AGENT_WORK_EXAMPLES_MAX`.
 
 ### MCP surface
@@ -405,9 +265,9 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
 - `scripts/aztea_mcp_server.py` refreshes tools every 60s via the HTTP registry.
-- **Lazy tool surface is four tools**: `aztea_search`, `aztea_describe`, `aztea_call`, **`aztea_do`**. `aztea_do` is the auto-invoke fast path — picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends (`scripts/aztea_mcp_server.py`, `sdks/aztea-cli/src/mcp-server.js`) are thin proxies. Decision logic and gate constants live in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags read at call time.
-- **Output formats**: Both `aztea_call` and `aztea_do` accept `output_format` (`json | markdown | github_pr_comment | slack_blocks | text`). The renderer lives in `core/output_formats.py` and dispatches by sniffing well-known output shapes (CodeReview, Linter, TypeChecker, DepAuditor, GitDiffAnalyzer, pipeline) — NOT by `agent_id` — so external agents inherit pretty rendering for free. Renderers must never raise; unknown shapes fall back to a generic JSON code-fence. The canonical `output` dict is left intact; the rendered string lands under `rendered_output` + `rendered_output_format`. Hooked into the response path via `_decorate_with_rendered_output` in `part_008.py` (cache-hit, sync-success, sync-success-remote).
-- **Built-in recipes** (`core/recipes.py`): `git-diff-review` is the killer demo and the platform's first production A2A pipeline — `git_diff_analyzer` (deterministic) → `code_review_agent` (LLM with stage-1 summary as context). The recipe takes `{diff}`. Ships alongside `modernize-python`, `audit-deps`, `review-and-lint`, `review-and-test`. Live demo at `/demos/git-diff-review` (frontend page `frontend/src/pages/GitDiffReviewPage.jsx`).
+- **Lazy tool surface is four tools**: `aztea_search`, `aztea_describe`, `aztea_call`, **`aztea_do`**. `aztea_do` is the auto-invoke fast path — picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags.
+- **Output formats**: Both `aztea_call` and `aztea_do` accept `output_format` (`json | markdown | github_pr_comment | slack_blocks | text`). Renderer at `core/output_formats.py` dispatches by sniffing well-known output shapes (CodeReview, Linter, TypeChecker, DepAuditor, GitDiffAnalyzer, pipeline) — NOT by `agent_id` — so external agents inherit pretty rendering for free. Renderers must never raise; unknown shapes fall back to a generic JSON code-fence. The canonical `output` dict is left intact; the rendered string lands under `rendered_output` + `rendered_output_format`. Hooked in via `_decorate_with_rendered_output` in `part_008.py`.
+- **Built-in recipes** (`core/recipes.py`): `git-diff-review` is the killer demo and the platform's first production A2A pipeline — `git_diff_analyzer` (deterministic) → `code_review_agent` (LLM with stage-1 summary as context). Ships alongside `modernize-python`, `audit-deps`, `review-and-lint`, `review-and-test`. Live demo at `/demos/git-diff-review` (`frontend/src/pages/GitDiffReviewPage.jsx`).
 
 ---
 
@@ -450,7 +310,7 @@ Sweeper handles expired leases, timeouts, and auto-retries. Built-in worker poll
 ### Trust / dispute
 
 ```
-POST /jobs/{id}/rating          caller → rates agent (triggers payout-curve clawback if configured)
+POST /jobs/{id}/rating          caller → rates agent (triggers payout-curve clawback)
 POST /jobs/{id}/rate-caller     agent → rates caller
 POST /jobs/{id}/dispute         atomic: insert + escrow clawback
 POST /ops/disputes/{id}/judge   LLM judge (needs 2 agreeing votes)
@@ -469,9 +329,7 @@ POST /admin/disputes/{id}/rule  admin tie-break
 
 **Aliases:** `claude`→`anthropic`, `gpt`→`openai`, `google`→`gemini`, `aws`→`bedrock`, `llama`→`groq`
 
-**Native providers:** groq, openai, anthropic, cohere, bedrock (all others via `openai_compatible_provider.py`)
-
-**25+ pre-configured compatible providers:** mistral, together, fireworks, deepseek, perplexity, cerebras, openrouter, sambanova, novita, ai21, deepinfra, hyperbolic, anyscale, nvidia, lmstudio, ollama, azure, and more.
+**Native providers:** groq, openai, anthropic, cohere, bedrock (all others via `openai_compatible_provider.py`). 25+ pre-configured compatible providers including mistral, together, fireworks, deepseek, perplexity, cerebras, openrouter, sambanova, nvidia, lmstudio, ollama, azure.
 
 **Usage pattern in agents:**
 
@@ -491,19 +349,18 @@ text = raw.text.strip()  # always .text, never .content
 
 ## Frontend
 
-- **React 18 + Vite + motion/react** (`framer-motion` fork) for animations
+- **React 18 + Vite + motion/react** for animations
 - **CSS variables** for theming in `src/theme/tokens.css` — never hardcode colours or spacing
-- **Feature-based structure:** `src/features/agents/`, `src/features/jobs/`, `src/features/auth/`, etc.
-- **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, Card, Badge, etc.) — always use these, never raw HTML equivalents
-- **Motion primitives** in `src/ui/motion/` (Reveal, Stagger, NumberMorph, ContainerScroll, etc.) — use for all animations, never raw `motion()` calls
+- **Feature-based structure:** `src/features/agents/`, `src/features/jobs/`, `src/features/auth/`
+- **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, Card, Badge) — always use these, never raw HTML equivalents
+- **Motion primitives** in `src/ui/motion/` (Reveal, Stagger, NumberMorph, ContainerScroll) — use for all animations, never raw `motion()` calls
 - **`src/api.js`** — all API calls go through here
 - **`ResultRenderer`** in `src/features/agents/results/` — handles rich output display
 - **Error handling pattern:** every user action must show inline errors (not just toasts); toasts are for success only
-- **Aesthetic rule:** never use Inter/Roboto/Arial; never use purple gradients; commit to a cohesive theme with distinctive typography, dominant colours with sharp accents, and intentional motion at load time
-- **Formatters live in `src/utils/format.js`** — `fmtDate`, `fmtDateSec`, `fmtUsd`, `fmtMs`, `fmtDateShort`, `relativeTime`. Pages must import from there, not redefine.
-- **Inline styles:** many pages (esp. `JobDetailPage`, `DashboardPage`) use `style={{}}` objects instead of CSS classes. Prefer CSS classes with token variables on every new or edited component
-- **Don't wrap a route element in a fresh `<Routes>` tree under another `<Routes>`** — it causes a blank-mount race on prod that doesn't repro in `vite dev` or `vite preview`. To render a page inside `AppShell` from outside `AuthedApp`, use the `children` prop pattern: `<AppShell><Page /></AppShell>`. `AppShell` falls back to `<Outlet />` when no children are passed.
-- **`AppShell`, `Topbar`, `OnboardingWizard` assume `MarketProvider` exists.** When mounting them outside the authed tree, wrap with `<MarketProvider apiKey={apiKey}>` and `useMarket()` must be treated as nullable on these components.
+- **Aesthetic rule:** never use Inter/Roboto/Arial; never use purple gradients; commit to a cohesive theme with distinctive typography, dominant colours with sharp accents, and intentional motion
+- **Formatters live in `src/utils/format.js`** — `fmtDate`, `fmtDateSec`, `fmtUsd`, `fmtMs`, `relativeTime`. Pages must import from there, not redefine.
+- **Don't wrap a route element in a fresh `<Routes>` tree under another `<Routes>`** — it causes a blank-mount race on prod that doesn't repro in `vite dev` or `vite preview`. To render a page inside `AppShell` from outside `AuthedApp`, use the `children` prop pattern. `AppShell` falls back to `<Outlet />` when no children are passed.
+- **`AppShell`, `Topbar`, `OnboardingWizard` assume `MarketProvider` exists.** When mounting them outside the authed tree, wrap with `<MarketProvider apiKey={apiKey}>`.
 - **Performance:** the highest-leverage paint win on long pages is `content-visibility: auto` + `contain-intrinsic-size: 1px <px>` on every offscreen section. Defer non-LCP fetches with `requestIdleCallback`. `lazy(() => import(...))` heavy canvas / animation modules so they don't block first paint.
 
 ---
@@ -523,7 +380,7 @@ cd frontend && npm install && npm run dev
 
 # Reproduce production behaviour locally before deploy:
 cd frontend && npm run build && npx vite preview --port 4173
-# If `vite preview` works but prod doesn't, the bug is in the Caddy → uvicorn → SPA-fallback path or a route definition shadowing the SPA — not the bundle.
+# If `vite preview` works but prod doesn't, the bug is in the Caddy → uvicorn → SPA-fallback path or a route definition shadowing the SPA.
 
 # Tests (453 passed + 1 skipped on main suite as of 2026-04-28;
 # run the SDK contract suite separately — it can segfault under Python 3.14 on macOS)
@@ -533,7 +390,7 @@ pytest -q tests/test_sdk_contract.py
 # Integration tests only (137 passed as of 2026-04-28)
 pytest -q tests/integration
 
-# Line-budget enforcement (every Python source file must be < 1000 lines)
+# Line-budget enforcement (every Python source file < 1000 lines)
 python scripts/check_file_line_budget.py
 
 # Single integration test
@@ -558,56 +415,20 @@ curl -H "Authorization: Bearer $API_KEY" -X POST http://localhost:8000/ops/payme
 
 ## Operational runbooks
 
-Runbooks for the three highest-risk operational scenarios live in `docs/runbooks/`:
+Runbooks for operational scenarios live in `docs/runbooks/`:
 
-- **`docs/runbooks/ledger-drift.md`** — what to do when reconciliation reports non-zero drift or mismatch count; step-by-step query guide to trace the root cause
-- **`docs/runbooks/runtime-prerequisites.md`** — which agents require which system packages (Playwright/chromium, Node, Deno, Go, Rust, ruff, mypy, tsc) and how to verify they are present
-- **`docs/runbooks/buyer-surface-smoke-test.md`** — ordered smoke-test checklist to verify all buyer surfaces (web, MCP/Claude, Python SDK, CLI, TUI, REST) are functioning after a deploy
+- **`docs/runbooks/deploy.md`** — production deploy process, nginx config, prod env vars, package distribution, Stripe webhook setup
+- **`docs/runbooks/ledger-drift.md`** — what to do when reconciliation reports non-zero drift; step-by-step query guide
+- **`docs/runbooks/runtime-prerequisites.md`** — which agents require which system packages (Playwright/chromium, Node, Deno, Go, Rust, ruff, mypy, tsc) and how to verify
+- **`docs/runbooks/buyer-surface-smoke-test.md`** — ordered smoke-test checklist to verify all buyer surfaces (web, MCP/Claude, Python SDK, CLI, TUI, REST) after a deploy
 
 Update the relevant runbook in the same commit as any change that affects money flows, adds a runtime dependency, or changes a buyer surface.
 
 ---
 
-## Package distribution (PyPI + npm)
-
-Publish order is important:
-
-1. Publish `aztea-tui` first (`tui/pyproject.toml`).
-2. Publish `aztea` second — it depends on `aztea-tui`, so the new TUI version must be on PyPI first.
-
-```bash
-# 1) TUI (PyPI)
-cd tui
-python3 -m venv .release-venv && source .release-venv/bin/activate
-python -m pip install -U pip build twine
-python -m build
-python -m twine upload dist/aztea_tui-*
-
-# 2) SDK (PyPI)
-cd ../sdks/python-sdk
-source ../../tui/.release-venv/bin/activate
-python -m build
-python -m twine upload dist/aztea-*
-
-# 3) npm wrapper
-cd ../../tui/npm
-npm publish --access public --otp <code>
-```
-
-Quick verification in a clean environment:
-
-```bash
-python3 -m venv /tmp/aztea-check && source /tmp/aztea-check/bin/activate
-pip install -U aztea
-python -c "import aztea; print(aztea.__version__)"
-which aztea-tui
-```
-
----
-
 ## Adding a new built-in agent
 
-1. Create `agents/{slug}.py` with a `run(payload: dict) -> dict` function and a module-level docstring that describes inputs, outputs, external dependencies, and runtime requirements.
+1. Create `agents/{slug}.py` with a `run(payload: dict) -> dict` function and a module-level docstring describing inputs, outputs, external dependencies, and runtime requirements.
 2. Generate a stable ID: `uuid.uuid5(uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8'), 'aztea.builtin.{slug}')`.
 3. Add the ID as a constant in `server/builtin_agents/constants.py` and wire into `BUILTIN_INTERNAL_ENDPOINTS` + `CURATED_PUBLIC_BUILTIN_AGENT_IDS` (only if the agent performs real external work beyond pure LLM prompting).
 4. Add the agent import to `server/application_parts/part_000.py` (the import shard).
@@ -627,7 +448,7 @@ The shards share a single logical namespace — `server/application.py` compiles
 - Add new top-level routes at the end of the shard that naturally owns the concern.
 - Keep each shard **< 900 lines**. CI fails on any file > 1000 lines.
 - If a function grows too large, move it into a helper module under `core/` — do **not** re-split the shards by hand.
-- Every shard must begin with a `# server.application shard N — <what it owns>` comment so grep and human readers can orient quickly.
+- Every shard begins with a `# server.application shard N — <what it owns>` comment.
 
 ---
 
@@ -651,56 +472,10 @@ DB_MAX_CONNECTIONS=32
 SMTP_HOST=                      # leave blank locally; email silently no-ops
 ```
 
+Production env vars and Stripe webhook config: see `docs/runbooks/deploy.md`.
+
 ---
 
-## Public agent IDs (current)
+## Public agent IDs
 
-Source of truth: `server/builtin_agents/constants.py`. Curated public set — agents that perform real external work:
-
-| Agent                       | ID                                     |
-| --------------------------- | -------------------------------------- |
-| CVE Lookup                  | `a3e239dd-ea92-556b-9c95-0a213a3daf59` |
-| arXiv Research              | `9e673f6e-9115-516f-b41b-5af8bcbf15bd` |
-| Python Code Executor        | `040dc3f5-afe7-5db7-b253-4936090cc7af` |
-| Web Researcher              | `32cd7b5c-44d0-5259-bb02-1bbc612e92d7` |
-| Code Review                 | `8cea848f-a165-5d6c-b1a0-7d14fff77d14` |
-| DNS Inspector               | `3d677381-791c-5e83-8e66-5b77d0e43e2e` |
-| Dependency Auditor          | `11fab82a-426e-513e-abf3-528d99ef2b87` |
-| Multi-File Executor         | `ea95cdec-32c1-5a2b-a032-3e7061abf3a4` |
-| Linter                      | `7ec4c987-9a7e-5af8-984f-7b8ad0ad0536` |
-| Shell Executor              | `6bd98167-e010-5604-8c76-6ed1b92698f1` |
-| Type Checker                | `5b140628-52a8-565b-8599-b1c3e402b02d` |
-| DB Sandbox                  | `be4d6c18-629d-5b1c-8c46-f82c00db4995` |
-| Visual Regression           | `20a74467-d633-5016-b210-adf769b2df9c` |
-| Live Endpoint Tester        | `8af9fc34-ec0c-5732-b0e0-4e4efdff749c` |
-| Browser Agent               | `c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d` |
-| Multi-Language Executor     | `d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e` |
-| Semantic Codebase Search    | `e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f` |
-| AI Red Teamer               | `f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a` |
-| Secret Scanner              | `1021c65c-d2bf-54ff-823a-897f9deb1029` |
-| JSON Schema Validator       | `1b0b5820-b796-53cc-8d31-5e336d86d875` |
-| Regex Tester                | `36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee` |
-| SQL Explainer               | `91258740-dd32-51b6-be91-a7638fae190f` |
-| Git Diff Analyzer           | `8ac84144-4fd1-5883-bfad-e7b64d729b8f` |
-
-Internal / hidden (not in public marketplace):
-
-| Agent                       | ID                                     |
-| --------------------------- | -------------------------------------- |
-| Quality Judge (internal)    | `9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33` |
-| Image Generator (gated)     | `4fb167bd-b474-5ea5-bd5c-8976dfe799ae` |
-| Video Storyboard (gated)    | `c12994de-cde9-514a-9c07-a3833b25bb1f` |
-| HN Digest (legacy)          | `31cc3a99-eca6-5202-96d4-8366f426ae1d` |
-| Financial Research (legacy) | `b7741251-d7ac-5423-b57d-8e12cd80885f` |
-| Wikipedia Research (legacy) | `9a175aa2-8ffd-52f7-aae0-5a33fc88db83` |
-
-Deprecated — sunset 2026-07-26 (kept for backward compat, excluded from marketplace via `SUNSET_DEPRECATED_AGENT_IDS`):
-
-| Agent             | ID                                     |
-| ----------------- | -------------------------------------- |
-| GitHub Fetcher    | `5896576f-bbe6-59e4-83c1-5106002e7d10` |
-| PR Reviewer       | `3e133b66-3bc6-5003-9b64-3284b28a60c6` |
-| Test Generator    | `f515323c-7df2-5742-ac06-bc38b59a40cb` |
-| Spec Writer       | `ce9504a3-74c8-51a5-913e-6ae55787abc8` |
-| Changelog Agent   | `48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c` |
-| Package Finder    | `d11ddab1-bcca-55de-8b00-c9efadc69c79` |
+Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`. Internal/hidden agents are in the same file. Deprecated agents (sunset 2026-07-26) are listed in `SUNSET_DEPRECATED_AGENT_IDS` — kept for backward compat, excluded from the marketplace. Always read constants directly; do not duplicate IDs anywhere else.

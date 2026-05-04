@@ -4,10 +4,14 @@
 # validation, rate-limited hook URL checks. No routes here.
 
 
-def _normalize_input_protocol_from_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _normalize_input_protocol_from_payload(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
     protocol = payload.get("protocol")
     if not isinstance(protocol, dict):
-        private_task = _normalize_optional_bool(payload.get("private_task"), field_name="private_task")
+        private_task = _normalize_optional_bool(
+            payload.get("private_task"), field_name="private_task"
+        )
         if private_task is None:
             return dict(payload), []
         normalized_payload = _merge_protocol_input_envelope(
@@ -35,7 +39,9 @@ def _normalize_input_protocol_from_payload(payload: dict[str, Any]) -> tuple[dic
         protocol.get("private_task", payload.get("private_task")),
         field_name="protocol.private_task",
     )
-    metadata = _normalize_protocol_metadata(protocol.get("metadata"), field_name="protocol.metadata")
+    metadata = _normalize_protocol_metadata(
+        protocol.get("metadata"), field_name="protocol.metadata"
+    )
     normalized_payload = _merge_protocol_input_envelope(
         payload,
         input_artifacts=input_artifacts,
@@ -66,10 +72,16 @@ def _normalize_output_protocol_for_response(
         field_name="protocol.output_artifacts",
         strict=False,
     )
-    output_format = str(protocol_dict.get("output_format") or "").strip().lower() or None
+    output_format = (
+        str(protocol_dict.get("output_format") or "").strip().lower() or None
+    )
     if output_format is None and output_artifacts:
-        output_format = str(output_artifacts[0].get("mime") or "").strip().lower() or None
-    metadata = _normalize_protocol_metadata(protocol_dict.get("metadata"), field_name="protocol.metadata")
+        output_format = (
+            str(output_artifacts[0].get("mime") or "").strip().lower() or None
+        )
+    metadata = _normalize_protocol_metadata(
+        protocol_dict.get("metadata"), field_name="protocol.metadata"
+    )
     if requested_output_formats:
         metadata.setdefault("requested_output_formats", list(requested_output_formats))
     return _merge_protocol_output_envelope(
@@ -84,7 +96,9 @@ def _is_private_task_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
     try:
-        private_top_level = _normalize_optional_bool(payload.get("private_task"), field_name="private_task")
+        private_top_level = _normalize_optional_bool(
+            payload.get("private_task"), field_name="private_task"
+        )
     except ValueError:
         private_top_level = None
     if private_top_level is True:
@@ -113,7 +127,11 @@ def _truncate_example_value(value: Any) -> Any:
         truncated: dict[str, Any] = {}
         for key, item in list(value.items())[:50]:
             key_text = str(key)
-            if key_text == "url_or_base64" and isinstance(item, str) and item.startswith("data:"):
+            if (
+                key_text == "url_or_base64"
+                and isinstance(item, str)
+                and item.startswith("data:")
+            ):
                 truncated[key_text] = "<inline-data-uri-omitted>"
                 continue
             truncated[key_text] = _truncate_example_value(item)
@@ -134,11 +152,13 @@ def _extract_protocol_output_artifacts(payload: dict[str, Any]) -> list[dict[str
     )
 
 
-_SENSITIVE_EXAMPLE_AGENT_IDS: frozenset[str] = frozenset({
-    # Secret Scanner — inputs are credentials/source code by definition.
-    # Recording any example would replay caller-submitted secrets to other buyers.
-    "1021c65c-d2bf-54ff-823a-897f9deb1029",
-})
+_SENSITIVE_EXAMPLE_AGENT_IDS: frozenset[str] = frozenset(
+    {
+        # Secret Scanner — inputs are credentials/source code by definition.
+        # Recording any example would replay caller-submitted secrets to other buyers.
+        "1021c65c-d2bf-54ff-823a-897f9deb1029",
+    }
+)
 
 
 def _record_public_work_example(
@@ -175,7 +195,8 @@ def _record_public_work_example(
         "created_at": _utc_now_iso(),
         "input": _truncate_example_value(input_payload),
         "output": _truncate_example_value(output_payload),
-        "model_provider": str(agent.get("model_provider") or "").strip().lower() or None,
+        "model_provider": str(agent.get("model_provider") or "").strip().lower()
+        or None,
         "model_id": str(agent.get("model_id") or "").strip() or None,
     }
     if job_id:
@@ -209,9 +230,13 @@ def _normalize_job_message_protocol(
     if not isinstance(raw_payload, dict):
         raise ValueError("payload must be an object.")
 
-    parsed = _parse_job_message_protocol_from_models(msg_type, raw_payload, correlation_id)
+    parsed = _parse_job_message_protocol_from_models(
+        msg_type, raw_payload, correlation_id
+    )
     if parsed is None:
-        parsed = _parse_job_message_protocol_fallback(msg_type, raw_payload, correlation_id)
+        parsed = _parse_job_message_protocol_fallback(
+            msg_type, raw_payload, correlation_id
+        )
 
     normalized_type = str(parsed.get("type") or "").strip().lower()
     payload = parsed.get("payload", {})
@@ -266,7 +291,9 @@ def _parse_job_message_protocol_from_models(
         raise ValueError(str(exc)) from exc
 
     normalized_type = str(normalized.get("type") or msg_type).strip().lower()
-    canonical_type = str(normalized.get("canonical_type") or normalized_type).strip().lower()
+    canonical_type = (
+        str(normalized.get("canonical_type") or normalized_type).strip().lower()
+    )
     normalized_payload = normalized.get("payload", payload)
     normalized_correlation = normalized.get("correlation_id")
     if not isinstance(normalized_payload, dict):
@@ -304,7 +331,11 @@ def _parse_job_message_protocol_fallback(
         }
 
     if msg_type in _LEGACY_JOB_MESSAGE_TYPES:
-        return {"type": msg_type, "payload": dict(payload), "correlation_id": normalized_correlation}
+        return {
+            "type": msg_type,
+            "payload": dict(payload),
+            "correlation_id": normalized_correlation,
+        }
 
     raise ValueError(f"Unsupported job message type: {msg_type}")
 
@@ -347,9 +378,13 @@ def _validate_typed_job_message_payload(msg_type: str, payload: dict) -> dict:
             try:
                 percent = int(percent_raw)
             except (TypeError, ValueError) as exc:
-                raise ValueError("progress payload.percent must be an integer between 0 and 100.") from exc
+                raise ValueError(
+                    "progress payload.percent must be an integer between 0 and 100."
+                ) from exc
             if percent < 0 or percent > 100:
-                raise ValueError("progress payload.percent must be an integer between 0 and 100.")
+                raise ValueError(
+                    "progress payload.percent must be an integer between 0 and 100."
+                )
             normalized["percent"] = percent
         note = str(normalized.get("note") or "").strip()
         if note:
@@ -370,7 +405,9 @@ def _validate_typed_job_message_payload(msg_type: str, payload: dict) -> dict:
         elif isinstance(body, dict):
             normalized["body"] = dict(body)
         else:
-            raise ValueError("agent_message payload.body must be an object or non-empty string.")
+            raise ValueError(
+                "agent_message payload.body must be an object or non-empty string."
+            )
         to_id = str(normalized.get("to_id") or "").strip()
         if to_id:
             normalized["to_id"] = to_id
@@ -379,7 +416,9 @@ def _validate_typed_job_message_payload(msg_type: str, payload: dict) -> dict:
         return normalized
 
     if msg_type == "tool_call":
-        tool_name = str(normalized.get("tool_name") or normalized.get("name") or "").strip()
+        tool_name = str(
+            normalized.get("tool_name") or normalized.get("name") or ""
+        ).strip()
         if not tool_name:
             raise ValueError("tool_call payload.tool_name is required.")
         normalized["tool_name"] = tool_name
@@ -522,11 +561,17 @@ def _record_job_event(
             "job_id": event.get("job_id"),
             "agent_id": event.get("agent_id"),
             "actor_owner_id": event.get("actor_owner_id"),
-            "payload": event.get("payload") if isinstance(event.get("payload"), dict) else {},
+            "payload": event.get("payload")
+            if isinstance(event.get("payload"), dict)
+            else {},
         },
     )
     _deliver_job_event_hooks(event)
-    if event.get("event_type") in {"job.completed", "job.failed", "job.failed_quality"} and (job or {}).get("callback_url"):
+    if event.get("event_type") in {
+        "job.completed",
+        "job.failed",
+        "job.failed_quality",
+    } and (job or {}).get("callback_url"):
         _enqueue_job_callback(job, event["event_id"])
     return event
 
@@ -535,7 +580,9 @@ def _stable_json_text(payload: Any) -> str:
     try:
         return json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str)
     except TypeError:
-        return json.dumps({"value": str(payload)}, separators=(",", ":"), sort_keys=True)
+        return json.dumps(
+            {"value": str(payload)}, separators=(",", ":"), sort_keys=True
+        )
 
 
 def _idempotency_begin(
@@ -548,10 +595,14 @@ def _idempotency_begin(
     if not idempotency_key:
         return None
     if len(idempotency_key) > 128:
-        raise HTTPException(status_code=422, detail=f"{_IDEMPOTENCY_KEY_HEADER} is too long.")
+        raise HTTPException(
+            status_code=422, detail=f"{_IDEMPOTENCY_KEY_HEADER} is too long."
+        )
 
     owner_id = caller["owner_id"]
-    request_hash = hashlib.sha256(_stable_json_text(payload).encode("utf-8")).hexdigest()
+    request_hash = hashlib.sha256(
+        _stable_json_text(payload).encode("utf-8")
+    ).hexdigest()
     now = _utc_now_iso()
 
     with jobs._conn() as conn:
@@ -608,7 +659,9 @@ def _idempotency_begin(
     }
 
 
-def _idempotency_complete(idempotency_state: dict | None, body: Any, status_code: int) -> None:
+def _idempotency_complete(
+    idempotency_state: dict | None, body: Any, status_code: int
+) -> None:
     if not idempotency_state or idempotency_state.get("replay"):
         return
     now = _utc_now_iso()
@@ -729,6 +782,7 @@ def _validate_agent_endpoint_url(request: Request, endpoint_url: str) -> str:
     # on top of the generic SSRF check). url_security.validate_agent_endpoint_url
     # falls back to validate_outbound_url for the SSRF logic.
     from core.url_security import validate_agent_endpoint_url as _strict_endpoint
+
     return _strict_endpoint(normalized, "endpoint_url")
 
 
@@ -788,10 +842,13 @@ def _probe_register_endpoint_or_400(url: str) -> None:
     except HTTPException:
         raise
     except Exception:
-        pass  # POST probe failure is non-fatal; liveness check above already passed
+        # Non-fatal: liveness check above already passed; probe is best-effort HTML detection
+        _LOG.debug("POST probe failed during agent registration check", exc_info=True)
 
 
-def _create_job_event_hook(owner_id: str, target_url: str, secret: str | None = None) -> dict:
+def _create_job_event_hook(
+    owner_id: str, target_url: str, secret: str | None = None
+) -> dict:
     hook_id = str(uuid.uuid4())
     now = _utc_now_iso()
     normalized_secret = secret.strip() if secret else None
@@ -811,7 +868,9 @@ def _create_job_event_hook(owner_id: str, target_url: str, secret: str | None = 
     return _hook_row_to_dict(row)
 
 
-def _list_job_event_hooks(owner_id: str | None = None, include_inactive: bool = False) -> list[dict]:
+def _list_job_event_hooks(
+    owner_id: str | None = None, include_inactive: bool = False
+) -> list[dict]:
     clauses = []
     params: list[Any] = []
     if owner_id is not None:
@@ -906,5 +965,3 @@ def _resolve_builtin_agent_id(agent: dict[str, Any]) -> str | None:
     if agent_id in _BUILTIN_AGENT_IDS and endpoint.startswith("internal://"):
         return agent_id
     return None
-
-

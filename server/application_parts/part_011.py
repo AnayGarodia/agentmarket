@@ -19,7 +19,9 @@ def admin_get_dispute(
     _require_admin_ip_allowlist(request)
     ctx = disputes.get_dispute_context(dispute_id)
     if ctx is None:
-        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Dispute '{dispute_id}' not found."
+        )
     escrow_wallet = payments.get_wallet_by_owner(
         payments.DISPUTE_ESCROW_OWNER_PREFIX + dispute_id
     )
@@ -43,10 +45,15 @@ def disputes_admin_rule(
     _require_admin_ip_allowlist(request)
     dispute_row = disputes.get_dispute(dispute_id)
     if dispute_row is None:
-        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Dispute '{dispute_id}' not found."
+        )
 
     if dispute_row["status"] == "final":
-        raise HTTPException(status_code=409, detail="This dispute is already finalized and cannot be re-ruled.")
+        raise HTTPException(
+            status_code=409,
+            detail="This dispute is already finalized and cannot be re-ruled.",
+        )
 
     if dispute_row["status"] in {"resolved", "consensus"}:
         disputes.set_dispute_status(dispute_id, "appealed")
@@ -103,7 +110,9 @@ def disputes_admin_rule(
         )
 
     if finalized is None:
-        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Dispute '{dispute_id}' not found."
+        )
 
     job = jobs.get_job(finalized["job_id"])
     if job is not None:
@@ -116,8 +125,12 @@ def disputes_admin_rule(
         for _party_owner_id in {job.get("caller_owner_id"), job.get("agent_owner_id")}:
             _party_email = _get_owner_email(_party_owner_id or "")
             if _party_email:
-                _email.send_dispute_resolved(_party_email, finalized["job_id"], dispute_id, body.outcome)
-    return JSONResponse(content={"dispute": _dispute_view(finalized), "settlement": settlement})
+                _email.send_dispute_resolved(
+                    _party_email, finalized["job_id"], dispute_id, body.outcome
+                )
+    return JSONResponse(
+        content={"dispute": _dispute_view(finalized), "settlement": settlement}
+    )
 
 
 @app.get(
@@ -171,7 +184,9 @@ def jobs_events(
     limit: int = 100,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobEventsResponse:
-    return JSONResponse(content={"events": _list_job_events(caller, since=since, limit=limit)})
+    return JSONResponse(
+        content={"events": _list_job_events(caller, since=since, limit=limit)}
+    )
 
 
 @app.post(
@@ -344,6 +359,7 @@ def jobs_slo(
 # Payments ops routes
 # ---------------------------------------------------------------------------
 
+
 @app.get(
     "/ops/payments/reconcile",
     response_model=core_models.DynamicObjectResponse,
@@ -460,26 +476,31 @@ def wallet_spend_summary(
                 if ag:
                     agent_name = ag.get("name") or agent_id
             except Exception:
-                pass
-        by_agent.append({
-            "agent_id": agent_id,
-            "agent_name": agent_name,
-            "total_cents": int(row["total_cents"] or 0),
-            "job_count": int(row["job_count"] or 0),
-        })
-    return JSONResponse(content={
-        "period": period,
-        "days": days,
-        "total_cents": int((totals["total_cents"] or 0) if totals else 0),
-        "total_jobs": int((totals["job_count"] or 0) if totals else 0),
-        "by_agent": by_agent,
-        "wallet_id": wallet_id,
-    })
+                _LOG.warning("Failed to resolve agent name for %s in spending report", agent_id, exc_info=True)
+        by_agent.append(
+            {
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "total_cents": int(row["total_cents"] or 0),
+                "job_count": int(row["job_count"] or 0),
+            }
+        )
+    return JSONResponse(
+        content={
+            "period": period,
+            "days": days,
+            "total_cents": int((totals["total_cents"] or 0) if totals else 0),
+            "total_jobs": int((totals["job_count"] or 0) if totals else 0),
+            "by_agent": by_agent,
+            "wallet_id": wallet_id,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # Wallet routes
 # ---------------------------------------------------------------------------
+
 
 @app.post(
     "/wallets/deposit",
@@ -496,9 +517,13 @@ def wallet_deposit(
     _require_admin_ip_allowlist(request)
     wallet = payments.get_wallet(body.wallet_id)
     if wallet is None:
-        raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Wallet '{body.wallet_id}' not found."
+        )
     if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to deposit into this wallet.")
+        raise HTTPException(
+            status_code=403, detail="Not authorized to deposit into this wallet."
+        )
     if int(body.amount_cents) < MINIMUM_DEPOSIT_CENTS:
         raise _deposit_below_minimum_error(int(body.amount_cents))
     try:
@@ -506,10 +531,13 @@ def wallet_deposit(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     wallet = payments.get_wallet(body.wallet_id)
-    return JSONResponse(content={
-        "tx_id": tx_id, "wallet_id": body.wallet_id,
-        "balance_cents": wallet["balance_cents"],
-    })
+    return JSONResponse(
+        content={
+            "tx_id": tx_id,
+            "wallet_id": body.wallet_id,
+            "balance_cents": wallet["balance_cents"],
+        }
+    )
 
 
 @app.get(
@@ -527,7 +555,9 @@ def wallet_me(
     wallet = payments.get_or_create_wallet(owner_id)
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
     caller_trust = payments.get_caller_trust(owner_id)
-    return JSONResponse(content={**wallet, "caller_trust": caller_trust, "transactions": txs})
+    return JSONResponse(
+        content={**wallet, "caller_trust": caller_trust, "transactions": txs}
+    )
 
 
 @app.post(
@@ -672,11 +702,13 @@ def wallet_agent_transactions(
     agent_wallet = _resolve_owned_agent_wallet(request, caller, agent_id)
     capped = max(1, min(int(limit or 50), 200))
     txs = payments.get_wallet_transactions(agent_wallet["wallet_id"], limit=capped)
-    return JSONResponse(content={
-        "wallet_id": agent_wallet["wallet_id"],
-        "agent_id": agent_id,
-        "transactions": txs,
-    })
+    return JSONResponse(
+        content={
+            "wallet_id": agent_wallet["wallet_id"],
+            "agent_id": agent_id,
+            "transactions": txs,
+        }
+    )
 
 
 @app.patch(
@@ -699,7 +731,10 @@ def wallet_agent_settings_update(
     try:
         if body.display_label is not None:
             payments.set_wallet_label(wallet_id, body.display_label)
-        if body.daily_spend_limit_cents is not None or body.daily_spend_limit_cents == 0:
+        if (
+            body.daily_spend_limit_cents is not None
+            or body.daily_spend_limit_cents == 0
+        ):
             # Allow None semantics via explicit field absence; here we mirror the existing
             # set_wallet_daily_spend_limit signature which accepts int or None.
             payments.set_wallet_daily_spend_limit(
@@ -723,14 +758,16 @@ def wallet_agent_settings_update(
         raise HTTPException(status_code=400, detail=str(exc))
 
     refreshed = payments.get_wallet(wallet_id) or {}
-    return JSONResponse(content={
-        "wallet_id": wallet_id,
-        "agent_id": agent_id,
-        "display_label": refreshed.get("display_label"),
-        "daily_spend_limit_cents": refreshed.get("daily_spend_limit_cents"),
-        "guarantor_enabled": bool(refreshed.get("guarantor_enabled")),
-        "guarantor_cap_cents": refreshed.get("guarantor_cap_cents"),
-    })
+    return JSONResponse(
+        content={
+            "wallet_id": wallet_id,
+            "agent_id": agent_id,
+            "display_label": refreshed.get("display_label"),
+            "daily_spend_limit_cents": refreshed.get("daily_spend_limit_cents"),
+            "guarantor_enabled": bool(refreshed.get("guarantor_enabled")),
+            "guarantor_cap_cents": refreshed.get("guarantor_cap_cents"),
+        }
+    )
 
 
 @app.post(
@@ -758,15 +795,19 @@ def wallet_agent_sweep(
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return JSONResponse(content={
-        "agent_id": agent_id,
-        "wallet_id": agent_wallet["wallet_id"],
-        **result,
-    })
+    return JSONResponse(
+        content={
+            "agent_id": agent_id,
+            "wallet_id": agent_wallet["wallet_id"],
+            **result,
+        }
+    )
+
 
 # ---------------------------------------------------------------------------
 # Run history
 # ---------------------------------------------------------------------------
+
 
 @app.get(
     "/runs",
@@ -782,7 +823,9 @@ def get_runs(
     limit = min(max(1, limit), 200)
     runs_file = os.path.join(_REPO_ROOT, "runs.jsonl")
     if not os.path.exists(runs_file):
-        return JSONResponse(content={"runs": [], "skipped_lines": 0, "skipped_line_numbers": []})
+        return JSONResponse(
+            content={"runs": [], "skipped_lines": 0, "skipped_line_numbers": []}
+        )
     with open(runs_file, encoding="utf-8") as f:
         lines = f.readlines()
     runs = []
@@ -815,16 +858,19 @@ def get_runs(
 # Public config (Stripe publishable key for the frontend)
 # ---------------------------------------------------------------------------
 
+
 @app.get(
     "/config/public",
     tags=["config"],
     summary="Public server configuration for the frontend.",
 )
 def config_public() -> JSONResponse:
-    return JSONResponse({
-        "stripe_enabled": bool(_STRIPE_SECRET_KEY and _STRIPE_AVAILABLE),
-        "stripe_publishable_key": _STRIPE_PUBLISHABLE_KEY or None,
-    })
+    return JSONResponse(
+        {
+            "stripe_enabled": bool(_STRIPE_SECRET_KEY and _STRIPE_AVAILABLE),
+            "stripe_publishable_key": _STRIPE_PUBLISHABLE_KEY or None,
+        }
+    )
 
 
 @app.get(
@@ -858,7 +904,9 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
     if not question:
         raise HTTPException(status_code=400, detail="question is required.")
     if len(question) > 1000:
-        raise HTTPException(status_code=400, detail="question must be 1000 characters or fewer.")
+        raise HTTPException(
+            status_code=400, detail="question must be 1000 characters or fewer."
+        )
 
     doc_slug = str(body.get("doc_slug") or "").strip()
     citations: list[dict] = []
@@ -872,7 +920,12 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
                     f"# {primary_doc.get('title') or primary_doc['slug']} ({primary_doc['slug']})\n"
                     + fh.read()[:8000]
                 )
-            citations.append({"slug": primary_doc["slug"], "title": primary_doc.get("title") or primary_doc["slug"]})
+            citations.append(
+                {
+                    "slug": primary_doc["slug"],
+                    "title": primary_doc.get("title") or primary_doc["slug"],
+                }
+            )
         except OSError:
             primary_doc = None
 
@@ -897,7 +950,9 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
                     f"# {entry.get('title') or entry['slug']} ({entry['slug']})\n"
                     + fh.read()[:4000]
                 )
-            citations.append({"slug": entry["slug"], "title": entry.get("title") or entry["slug"]})
+            citations.append(
+                {"slug": entry["slug"], "title": entry.get("title") or entry["slug"]}
+            )
         except OSError:
             pass
 
@@ -909,7 +964,12 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
                         f"# {entry.get('title') or entry['slug']} ({entry['slug']})\n"
                         + fh.read()[:2500]
                     )
-                citations.append({"slug": entry["slug"], "title": entry.get("title") or entry["slug"]})
+                citations.append(
+                    {
+                        "slug": entry["slug"],
+                        "title": entry.get("title") or entry["slug"],
+                    }
+                )
             except OSError:
                 pass
 
@@ -929,7 +989,10 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
     )
     user_msg = f"Documentation:\n{context_text}\n\nQuestion: {question}"
     try:
-        from core.llm import CompletionRequest as _CR, Message as _Msg, run_with_fallback as _rwf
+        from core.llm import CompletionRequest as _CR
+        from core.llm import Message as _Msg
+        from core.llm import run_with_fallback as _rwf
+
         raw = _rwf(
             _CR(
                 model="",
@@ -944,7 +1007,9 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
         answer = raw.text.strip()
     except Exception as exc:
         _LOG.warning("docs/ask LLM failure: %s", exc)
-        raise HTTPException(status_code=503, detail="AI service temporarily unavailable.") from None
+        raise HTTPException(
+            status_code=503, detail="AI service temporarily unavailable."
+        ) from None
     return JSONResponse({"answer": answer, "citations": citations})
 
 
@@ -961,14 +1026,18 @@ def public_doc_content(doc_slug: str) -> JSONResponse:
         with open(doc["full_path"], encoding="utf-8") as handle:
             content = handle.read()
     except OSError:
-        raise HTTPException(status_code=500, detail="Unable to read documentation file.") from None
-    return JSONResponse({
-        "slug": doc["slug"],
-        "title": doc["title"],
-        "summary": doc.get("summary") or "",
-        "category": doc.get("category") or "Reference",
-        "content": content,
-    })
+        raise HTTPException(
+            status_code=500, detail="Unable to read documentation file."
+        ) from None
+    return JSONResponse(
+        {
+            "slug": doc["slug"],
+            "title": doc["title"],
+            "summary": doc.get("summary") or "",
+            "category": doc.get("category") or "Reference",
+            "content": content,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -990,13 +1059,19 @@ def _extract_stripe_error_code(exc: Exception) -> str:
 def _stripe_http_error(operation: str, exc: Exception) -> tuple[int, dict[str, Any]]:
     code = _extract_stripe_error_code(exc)
     message = str(exc or "").strip().lower()
-    if code in {"insufficient_funds", "balance_insufficient"} or "insufficient" in message:
+    if (
+        code in {"insufficient_funds", "balance_insufficient"}
+        or "insufficient" in message
+    ):
         return 400, {
             "error": "payment.stripe_insufficient_funds",
             "message": "Payouts are temporarily unavailable because Stripe platform balance is insufficient.",
             "data": {"stripe_code": code or None, "operation": operation},
         }
-    if code in {"account_closed", "account_invalid", "no_such_destination"} or "no such destination" in message:
+    if (
+        code in {"account_closed", "account_invalid", "no_such_destination"}
+        or "no such destination" in message
+    ):
         return 400, {
             "error": "payment.stripe_destination_invalid",
             "message": "Your connected payout account is unavailable. Reconnect your bank account and try again.",
@@ -1233,19 +1308,30 @@ def admin_platform_withdraw(
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Admin withdrawals require a user-scoped key.")
+        raise HTTPException(
+            status_code=403, detail="Admin withdrawals require a user-scoped key."
+        )
 
     source_key = str((body or {}).get("source") or "").strip().lower()
     pools = _admin_earnings_pools()
     if source_key not in pools:
-        raise HTTPException(status_code=400, detail="source must be 'platform' or 'system_agents'.")
+        raise HTTPException(
+            status_code=400, detail="source must be 'platform' or 'system_agents'."
+        )
     try:
         amount_cents = int((body or {}).get("amount_cents") or 0)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="amount_cents must be a positive integer.")
+        raise HTTPException(
+            status_code=400, detail="amount_cents must be a positive integer."
+        )
     if amount_cents <= 0:
-        raise HTTPException(status_code=400, detail="amount_cents must be a positive integer.")
-    memo = str((body or {}).get("memo") or "").strip()[:240] or f"Admin withdrawal from {source_key}"
+        raise HTTPException(
+            status_code=400, detail="amount_cents must be a positive integer."
+        )
+    memo = (
+        str((body or {}).get("memo") or "").strip()[:240]
+        or f"Admin withdrawal from {source_key}"
+    )
 
     src_wallet = pools[source_key]
     admin_user_id = caller["user"]["user_id"]
@@ -1266,11 +1352,12 @@ def admin_platform_withdraw(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return JSONResponse(content={
-        "source": source_key,
-        "transferred_cents": result["amount_cents"],
-        "debit_tx_id": result["debit_tx_id"],
-        "credit_tx_id": result["credit_tx_id"],
-        "admin_wallet_id": dest_wallet["wallet_id"],
-    })
-
+    return JSONResponse(
+        content={
+            "source": source_key,
+            "transferred_cents": result["amount_cents"],
+            "debit_tx_id": result["debit_tx_id"],
+            "credit_tx_id": result["credit_tx_id"],
+            "admin_wallet_id": dest_wallet["wallet_id"],
+        }
+    )

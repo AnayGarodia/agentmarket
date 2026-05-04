@@ -41,26 +41,6 @@ REGEX_TESTER_AGENT_ID = "36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee"
 SQL_EXPLAINER_AGENT_ID = "91258740-dd32-51b6-be91-a7638fae190f"
 GIT_DIFF_ANALYZER_AGENT_ID = "8ac84144-4fd1-5883-bfad-e7b64d729b8f"
 
-# Legacy LLM-only wrappers sunset on 2026-07-26. Keep the IDs here so startup
-# can force-hide any stale registry rows that predate the curated catalog.
-GITHUB_FETCHER_AGENT_ID = "5896576f-bbe6-59e4-83c1-5106002e7d10"
-PR_REVIEWER_AGENT_ID = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
-TEST_GENERATOR_AGENT_ID = "f515323c-7df2-5742-ac06-bc38b59a40cb"
-SPEC_WRITER_AGENT_ID = "ce9504a3-74c8-51a5-913e-6ae55787abc8"
-CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
-PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
-
-SUNSET_DEPRECATED_AGENT_IDS = frozenset(
-    {
-        GITHUB_FETCHER_AGENT_ID,
-        PR_REVIEWER_AGENT_ID,
-        TEST_GENERATOR_AGENT_ID,
-        SPEC_WRITER_AGENT_ID,
-        CHANGELOG_AGENT_ID,
-        PACKAGE_FINDER_AGENT_ID,
-    }
-)
-
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: "internal://financial",
     CODEREVIEW_AGENT_ID: "internal://code-review",
@@ -112,7 +92,9 @@ for _agent_id, _endpoint in BUILTIN_INTERNAL_ENDPOINTS.items():
     _legacy = BUILTIN_LEGACY_ROUTE_ENDPOINTS.get(_agent_id)
     if _legacy:
         BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(_legacy)] = _agent_id
-BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(f"{SERVER_BASE_URL}/analyze")] = FINANCIAL_AGENT_ID
+BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(f"{SERVER_BASE_URL}/analyze")] = (
+    FINANCIAL_AGENT_ID
+)
 
 BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 
@@ -149,7 +131,9 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
 # abuse-surface concerns, and ship with explicit hidden-from-registry tests
 # (test_hooks_builtin_mcp.py::test_image_generator_builtin_is_hidden_*).
 # When we re-enable them we'll need a separate gate (e.g. media:enable scope).
-CURATED_BUILTIN_AGENT_IDS = frozenset(set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID})
+CURATED_BUILTIN_AGENT_IDS = frozenset(
+    set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID}
+)
 
 BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 SYSTEM_USERNAME = "system"

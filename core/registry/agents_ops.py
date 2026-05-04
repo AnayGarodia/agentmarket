@@ -24,18 +24,16 @@ Tests monkeypatch ``core.registry.embeddings`` to stub out network calls to
 the sentence-transformer model, so the module keeps ``embeddings`` accessible
 as an attribute on the package (see ``core/registry/__init__.py``).
 """
+
 from __future__ import annotations
 
 import json
-import logging
 import math
 import re
 import sqlite3
-import threading
-import time
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import numpy as np
@@ -43,15 +41,13 @@ import numpy as np
 from core import embeddings
 from core import feature_flags as _feature_flags
 
+from .call_history import append_call_ring_sample
 from .core_schema import (
-    HEALTH_SUSPENSION_THRESHOLD,
-    INVERSE_PRICE_WEIGHT,
-    REVIEW_STATUSES,
-    SEMANTIC_SIMILARITY_WEIGHT,
-    TRUST_SCORE_WEIGHT,
     _CANONICAL_CREATED_AT,
     _QUERY_STOP_WORDS,
     _TRUST_PERCENT_SCALE,
+    HEALTH_SUSPENSION_THRESHOLD,
+    REVIEW_STATUSES,
     _build_embedding_source_text,
     _conn,
     _embedding_source_from_agent,
@@ -66,9 +62,7 @@ from .core_schema import (
     _to_non_negative_int,
     _upsert_agent_embedding_row,
 )
-from .call_history import append_call_ring_sample
 from .pricing import (
-    VALID_PRICING_MODELS,
     VariablePricingError,
     normalize_pricing_model,
     validate_pricing_config,
@@ -144,9 +138,9 @@ def register_agent(
     normalized_healthcheck_url = str(healthcheck_url or "").strip() or None
     normalized_verifier_url = str(output_verifier_url or "").strip() or None
     if isinstance(output_examples, list):
-        normalized_examples: str | None = json.dumps(
-            [ex for ex in output_examples if isinstance(ex, dict)]
-        ) or None
+        normalized_examples: str | None = (
+            json.dumps([ex for ex in output_examples if isinstance(ex, dict)]) or None
+        )
     else:
         normalized_examples = None
     normalized_verified = 1 if verified else 0
@@ -156,6 +150,7 @@ def register_agent(
     normalized_region_locked = str(region_locked or "").strip().lower() or None
     normalized_cacheable = None if cacheable is None else (1 if cacheable else 0)
     from core import payout_curve as _pc
+
     try:
         parsed_curve = _pc.parse_curve(payout_curve)
     except ValueError as exc:
@@ -163,11 +158,15 @@ def register_agent(
     payout_curve_json = _pc.curve_to_json(parsed_curve)
     normalized_health_status = str(endpoint_health_status or "unknown").strip().lower()
     if normalized_health_status not in {"unknown", "healthy", "degraded"}:
-        raise ValueError("endpoint_health_status must be one of: unknown, healthy, degraded.")
+        raise ValueError(
+            "endpoint_health_status must be one of: unknown, healthy, degraded."
+        )
     normalized_status = str(status or "active").strip().lower()
     if normalized_status not in {"active", "suspended", "banned"}:
         raise ValueError("status must be one of: active, suspended, banned.")
-    is_internal = internal_only or str(endpoint_url or "").strip().startswith("internal://")
+    is_internal = internal_only or str(endpoint_url or "").strip().startswith(
+        "internal://"
+    )
     normalized_review_status = str(review_status or "").strip().lower()
     if not normalized_review_status:
         normalized_review_status = "approved" if is_internal else "pending_review"
@@ -178,7 +177,9 @@ def register_agent(
     normalized_review_note = str(review_note or "").strip() or None
     normalized_reviewed_at = str(reviewed_at or "").strip() or None
     normalized_reviewed_by = str(reviewed_by or "").strip() or None
-    normalized_decay_multiplier = _to_non_negative_float(trust_decay_multiplier, default=1.0)
+    normalized_decay_multiplier = _to_non_negative_float(
+        trust_decay_multiplier, default=1.0
+    )
     if normalized_decay_multiplier <= 0:
         normalized_decay_multiplier = 1.0
     internal_only_int = 1 if internal_only else 0
@@ -199,7 +200,9 @@ def register_agent(
     source_text = ""
     embedding_vector: list[float] | None = None
     if embed_listing:
-        source_text = _build_embedding_source_text(name, description, normalized_tags, normalized_schema)
+        source_text = _build_embedding_source_text(
+            name, description, normalized_tags, normalized_schema
+        )
         embedding_vector = embeddings.embed_text(source_text)
 
     # Cryptographic identity. Generated up front so the same row insert
@@ -378,7 +381,9 @@ def set_agent_pricing(
     return get_agent(agent_id, include_unapproved=True)
 
 
-def update_call_stats(agent_id: str, latency_ms: float, success: bool, *, price_cents: int | None = None) -> None:
+def update_call_stats(
+    agent_id: str, latency_ms: float, success: bool, *, price_cents: int | None = None
+) -> None:
     """
     Increment total_calls, update running avg_latency_ms, and conditionally
     increment successful_calls. Uses a single UPDATE with arithmetic to avoid
@@ -425,6 +430,7 @@ def update_call_stats(agent_id: str, latency_ms: float, success: bool, *, price_
 # Read operations
 # ---------------------------------------------------------------------------
 
+
 def get_agents(
     tag: str | None = None,
     include_internal: bool = False,
@@ -460,7 +466,9 @@ def get_agents(
     return [_row_to_dict(r) for r in rows]
 
 
-def set_agent_status(agent_id: str, status: str, reason: str | None = None) -> dict | None:
+def set_agent_status(
+    agent_id: str, status: str, reason: str | None = None
+) -> dict | None:
     """Update an agent's status to ``active``, ``suspended``, or ``banned``."""
     normalized_status = str(status or "").strip().lower()
     if normalized_status not in {"active", "suspended", "banned"}:
@@ -517,7 +525,9 @@ def set_agent_review_decision(
     if not normalized_reviewed_by:
         raise ValueError("reviewed_by must be a non-empty string.")
     normalized_note = str(note or "").strip() or None
-    normalized_reviewed_at = str(reviewed_at or datetime.now(timezone.utc).isoformat()).strip()
+    normalized_reviewed_at = str(
+        reviewed_at or datetime.now(timezone.utc).isoformat()
+    ).strip()
     with _conn() as conn:
         updated = conn.execute(
             """
@@ -565,7 +575,9 @@ def set_agent_endpoint_health(
     """
     normalized_status = str(endpoint_health_status or "").strip().lower()
     if normalized_status not in {"unknown", "healthy", "degraded"}:
-        raise ValueError("endpoint_health_status must be one of: unknown, healthy, degraded.")
+        raise ValueError(
+            "endpoint_health_status must be one of: unknown, healthy, degraded."
+        )
     normalized_failures = _to_non_negative_int(endpoint_consecutive_failures, default=0)
     checked_at = str(endpoint_last_checked_at or "").strip()
     if not checked_at:
@@ -621,7 +633,9 @@ def set_agent_endpoint_health(
     return get_agent(agent_id, include_unapproved=True)
 
 
-def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None) -> dict | None:
+def set_agent_output_examples(
+    agent_id: str, output_examples: list[dict] | None
+) -> dict | None:
     """Replace the full set of work examples for an agent. Pass None to clear."""
     normalized_examples: str | None
     if output_examples is None:
@@ -640,7 +654,9 @@ def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None)
     return get_agent(agent_id, include_unapproved=True)
 
 
-def append_agent_output_example(agent_id: str, example: dict, *, max_examples: int = 20) -> dict | None:
+def append_agent_output_example(
+    agent_id: str, example: dict, *, max_examples: int = 20
+) -> dict | None:
     """Append one work example to an agent's ring buffer, trimming to ``max_examples``."""
     if not isinstance(example, dict):
         raise ValueError("example must be an object.")
@@ -659,7 +675,9 @@ def append_agent_output_example(agent_id: str, example: dict, *, max_examples: i
             try:
                 loaded = json.loads(raw_examples)
                 if isinstance(loaded, list):
-                    parsed_examples = [item for item in loaded if isinstance(item, dict)]
+                    parsed_examples = [
+                        item for item in loaded if isinstance(item, dict)
+                    ]
             except (TypeError, json.JSONDecodeError):
                 parsed_examples = []
         next_examples = [example] + parsed_examples
@@ -768,7 +786,9 @@ def update_agent(
             except (TypeError, ValueError):
                 raise ValueError("price_per_call_usd must be a number.")
             if not math.isfinite(price) or price < 0:
-                raise ValueError("price_per_call_usd must be a non-negative finite number.")
+                raise ValueError(
+                    "price_per_call_usd must be a non-negative finite number."
+                )
             updates["price_per_call_usd"] = price
         if pii_safe is not None:
             updates["pii_safe"] = 1 if pii_safe else 0
@@ -784,6 +804,7 @@ def update_agent(
             updates["payout_curve"] = None
         elif payout_curve is not None:
             from core import payout_curve as _pc
+
             try:
                 parsed_curve = _pc.parse_curve(payout_curve)
             except ValueError as exc:
@@ -830,9 +851,7 @@ def update_agent_health(agent_id: str, status: str, checked_at: str) -> None:
 def agent_exists_by_name(name: str) -> bool:
     """Return True if any agent with this name is already registered."""
     with _conn() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM agents WHERE name = ?", (name,)
-        ).fetchone()
+        row = conn.execute("SELECT 1 FROM agents WHERE name = ?", (name,)).fetchone()
     return row is not None
 
 
@@ -1079,22 +1098,63 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
     combined = " ".join([name, description, " ".join(sorted(tags))])
     bonus = 0.0
 
-    security_terms = {"security", "vulnerability", "vulnerabilities", "cve", "cves", "npm", "package", "dependency", "dependencies", "audit"}
+    security_terms = {
+        "security",
+        "vulnerability",
+        "vulnerabilities",
+        "cve",
+        "cves",
+        "npm",
+        "package",
+        "dependency",
+        "dependencies",
+        "audit",
+    }
     review_terms = {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
 
     if security_terms & set(terms):
-        if {"cve", "cves"} & set(terms) and any(token in combined for token in ("cve", "nvd", "osv")):
+        if {"cve", "cves"} & set(terms) and any(
+            token in combined for token in ("cve", "nvd", "osv")
+        ):
             bonus += 0.30
-        if {"vulnerability", "vulnerabilities", "audit", "dependency", "dependencies", "package", "npm"} & set(terms):
-            if any(token in combined for token in ("dependency", "dependencies", "audit", "package", "npm", "license")):
+        if {
+            "vulnerability",
+            "vulnerabilities",
+            "audit",
+            "dependency",
+            "dependencies",
+            "package",
+            "npm",
+        } & set(terms):
+            if any(
+                token in combined
+                for token in (
+                    "dependency",
+                    "dependencies",
+                    "audit",
+                    "package",
+                    "npm",
+                    "license",
+                )
+            ):
                 bonus += 0.25
-        if "package_finder" in name or "changelog" in name:
-            bonus -= 0.20
 
     if review_terms & set(terms):
-        if any(token in combined for token in ("code review", "review", "diff", "correctness", "maintainability")):
+        if any(
+            token in combined
+            for token in (
+                "code review",
+                "review",
+                "diff",
+                "correctness",
+                "maintainability",
+            )
+        ):
             bonus += 0.20
-        if any(token in combined for token in ("linter", "ruff", "eslint", "type checker", "mypy")):
+        if any(
+            token in combined
+            for token in ("linter", "ruff", "eslint", "type checker", "mypy")
+        ):
             bonus -= 0.05
 
     return max(-0.25, min(0.40, bonus))
@@ -1110,7 +1170,7 @@ def _matched_phrase(query: str, haystack: str) -> str | None:
         if len(terms) < width:
             continue
         for idx in range(0, len(terms) - width + 1):
-            phrase = " ".join(terms[idx: idx + width])
+            phrase = " ".join(terms[idx : idx + width])
             if phrase in lowered:
                 return phrase
 
@@ -1140,7 +1200,9 @@ def _match_reasons(
     phrase = _matched_phrase(query, haystack)
     if phrase:
         reasons.append(f"matched '{phrase}' in description")
-    example_phrase = _matched_phrase(query, _example_search_text(agent.get("output_examples")))
+    example_phrase = _matched_phrase(
+        query, _example_search_text(agent.get("output_examples"))
+    )
     if example_phrase and example_phrase != phrase:
         reasons.append(f"matched '{example_phrase}' in work examples")
     if required_fields:
@@ -1152,7 +1214,9 @@ def _match_reasons(
             reasons.append(f"supports input fields: {ordered}")
     reasons.append(f"trust {trust:.2f}")
     if caller_trust is not None and caller_trust_min is not None:
-        reasons.append(f"caller trust {caller_trust:.2f} meets minimum {caller_trust_min:.2f}")
+        reasons.append(
+            f"caller trust {caller_trust:.2f} meets minimum {caller_trust_min:.2f}"
+        )
     return reasons
 
 
@@ -1201,7 +1265,9 @@ def search_agents(
     _embeddings_enabled = not _feature_flags.DISABLE_EMBEDDINGS
     query_vector: np.ndarray | None = None
     if _embeddings_enabled:
-        query_vector = np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
+        query_vector = np.asarray(
+            embeddings.embed_text(normalized_query), dtype=np.float32
+        )
     agents = get_agents_with_reputation(include_unapproved=include_unapproved)
     vectors_by_agent = _load_embeddings_for_agents(
         {
@@ -1219,18 +1285,28 @@ def search_agents(
         if not agent_id:
             continue
 
-        if normalized_model_provider and agent.get("model_provider") != normalized_model_provider:
+        if (
+            normalized_model_provider
+            and agent.get("model_provider") != normalized_model_provider
+        ):
             continue
 
         if normalized_kind and agent.get("kind") != normalized_kind:
             continue
         if pii_safe is not None and bool(agent.get("pii_safe")) != pii_safe:
             continue
-        if outputs_not_stored is not None and bool(agent.get("outputs_not_stored")) != outputs_not_stored:
+        if (
+            outputs_not_stored is not None
+            and bool(agent.get("outputs_not_stored")) != outputs_not_stored
+        ):
             continue
         if audit_logged is not None and bool(agent.get("audit_logged")) != audit_logged:
             continue
-        if normalized_region_locked and str(agent.get("region_locked") or "").strip().lower() != normalized_region_locked:
+        if (
+            normalized_region_locked
+            and str(agent.get("region_locked") or "").strip().lower()
+            != normalized_region_locked
+        ):
             continue
 
         price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
@@ -1308,7 +1384,9 @@ def search_agents(
         if max_price == min_price:
             inverse_price = 1.0
         else:
-            normalized_price = (candidate["price_cents"] - min_price) / (max_price - min_price)
+            normalized_price = (candidate["price_cents"] - min_price) / (
+                max_price - min_price
+            )
             inverse_price = 1.0 - normalized_price
 
         if _embeddings_enabled:
@@ -1326,8 +1404,10 @@ def search_agents(
             total_remaining = TRUST_SCORE_WEIGHT_HYBRID + INVERSE_PRICE_WEIGHT_HYBRID
             blended_score = (
                 LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
-                + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining)) * candidate["trust"]
-                + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining)) * inverse_price
+                + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining))
+                * candidate["trust"]
+                + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining))
+                * inverse_price
                 + candidate["intent_bonus"]
             )
         candidate["blended_score"] = blended_score
@@ -1383,7 +1463,9 @@ def get_agents_with_reputation(
     )
 
 
-def get_agent_with_reputation(agent_id: str, *, include_unapproved: bool = True) -> dict | None:
+def get_agent_with_reputation(
+    agent_id: str, *, include_unapproved: bool = True
+) -> dict | None:
     """Return one enriched listing by agent_id, or None if missing."""
     from core import reputation
 

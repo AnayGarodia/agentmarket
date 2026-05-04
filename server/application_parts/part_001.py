@@ -180,7 +180,6 @@ def _init_ops_db() -> None:
         )
 
 
-
 def _init_stripe_db() -> None:
     """Create Stripe bookkeeping tables used for top-ups and webhook idempotency."""
     with get_db_connection() as conn:
@@ -218,7 +217,10 @@ def _init_stripe_db() -> None:
 # Startup — register built-in agents
 # ---------------------------------------------------------------------------
 
-def _output_schema_object(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+
+def _output_schema_object(
+    properties: dict[str, Any], required: list[str] | None = None
+) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "object", "properties": dict(properties)}
     if required:
         schema["required"] = list(required)
@@ -261,7 +263,6 @@ def _name_owned_by_other_user(name: str, system_owner_id: str) -> bool:
     return row is not None
 
 
-
 def _ensure_system_user() -> str:
     with _auth._conn() as conn:
         existing = conn.execute(
@@ -270,13 +271,20 @@ def _ensure_system_user() -> str:
         ).fetchone()
         if existing is not None:
             user_id = str(existing["user_id"])
-            conn.execute("UPDATE users SET status = 'suspended' WHERE user_id = ?", (user_id,))
+            conn.execute(
+                "UPDATE users SET status = 'suspended' WHERE user_id = ?", (user_id,)
+            )
             return user_id
 
         user_id = str(uuid.uuid4())
         now = _utc_now_iso()
         email = _SYSTEM_USER_EMAIL
-        if conn.execute("SELECT 1 FROM users WHERE email = ? LIMIT 1", (email,)).fetchone() is not None:
+        if (
+            conn.execute(
+                "SELECT 1 FROM users WHERE email = ? LIMIT 1", (email,)
+            ).fetchone()
+            is not None
+        ):
             email = f"system-{user_id[:8]}@aztea.internal"
         salt = "system-account-disabled"
         password_hash = hashlib.sha256(f"{user_id}:{salt}".encode("utf-8")).hexdigest()
@@ -294,7 +302,11 @@ def ensure_builtin_agents_registered() -> None:
     system_user_id = _ensure_system_user()
     system_owner_id = f"user:{system_user_id}"
     specs = _builtin_agent_specs()
-    managed_ids = {str(spec.get("agent_id") or "").strip() for spec in specs if str(spec.get("agent_id") or "").strip()}
+    managed_ids = {
+        str(spec.get("agent_id") or "").strip()
+        for spec in specs
+        if str(spec.get("agent_id") or "").strip()
+    }
     now = _utc_now_iso()
 
     for spec in specs:
@@ -302,7 +314,10 @@ def ensure_builtin_agents_registered() -> None:
         output_examples = spec.get("output_examples")
         output_examples_json = None
         if isinstance(output_examples, list):
-            output_examples_json = json.dumps([item for item in output_examples if isinstance(item, dict)]) or None
+            output_examples_json = (
+                json.dumps([item for item in output_examples if isinstance(item, dict)])
+                or None
+            )
         if existing is None:
             # Historical guard: skip registration if another agent already
             # uses this name. We keep it scoped to non-system owners so a
@@ -370,7 +385,9 @@ def ensure_builtin_agents_registered() -> None:
                     json.dumps(spec.get("output_schema") or {}, sort_keys=True),
                     output_examples_json,
                     1 if bool(spec.get("internal_only", False)) else 0,
-                    None if spec.get("cacheable") is None else (1 if bool(spec.get("cacheable")) else 0),
+                    None
+                    if spec.get("cacheable") is None
+                    else (1 if bool(spec.get("cacheable")) else 0),
                     _SYSTEM_USERNAME,
                     now,
                     "groq",
@@ -384,11 +401,10 @@ def ensure_builtin_agents_registered() -> None:
     deprecated_ids = _BUILTIN_AGENT_IDS - managed_ids
     for agent_id in deprecated_ids:
         stale = registry.get_agent(agent_id, include_unapproved=True)
-        if stale is not None and str(stale.get("status") or "").strip().lower() != "suspended":
-            registry.set_agent_status(agent_id, "suspended")
-    for agent_id in _SUNSET_DEPRECATED_AGENT_IDS:
-        stale = registry.get_agent(agent_id, include_unapproved=True)
-        if stale is not None and str(stale.get("status") or "").strip().lower() != "suspended":
+        if (
+            stale is not None
+            and str(stale.get("status") or "").strip().lower() != "suspended"
+        ):
             registry.set_agent_status(agent_id, "suspended")
 
 
@@ -435,7 +451,9 @@ async def lifespan(app: FastAPI):
     payments_reconciliation_thread: threading.Thread | None = None
     is_background_worker_leader = _acquire_background_worker_lock()
     if not is_background_worker_leader:
-        _LOG.info("Background workers disabled in this process; another worker owns the lock.")
+        _LOG.info(
+            "Background workers disabled in this process; another worker owns the lock."
+        )
 
     if is_background_worker_leader and _SWEEPER_ENABLED:
         stop_event = threading.Event()
@@ -543,7 +561,9 @@ async def lifespan(app: FastAPI):
         if payments_reconciliation_stop_event is not None:
             payments_reconciliation_stop_event.set()
         if payments_reconciliation_thread is not None:
-            payments_reconciliation_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
+            payments_reconciliation_thread.join(
+                timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS
+            )
         if agent_health_stop_event is not None:
             agent_health_stop_event.set()
         if agent_health_thread is not None:
@@ -556,6 +576,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # Rate limiter — keyed per caller identity
 # ---------------------------------------------------------------------------
+
 
 def _key_from_request(request: Request) -> str:
     caller = _resolve_caller(request)
@@ -603,7 +624,9 @@ else:
     ]
 # Production safety: refuse wildcard CORS in production deployments.
 if _ENVIRONMENT == "production" and "*" in _cors_origins:
-    raise RuntimeError("CORS_ALLOW_ORIGINS must not contain '*' when ENVIRONMENT=production.")
+    raise RuntimeError(
+        "CORS_ALLOW_ORIGINS must not contain '*' when ENVIRONMENT=production."
+    )
 # Always include the configured frontend base URL so Stripe redirects work.
 if _FRONTEND_BASE_URL and _FRONTEND_BASE_URL not in _cors_origins:
     _cors_origins.append(_FRONTEND_BASE_URL)
@@ -745,7 +768,9 @@ async def shutdown_draining(request: Request, call_next):
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     has_primary = (request.headers.get(_PROTOCOL_VERSION_HEADER, "") or "").strip()
-    has_legacy = (request.headers.get(_LEGACY_PROTOCOL_VERSION_HEADER, "") or "").strip()
+    has_legacy = (
+        request.headers.get(_LEGACY_PROTOCOL_VERSION_HEADER, "") or ""
+    ).strip()
     if not (has_primary or has_legacy):
         logging_utils.log_event(
             _LOG,
@@ -798,7 +823,14 @@ async def limit_body_size(request: Request, call_next):
 # ---------------------------------------------------------------------------
 
 try:
-    from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+    from prometheus_client import (
+        CONTENT_TYPE_LATEST,
+        REGISTRY,
+        Counter,
+        Histogram,
+        generate_latest,
+    )
+
     _PROM_AVAILABLE = True
 except ImportError:
     _PROM_AVAILABLE = False
@@ -852,7 +884,9 @@ def metrics_endpoint(request: Request):
     except ValueError:
         pass
     if not _PROM_AVAILABLE:
-        return JSONResponse({"error": "prometheus_client not installed"}, status_code=503)
+        return JSONResponse(
+            {"error": "prometheus_client not installed"}, status_code=503
+        )
     return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -899,6 +933,7 @@ async def request_tracing(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
+
 
 def _resolve_caller(request: Request) -> core_models.CallerContext | None:
     cached = getattr(request.state, "_caller", _CALLER_CACHE_MISSING)
@@ -976,7 +1011,7 @@ _PUBLIC_DOCS_DIR = os.path.join(_REPO_ROOT, "docs")
 _PUBLIC_DOCS_EXCLUDED = {"future-features.md"}
 _PUBLIC_DOCS_PRIORITY = {
     "quickstart.md": 0,
-    "mcp-integration.md": 1,          # promoted — primary distribution channel
+    "mcp-integration.md": 1,  # promoted — primary distribution channel
     "skill-md-reference.md": 2,
     "agent-builder.md": 3,
     "auth-onboarding.md": 4,
@@ -985,8 +1020,8 @@ _PUBLIC_DOCS_PRIORITY = {
     "orchestrator-guide.md": 7,
     "verification-contracts.md": 8,
     "reputation.md": 9,
-    "cli.md": 20,                      # demoted — developer add-on
-    "aztea-tui.md": 21,                # demoted — developer add-on
+    "cli.md": 20,  # demoted — developer add-on
+    "aztea-tui.md": 21,  # demoted — developer add-on
     "stripe-setup.md": 22,
     "terms-of-service.md": 90,
     "privacy-policy.md": 91,
@@ -1016,7 +1051,8 @@ def _public_docs_entries() -> list[dict[str, str]]:
         return []
 
     filenames = [
-        name for name in os.listdir(_PUBLIC_DOCS_DIR)
+        name
+        for name in os.listdir(_PUBLIC_DOCS_DIR)
         if name.endswith(".md")
         and os.path.isfile(os.path.join(_PUBLIC_DOCS_DIR, name))
         and name not in _PUBLIC_DOCS_EXCLUDED
@@ -1041,7 +1077,11 @@ def _public_docs_entries() -> list[dict[str, str]]:
                         if heading:
                             title = heading
                         continue
-                    if not stripped or stripped.startswith("---") or stripped.startswith("```"):
+                    if (
+                        not stripped
+                        or stripped.startswith("---")
+                        or stripped.startswith("```")
+                    ):
                         continue
                     if stripped.startswith("## "):
                         if body_lines:
@@ -1055,14 +1095,16 @@ def _public_docs_entries() -> list[dict[str, str]]:
                     summary = summary[:217].rstrip() + "..."
         except OSError:
             continue
-        entries.append({
-            "slug": slug,
-            "title": title,
-            "summary": summary,
-            "category": _PUBLIC_DOCS_CATEGORY.get(filename, "Reference"),
-            "filename": filename,
-            "full_path": full_path,
-        })
+        entries.append(
+            {
+                "slug": slug,
+                "title": title,
+                "summary": summary,
+                "category": _PUBLIC_DOCS_CATEGORY.get(filename, "Reference"),
+                "filename": filename,
+                "full_path": full_path,
+            }
+        )
 
     return entries
 
@@ -1106,7 +1148,11 @@ def _legal_acceptance_required(caller: core_models.CallerContext) -> bool:
     """True when an authenticated end-user has not accepted the current legal docs."""
     # Allow the test/CI pipeline (and self-hosters who explicitly opt out) to
     # disable the gate. The default is False — production deployments enforce.
-    if str(os.environ.get("AZTEA_BYPASS_LEGAL_GATE", "")).strip().lower() in {"1", "true", "yes"}:
+    if str(os.environ.get("AZTEA_BYPASS_LEGAL_GATE", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
         return False
     if caller.get("type") != "user":
         return False
@@ -1117,7 +1163,7 @@ def _legal_acceptance_required(caller: core_models.CallerContext) -> bool:
     # row, since the caller is already attached. Treat any missing/older
     # acceptance as "not accepted".
     try:
-        from core.auth.schema import LEGAL_TERMS_VERSION, LEGAL_PRIVACY_VERSION
+        from core.auth.schema import LEGAL_PRIVACY_VERSION, LEGAL_TERMS_VERSION
     except Exception:
         return False
     accepted_terms = str(user.get("terms_version_accepted") or "").strip()
@@ -1171,7 +1217,7 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
     # spending without accepted ToS while letting users complete onboarding.
     method = (request.method or "").upper()
     if method in _LEGAL_GATED_METHODS and _legal_acceptance_required(caller):
-        path = (request.url.path or "")
+        path = request.url.path or ""
         if not any(path.startswith(prefix) for prefix in _LEGAL_GATE_EXEMPT_PREFIXES):
             raise HTTPException(
                 status_code=451,

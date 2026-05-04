@@ -1,0 +1,23 @@
+[lint]
+select = ["E", "F", "W", "C90", "I", "B"]
+ignore = [
+    "E501",   # line length — formatter handles it
+    "B008",   # FastAPI Depends() in function signatures
+    "B904",   # raise-without-from inside except — fix gradually
+]
+
+[lint.mccabe]
+max-complexity = 10
+
+[lint.per-file-ignores]
+"tests/*" = ["E402", "F401", "F811"]
+"migrations/*" = ["ALL"]
+# Shards share a single logical namespace — cross-shard symbols show as undefined
+"server/application_parts/*" = ["F821", "F405", "E402", "F401"]
+"server/application.py" = ["F401", "F403", "F405"]
+
+[format]
+quote-style = "double"
+
+[lint.isort]
+force-single-line = false

@@ -19,8 +19,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core import mcp_manifest
 from core import feature_flags as _feature_flags
+from core import mcp_manifest
 
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
@@ -34,7 +34,9 @@ _PROTOCOL_VERSION = "2024-11-05"
 _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _AZTEA_PROTOCOL_VERSION = "1.0"
 _CLIENT_ID_HEADER = "X-Aztea-Client"
-_DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
+_DEFAULT_CLIENT_ID = (
+    os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code"
+).strip()
 # Discovery metadata for platform meta-tools — populated into the catalog
 # so `aztea_search("wallet balance")` and similar surface them reliably.
 # Keep keys aligned with `aztea_mcp_meta_tools.META_TOOL_NAMES`. (tags,
@@ -146,7 +148,12 @@ _META_TOOL_DISCOVERY: dict[str, tuple[list[str], list[str]]] = {
 _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
     {
         "slug": "git-diff-review",
-        "aliases": ["git-diff-review", "git_diff_review", "git_diff_review_recipe", "diff-review"],
+        "aliases": [
+            "git-diff-review",
+            "git_diff_review",
+            "git_diff_review_recipe",
+            "diff-review",
+        ],
         "kind": "recipe",
         "recipe_id": "git-diff-review",
         "name": "git-diff-review (recipe)",
@@ -159,7 +166,12 @@ _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"diff": {"type": "string", "description": "Unified-diff text to review (≤500 KB)."}},
+            "properties": {
+                "diff": {
+                    "type": "string",
+                    "description": "Unified-diff text to review (≤500 KB).",
+                }
+            },
             "required": ["diff"],
         },
         "output_schema": {},
@@ -200,8 +212,11 @@ _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
         "stability_tier": "stable",
         "codex_recommended": True,
         "short_use_cases": ["lint+type+review on a snippet"],
-        "trust_score": None, "success_rate": None, "avg_latency_ms": None,
-        "price_per_call_usd": None, "verified": True,
+        "trust_score": None,
+        "success_rate": None,
+        "avg_latency_ms": None,
+        "price_per_call_usd": None,
+        "verified": True,
     },
     {
         "slug": "audit-deps",
@@ -225,8 +240,11 @@ _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
         "stability_tier": "stable",
         "codex_recommended": True,
         "short_use_cases": ["scan requirements.txt for CVEs"],
-        "trust_score": None, "success_rate": None, "avg_latency_ms": None,
-        "price_per_call_usd": None, "verified": True,
+        "trust_score": None,
+        "success_rate": None,
+        "avg_latency_ms": None,
+        "price_per_call_usd": None,
+        "verified": True,
     },
     {
         "slug": "review-and-lint",
@@ -235,20 +253,41 @@ _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
         "recipe_id": "review-and-lint",
         "name": "review-and-lint (recipe)",
         "description": "Review then lint code. Run via aztea_run_recipe(recipe_id='review-and-lint').",
-        "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {"code": {"type": "string"}},
+            "required": ["code"],
+        },
         "output_schema": {},
         "category": "Code",
         "tags": ["recipe", "pipeline", "review", "lint"],
-        "is_featured": False, "cacheable": True, "runtime_requirements": [],
-        "tooling_kind": "recipe_pipeline", "stability_tier": "stable",
-        "codex_recommended": False, "short_use_cases": [],
-        "trust_score": None, "success_rate": None, "avg_latency_ms": None,
-        "price_per_call_usd": None, "verified": True,
+        "is_featured": False,
+        "cacheable": True,
+        "runtime_requirements": [],
+        "tooling_kind": "recipe_pipeline",
+        "stability_tier": "stable",
+        "codex_recommended": False,
+        "short_use_cases": [],
+        "trust_score": None,
+        "success_rate": None,
+        "avg_latency_ms": None,
+        "price_per_call_usd": None,
+        "verified": True,
     },
 ]
 
 _SEARCH_INTENTS: dict[str, set[str]] = {
-    "image": {"image", "generate", "generator", "picture", "png", "jpg", "jpeg", "visual", "art"},
+    "image": {
+        "image",
+        "generate",
+        "generator",
+        "picture",
+        "png",
+        "jpg",
+        "jpeg",
+        "visual",
+        "art",
+    },
     "browser": {"browser", "playwright", "screenshot", "crawl", "headless", "dom"},
     "dns": {"dns", "ssl", "tls", "certificate", "domain", "hsts"},
     "code_search": {"semantic", "codebase", "repository", "repo", "symbols"},
@@ -261,7 +300,14 @@ _SEARCH_VERB_RULES: list[dict[str, Any]] = [
     {
         "name": "sql_explain",
         "topic_terms": {"sql", "query", "schema"},
-        "verb_terms": {"explain", "analyze", "analyse", "plan", "explainer", "understand"},
+        "verb_terms": {
+            "explain",
+            "analyze",
+            "analyse",
+            "plan",
+            "explainer",
+            "understand",
+        },
         "promote_slugs": {"sql_explainer"},
         "demote_slugs": {"db_sandbox"},
         "weight": 25,
@@ -275,7 +321,10 @@ _SEARCH_VERB_RULES: list[dict[str, Any]] = [
         "weight": 18,
     },
 ]
-_PYDANTIC_HELP_URL_RE = re.compile(r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+", re.IGNORECASE)
+_PYDANTIC_HELP_URL_RE = re.compile(
+    r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+",
+    re.IGNORECASE,
+)
 
 
 _AUTH_TOOL_NAME = "aztea_setup"
@@ -314,8 +363,17 @@ _LAZY_SEARCH_TOOL: dict[str, Any] = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Natural-language description of what you want to do. E.g. 'run JavaScript', 'look up CVE-2021-44228', 'screenshot a webpage'."},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8, "description": "Max results to return."},
+            "query": {
+                "type": "string",
+                "description": "Natural-language description of what you want to do. E.g. 'run JavaScript', 'look up CVE-2021-44228', 'screenshot a webpage'.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "default": 8,
+                "description": "Max results to return.",
+            },
         },
         "required": ["query"],
     },
@@ -337,7 +395,10 @@ _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "slug": {"type": "string", "description": "Tool slug exactly as returned by aztea_search (e.g. 'python_code_executor', 'web_researcher_agent')."},
+            "slug": {
+                "type": "string",
+                "description": "Tool slug exactly as returned by aztea_search (e.g. 'python_code_executor', 'web_researcher_agent').",
+            },
         },
         "required": ["slug"],
     },
@@ -362,17 +423,35 @@ _LAZY_DO_TOOL: dict[str, Any] = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "intent": {"type": "string", "description": "Natural-language description of what you want to do."},
+            "intent": {
+                "type": "string",
+                "description": "Natural-language description of what you want to do.",
+            },
             "input": {
                 "type": "object",
                 "description": "Optional structured payload that matches the chosen agent's input schema. When omitted, the server attempts simple field extraction from `intent`.",
                 "additionalProperties": True,
             },
-            "max_cost_usd": {"type": "number", "default": 0.10, "minimum": 0, "description": "Hard ceiling on the per-call charge."},
-            "dry_run": {"type": "boolean", "default": False, "description": "When true, decide which agent would be invoked and report it without running anything."},
+            "max_cost_usd": {
+                "type": "number",
+                "default": 0.10,
+                "minimum": 0,
+                "description": "Hard ceiling on the per-call charge.",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "default": False,
+                "description": "When true, decide which agent would be invoked and report it without running anything.",
+            },
             "output_format": {
                 "type": "string",
-                "enum": ["json", "markdown", "github_pr_comment", "slack_blocks", "text"],
+                "enum": [
+                    "json",
+                    "markdown",
+                    "github_pr_comment",
+                    "slack_blocks",
+                    "text",
+                ],
                 "description": "Optional. Render the result in a specific shape. Canonical JSON `output` stays intact; rendered string is attached as `rendered_output`.",
             },
         },
@@ -401,7 +480,10 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "slug": {"type": "string", "description": "Tool slug from aztea_search (e.g. 'python_code_executor')."},
+            "slug": {
+                "type": "string",
+                "description": "Tool slug from aztea_search (e.g. 'python_code_executor').",
+            },
             "arguments": {
                 "type": "object",
                 "description": "Input payload matching the tool's input schema (from aztea_describe). Omit for tools with no required fields.",
@@ -409,7 +491,13 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
             },
             "output_format": {
                 "type": "string",
-                "enum": ["json", "markdown", "github_pr_comment", "slack_blocks", "text"],
+                "enum": [
+                    "json",
+                    "markdown",
+                    "github_pr_comment",
+                    "slack_blocks",
+                    "text",
+                ],
                 "description": "Optional. Render the result in a specific shape. The canonical JSON `output` stays intact; the rendered string is added as `rendered_output`.",
             },
         },
@@ -436,7 +524,11 @@ def _parse_data_uri(value: str) -> tuple[str | None, str | None]:
 
 def _mcp_text_from_payload(payload: Any) -> str:
     if isinstance(payload, dict):
-        if "results" in payload and isinstance(payload.get("results"), list) and "query" in payload:
+        if (
+            "results" in payload
+            and isinstance(payload.get("results"), list)
+            and "query" in payload
+        ):
             lines = [f"Aztea matches for: {payload.get('query')}"]
             for idx, item in enumerate(payload["results"][:8], start=1):
                 if not isinstance(item, dict):
@@ -465,7 +557,9 @@ def _mcp_text_from_payload(payload: Any) -> str:
                     lines.append(f"   {quality_summary}")
                 best_for = item.get("best_for")
                 if isinstance(best_for, list) and best_for:
-                    lines.append(f"   Best for: {', '.join(str(x) for x in best_for[:3])}")
+                    lines.append(
+                        f"   Best for: {', '.join(str(x) for x in best_for[:3])}"
+                    )
             workflow_hints = payload.get("workflow_hints")
             if isinstance(workflow_hints, list) and workflow_hints:
                 lines.append("Workflow hints:")
@@ -475,7 +569,11 @@ def _mcp_text_from_payload(payload: Any) -> str:
             if next_step:
                 lines.append(f"Next: {next_step}")
             return "\n".join(lines)
-        if "slug" in payload and "input_schema" in payload and "output_schema" in payload:
+        if (
+            "slug" in payload
+            and "input_schema" in payload
+            and "output_schema" in payload
+        ):
             slug = str(payload.get("slug") or "").strip()
             name = str(payload.get("name") or slug).strip()
             lines = [f"{name} ({slug})"]
@@ -487,18 +585,26 @@ def _mcp_text_from_payload(payload: Any) -> str:
                 lines.append(f"Best for: {', '.join(str(x) for x in best_for[:4])}")
             required = payload.get("required_fields")
             if isinstance(required, list):
-                lines.append(f"Required fields: {', '.join(str(x) for x in required) if required else 'none'}")
+                lines.append(
+                    f"Required fields: {', '.join(str(x) for x in required) if required else 'none'}"
+                )
             optional = payload.get("optional_fields")
             if isinstance(optional, list) and optional:
-                lines.append(f"Optional fields: {', '.join(str(x) for x in optional[:8])}")
+                lines.append(
+                    f"Optional fields: {', '.join(str(x) for x in optional[:8])}"
+                )
             next_step = str(payload.get("next_step") or "").strip()
             if next_step:
                 lines.append(f"Next: {next_step}")
             return "\n".join(lines)
         if "job_id" in payload and "status" in payload:
-            lines = [f"Aztea job {payload.get('job_id')} | status: {payload.get('status')}"]
+            lines = [
+                f"Aztea job {payload.get('job_id')} | status: {payload.get('status')}"
+            ]
             if payload.get("latency_ms") is not None:
-                lines.append(f"Latency: {_compact_latency(payload.get('latency_ms')) or payload.get('latency_ms')}")
+                lines.append(
+                    f"Latency: {_compact_latency(payload.get('latency_ms')) or payload.get('latency_ms')}"
+                )
             if payload.get("cost_usd") is not None:
                 try:
                     lines.append(f"Cost: ${float(payload.get('cost_usd')):.2f}")
@@ -515,7 +621,14 @@ def _mcp_text_from_payload(payload: Any) -> str:
                         break
             return "\n".join(lines)
     if isinstance(payload, dict):
-        for key in ("summary", "message", "answer", "title", "one_line_summary", "signal_reasoning"):
+        for key in (
+            "summary",
+            "message",
+            "answer",
+            "title",
+            "one_line_summary",
+            "signal_reasoning",
+        ):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -535,7 +648,9 @@ def _clean_error_text(value: Any) -> Any:
     return value
 
 
-def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _mcp_media_content_from_artifacts(
+    artifacts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = []
     for artifact in artifacts[:6]:
         mime = str(artifact.get("mime") or "").strip().lower()
@@ -545,16 +660,26 @@ def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[d
         parsed_mime, base64_payload = _parse_data_uri(source)
         effective_mime = parsed_mime or mime
         if effective_mime.startswith("image/") and base64_payload:
-            content.append({"type": "image", "mimeType": effective_mime, "data": base64_payload})
+            content.append(
+                {"type": "image", "mimeType": effective_mime, "data": base64_payload}
+            )
             continue
         if source.startswith("http://") or source.startswith("https://"):
-            content.append({"type": "resource", "resource": {"uri": source, "mimeType": effective_mime}})
+            content.append(
+                {
+                    "type": "resource",
+                    "resource": {"uri": source, "mimeType": effective_mime},
+                }
+            )
             continue
         if base64_payload:
             content.append(
                 {
                     "type": "resource",
-                    "resource": {"uri": f"data:{effective_mime};base64,{base64_payload}", "mimeType": effective_mime},
+                    "resource": {
+                        "uri": f"data:{effective_mime};base64,{base64_payload}",
+                        "mimeType": effective_mime,
+                    },
                 }
             )
             continue
@@ -562,7 +687,9 @@ def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[d
 
 
 def _mcp_content_from_payload(payload: Any) -> list[dict[str, Any]]:
-    content: list[dict[str, Any]] = [{"type": "text", "text": _mcp_text_from_payload(payload)}]
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": _mcp_text_from_payload(payload)}
+    ]
     if isinstance(payload, dict):
         raw_artifacts = payload.get("artifacts")
         if isinstance(raw_artifacts, list):
@@ -579,12 +706,14 @@ def _compact_latency(value: Any) -> str | None:
     if ms <= 0:
         return None
     if ms >= 1000:
-        return f"~{ms/1000:.1f}s"
+        return f"~{ms / 1000:.1f}s"
     return f"~{int(ms)}ms"
 
 
 def _query_terms(query: str) -> list[str]:
-    terms = [term.lower() for term in re.findall(r"[a-zA-Z0-9_.:/#-]{2,}", str(query or ""))]
+    terms = [
+        term.lower() for term in re.findall(r"[a-zA-Z0-9_.:/#-]{2,}", str(query or ""))
+    ]
     seen: set[str] = set()
     result: list[str] = []
     for term in terms:
@@ -671,9 +800,15 @@ def _entry_matches_intent(entry: dict[str, Any], intent: str | None) -> bool:
     if intent == "browser":
         return "browser" in text or "playwright" in text or "screenshot" in text
     if intent == "dns":
-        return "dns" in text or "ssl" in text or "certificate" in text or "domain" in text
+        return (
+            "dns" in text or "ssl" in text or "certificate" in text or "domain" in text
+        )
     if intent == "code_search":
-        return ("semantic" in text and "code" in text) or "codebase" in text or "repository" in text
+        return (
+            ("semantic" in text and "code" in text)
+            or "codebase" in text
+            or "repository" in text
+        )
     return True
 
 
@@ -702,39 +837,64 @@ def _entry_aliases(slug: str, name: str, agent_id: str | None = None) -> list[st
 def _session_accrue(session_state: dict[str, Any], amount_cents: Any) -> None:
     if amount_cents is None:
         return
-    session_state["spent_cents"] = int(session_state.get("spent_cents") or 0) + int(amount_cents)
+    session_state["spent_cents"] = int(session_state.get("spent_cents") or 0) + int(
+        amount_cents
+    )
 
 
 def _session_refund(session_state: dict[str, Any], amount_cents: Any) -> None:
     if amount_cents is None:
         return
-    session_state["spent_cents"] = max(0, int(session_state.get("spent_cents") or 0) - int(amount_cents))
+    session_state["spent_cents"] = max(
+        0, int(session_state.get("spent_cents") or 0) - int(amount_cents)
+    )
 
 
 def _workflow_hints(query: str) -> list[str]:
     lowered = str(query or "").lower()
     hints: list[str] = []
-    multi_markers = ("many", "multiple", "batch", "all ", "each ", "every ", "parallel", "across")
+    multi_markers = (
+        "many",
+        "multiple",
+        "batch",
+        "all ",
+        "each ",
+        "every ",
+        "parallel",
+        "across",
+    )
     async_markers = ("long", "background", "async", "slow", "wait", "poll", "later")
     compare_markers = ("compare", "best", "pick", "winner", "versus", "vs")
     budget_markers = ("budget", "spend", "cost", "price", "cap")
     recipe_markers = ("workflow", "recipe", "pipeline", "chain", "sequence")
 
     if any(marker in lowered for marker in multi_markers):
-        hints.append("This task looks parallelizable. Consider aztea_hire_batch for many independent subtasks.")
+        hints.append(
+            "This task looks parallelizable. Consider aztea_hire_batch for many independent subtasks."
+        )
     if any(marker in lowered for marker in async_markers):
-        hints.append("This may be better as a background run. Consider aztea_hire_async plus aztea_job_status.")
+        hints.append(
+            "This may be better as a background run. Consider aztea_hire_async plus aztea_job_status."
+        )
     if any(marker in lowered for marker in compare_markers):
-        hints.append("If you want side-by-side outputs, consider aztea_compare_agents instead of a single hire.")
+        hints.append(
+            "If you want side-by-side outputs, consider aztea_compare_agents instead of a single hire."
+        )
     if any(marker in lowered for marker in budget_markers):
-        hints.append("If spend matters, check aztea_estimate_cost and aztea_set_session_budget before hiring.")
+        hints.append(
+            "If spend matters, check aztea_estimate_cost and aztea_set_session_budget before hiring."
+        )
     if any(marker in lowered for marker in recipe_markers):
-        hints.append("If this is a repeatable multi-step workflow, check aztea_list_recipes or aztea_list_pipelines.")
+        hints.append(
+            "If this is a repeatable multi-step workflow, check aztea_list_recipes or aztea_list_pipelines."
+        )
     return hints[:4]
 
 
 class RegistryBridge:
-    def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float = 10.0) -> None:
+    def __init__(
+        self, *, base_url: str, api_key: str, timeout_seconds: float = 10.0
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_seconds = max(1.0, float(timeout_seconds))
@@ -774,7 +934,10 @@ class RegistryBridge:
             return self._manifest
 
         if response.status_code in (401, 403):
-            _LOG.warning("Aztea API key invalid or missing (HTTP %s). Switch to auth mode.", response.status_code)
+            _LOG.warning(
+                "Aztea API key invalid or missing (HTTP %s). Switch to auth mode.",
+                response.status_code,
+            )
             try:
                 body = response.json()
                 if isinstance(body, dict) and "detail" in body:
@@ -810,7 +973,12 @@ class RegistryBridge:
                 return [_AUTH_TOOL]
             registry_tools = [dict(entry["tool"]) for entry in self._entries]
         if _feature_flags.LAZY_MCP_SCHEMAS:
-            return [_LAZY_SEARCH_TOOL, _LAZY_DESCRIBE_TOOL, _LAZY_CALL_TOOL, _LAZY_DO_TOOL]
+            return [
+                _LAZY_SEARCH_TOOL,
+                _LAZY_DESCRIBE_TOOL,
+                _LAZY_CALL_TOOL,
+                _LAZY_DO_TOOL,
+            ]
         return meta_tools.get_meta_tools() + registry_tools
 
     def _catalog_entries(self) -> list[dict[str, Any]]:
@@ -829,7 +997,8 @@ class RegistryBridge:
                     "kind": "meta_tool",
                     "name": slug,
                     "description": str(tool.get("description") or "").strip(),
-                    "input_schema": tool.get("input_schema") or {"type": "object", "additionalProperties": True},
+                    "input_schema": tool.get("input_schema")
+                    or {"type": "object", "additionalProperties": True},
                     "output_schema": tool.get("output_schema") or {},
                     "tool": tool,
                     "category": "Platform",
@@ -855,7 +1024,9 @@ class RegistryBridge:
             meta = dict(entry.get("catalog_metadata") or {})
             entries.append(
                 {
-                    "slug": str(entry.get("tool_name") or tool.get("name") or "").strip(),
+                    "slug": str(
+                        entry.get("tool_name") or tool.get("name") or ""
+                    ).strip(),
                     "aliases": _entry_aliases(
                         str(entry.get("tool_name") or tool.get("name") or "").strip(),
                         str(meta.get("name") or tool.get("name") or "").strip(),
@@ -864,7 +1035,8 @@ class RegistryBridge:
                     "kind": "registry_agent",
                     "name": str(tool.get("name") or "").strip(),
                     "description": str(tool.get("description") or "").strip(),
-                    "input_schema": tool.get("input_schema") or {"type": "object", "additionalProperties": True},
+                    "input_schema": tool.get("input_schema")
+                    or {"type": "object", "additionalProperties": True},
                     "output_schema": tool.get("output_schema") or {},
                     "tool": tool,
                     "agent_id": entry.get("agent_id"),
@@ -872,7 +1044,9 @@ class RegistryBridge:
                     "tags": list(meta.get("tags") or []),
                     "is_featured": bool(meta.get("is_featured", False)),
                     "cacheable": bool(meta.get("cacheable", False)),
-                    "runtime_requirements": list(meta.get("runtime_requirements") or []),
+                    "runtime_requirements": list(
+                        meta.get("runtime_requirements") or []
+                    ),
                     "tooling_kind": meta.get("tooling_kind"),
                     "stability_tier": meta.get("stability_tier"),
                     "codex_recommended": bool(meta.get("codex_recommended", False)),
@@ -901,7 +1075,9 @@ class RegistryBridge:
         if not normalized:
             return None
         for entry in self._catalog_entries():
-            if entry["slug"] == normalized or normalized in set(entry.get("aliases") or []):
+            if entry["slug"] == normalized or normalized in set(
+                entry.get("aliases") or []
+            ):
                 return entry
         return None
 
@@ -932,7 +1108,10 @@ class RegistryBridge:
             if entry["slug"].lower() == normalized or normalized in aliases:
                 score += 100
                 reasons.append("exact slug match")
-            if normalized and (normalized in entry["slug"].lower() or any(normalized in alias for alias in aliases)):
+            if normalized and (
+                normalized in entry["slug"].lower()
+                or any(normalized in alias for alias in aliases)
+            ):
                 score += 25
                 reasons.append("slug match")
             if normalized and normalized in haystack:
@@ -946,11 +1125,33 @@ class RegistryBridge:
                 score += verb_boost
                 if verb_boost > 0:
                     reasons.append("verb-intent match")
-            if {"security", "vulnerability", "vulnerabilities", "cve", "npm", "dependency", "dependencies", "audit"} & set(terms):
-                if any(token in haystack for token in ("cve", "nvd", "osv", "dependency", "dependencies", "audit", "secret", "scanner", "credential", "entropy", "leak")):
+            if {
+                "security",
+                "vulnerability",
+                "vulnerabilities",
+                "cve",
+                "npm",
+                "dependency",
+                "dependencies",
+                "audit",
+            } & set(terms):
+                if any(
+                    token in haystack
+                    for token in (
+                        "cve",
+                        "nvd",
+                        "osv",
+                        "dependency",
+                        "dependencies",
+                        "audit",
+                        "secret",
+                        "scanner",
+                        "credential",
+                        "entropy",
+                        "leak",
+                    )
+                ):
                     score += 12
-                if "package_finder" in entry["slug"] or "changelog" in entry["slug"]:
-                    score -= 8
             if intent is not None:
                 score += 30
                 reasons.append(f"{intent.replace('_', ' ')} intent match")
@@ -977,15 +1178,46 @@ class RegistryBridge:
                 elif str(entry.get("stability_tier") or "").strip().lower() == "beta":
                     score += 1
             else:
-                if any(term in {"async", "background", "poll", "job"} for term in terms) and entry["slug"] in {"aztea_hire_async", "aztea_job_status", "aztea_clarify"}:
+                if any(
+                    term in {"async", "background", "poll", "job"} for term in terms
+                ) and entry["slug"] in {
+                    "aztea_hire_async",
+                    "aztea_job_status",
+                    "aztea_clarify",
+                }:
                     score += 18
-                if any(term in {"batch", "parallel", "many", "multiple", "all", "each"} for term in terms) and entry["slug"] == "aztea_hire_batch":
+                if (
+                    any(
+                        term in {"batch", "parallel", "many", "multiple", "all", "each"}
+                        for term in terms
+                    )
+                    and entry["slug"] == "aztea_hire_batch"
+                ):
                     score += 18
-                if any(term in {"compare", "winner", "best", "vs", "versus"} for term in terms) and entry["slug"] in {"aztea_compare_agents", "aztea_compare_status"}:
+                if any(
+                    term in {"compare", "winner", "best", "vs", "versus"}
+                    for term in terms
+                ) and entry["slug"] in {"aztea_compare_agents", "aztea_compare_status"}:
                     score += 18
-                if any(term in {"budget", "spend", "cost", "price", "limit"} for term in terms) and entry["slug"] in {"aztea_estimate_cost", "aztea_set_session_budget", "aztea_session_summary", "aztea_spend_summary"}:
+                if any(
+                    term in {"budget", "spend", "cost", "price", "limit"}
+                    for term in terms
+                ) and entry["slug"] in {
+                    "aztea_estimate_cost",
+                    "aztea_set_session_budget",
+                    "aztea_session_summary",
+                    "aztea_spend_summary",
+                }:
                     score += 18
-                if any(term in {"workflow", "pipeline", "recipe", "chain"} for term in terms) and entry["slug"] in {"aztea_list_recipes", "aztea_run_recipe", "aztea_list_pipelines", "aztea_run_pipeline"}:
+                if any(
+                    term in {"workflow", "pipeline", "recipe", "chain"}
+                    for term in terms
+                ) and entry["slug"] in {
+                    "aztea_list_recipes",
+                    "aztea_run_recipe",
+                    "aztea_list_pipelines",
+                    "aztea_run_pipeline",
+                }:
                     score += 18
             if score <= 0:
                 continue
@@ -1037,11 +1269,16 @@ class RegistryBridge:
         next_step = (
             f"Best match: {result_items[0]['slug']}. Call aztea_describe(slug='{result_items[0]['slug']}') for the full schema, "
             "then aztea_call(slug=..., arguments={...}) to run it."
-            if result_items else
-            "No matches found. Try a broader query."
+            if result_items
+            else "No matches found. Try a broader query."
         )
         hints = _workflow_hints(query)
-        payload = {"query": query, "count": len(result_items), "results": result_items, "next_step": next_step}
+        payload = {
+            "query": query,
+            "count": len(result_items),
+            "results": result_items,
+            "next_step": next_step,
+        }
         if hints:
             payload["workflow_hints"] = hints
         return payload
@@ -1049,13 +1286,21 @@ class RegistryBridge:
     def _describe_catalog_entry(self, slug: str) -> dict[str, Any]:
         entry = self._catalog_entry(slug)
         if entry is None:
-            return {"error": "TOOL_NOT_FOUND", "message": f"Unknown tool '{slug}'.", "hint": "Use aztea_search to find the correct slug."}
+            return {
+                "error": "TOOL_NOT_FOUND",
+                "message": f"Unknown tool '{slug}'.",
+                "hint": "Use aztea_search to find the correct slug.",
+            }
         output_schema = entry.get("output_schema") or {}
         # Surface output_schema details so buyers can integrate without relying on the
         # truncated example_output. Pre-2026-05-01 the schema was returned but never
         # called out — and many buyers missed it entirely. Add explicit fields.
-        output_props = output_schema.get("properties") if isinstance(output_schema, dict) else None
-        output_required = output_schema.get("required") if isinstance(output_schema, dict) else None
+        output_props = (
+            output_schema.get("properties") if isinstance(output_schema, dict) else None
+        )
+        output_required = (
+            output_schema.get("required") if isinstance(output_schema, dict) else None
+        )
         result: dict[str, Any] = {
             "slug": entry["slug"],
             "kind": entry["kind"],
@@ -1065,8 +1310,12 @@ class RegistryBridge:
             "description": entry["description"],
             "input_schema": entry["input_schema"],
             "output_schema": output_schema,
-            "output_fields": sorted(list((output_props or {}).keys())) if isinstance(output_props, dict) else [],
-            "output_required_fields": list(output_required or []) if isinstance(output_required, (list, tuple)) else [],
+            "output_fields": sorted(list((output_props or {}).keys()))
+            if isinstance(output_props, dict)
+            else [],
+            "output_required_fields": list(output_required or [])
+            if isinstance(output_required, (list, tuple))
+            else [],
             "tooling_kind": entry.get("tooling_kind"),
             "stability_tier": entry.get("stability_tier"),
             "codex_recommended": bool(entry.get("codex_recommended", False)),
@@ -1080,14 +1329,18 @@ class RegistryBridge:
                 "cacheable": bool(entry.get("cacheable", False)),
             },
             "best_for": list(entry.get("short_use_cases") or [])[:6],
-            "required_fields": list((entry["input_schema"].get("required") or [])) if isinstance(entry["input_schema"], dict) else [],
+            "required_fields": list((entry["input_schema"].get("required") or []))
+            if isinstance(entry["input_schema"], dict)
+            else [],
             "optional_fields": sorted(
                 [
                     key
                     for key in (entry["input_schema"].get("properties") or {}).keys()
                     if key not in set(entry["input_schema"].get("required") or [])
                 ]
-            ) if isinstance(entry["input_schema"], dict) else [],
+            )
+            if isinstance(entry["input_schema"], dict)
+            else [],
             "next_step": (
                 f"Call aztea_run_recipe(recipe_id='{entry.get('recipe_id') or slug}', input_payload={{...}}) using the required_fields above."
                 if entry["kind"] == "recipe"
@@ -1126,7 +1379,9 @@ class RegistryBridge:
             "next_step": "Set AZTEA_API_KEY=az_... in your environment and restart the MCP server.",
         }
 
-    def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    def call_tool(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> tuple[bool, dict[str, Any]]:
         with self._lock:
             auth_required = self._auth_required
 
@@ -1136,8 +1391,13 @@ class RegistryBridge:
         if tool_name == _LAZY_SEARCH_TOOL["name"]:
             query = str(arguments.get("query") or "").strip()
             if not query:
-                return False, {"error": "INVALID_INPUT", "message": "query is required."}
-            return True, self._search_catalog(query, limit=int(arguments.get("limit") or 8))
+                return False, {
+                    "error": "INVALID_INPUT",
+                    "message": "query is required.",
+                }
+            return True, self._search_catalog(
+                query, limit=int(arguments.get("limit") or 8)
+            )
 
         if tool_name == _LAZY_DESCRIBE_TOOL["name"]:
             slug = str(arguments.get("slug") or "").strip()
@@ -1149,7 +1409,10 @@ class RegistryBridge:
         if tool_name == _LAZY_DO_TOOL["name"]:
             intent = str(arguments.get("intent") or "").strip()
             if not intent:
-                return False, {"error": "INVALID_INPUT", "message": "intent is required."}
+                return False, {
+                    "error": "INVALID_INPUT",
+                    "message": "intent is required.",
+                }
             body: dict[str, Any] = {
                 "intent": intent,
                 "max_cost_usd": float(arguments.get("max_cost_usd") or 0.10),
@@ -1197,10 +1460,9 @@ class RegistryBridge:
             if ok and isinstance(payload, dict) and payload.get("auto_invoked"):
                 cost_usd = payload.get("cost_usd")
                 if isinstance(cost_usd, (int, float)) and cost_usd > 0:
-                    self._session_state["spent_cents"] = (
-                        int(self._session_state.get("spent_cents") or 0)
-                        + int(round(float(cost_usd) * 100))
-                    )
+                    self._session_state["spent_cents"] = int(
+                        self._session_state.get("spent_cents") or 0
+                    ) + int(round(float(cost_usd) * 100))
             return ok, payload
 
         if tool_name == _LAZY_CALL_TOOL["name"]:
@@ -1213,16 +1475,26 @@ class RegistryBridge:
                 _LAZY_CALL_TOOL["name"],
                 _LAZY_DO_TOOL["name"],
             }:
-                return False, {"error": "INVALID_INPUT", "message": "Use the lazy MCP tools directly, not via aztea_call."}
+                return False, {
+                    "error": "INVALID_INPUT",
+                    "message": "Use the lazy MCP tools directly, not via aztea_call.",
+                }
             tool_arguments = arguments.get("arguments")
             if tool_arguments is None:
                 tool_arguments = {}
             if not isinstance(tool_arguments, dict):
-                return False, {"error": "INVALID_INPUT", "message": "arguments must be an object."}
+                return False, {
+                    "error": "INVALID_INPUT",
+                    "message": "arguments must be an object.",
+                }
             return self.call_tool(slug, tool_arguments)
 
         resolved_entry = self._catalog_entry(tool_name)
-        resolved_tool_name = str(resolved_entry.get("slug") or tool_name) if resolved_entry else tool_name
+        resolved_tool_name = (
+            str(resolved_entry.get("slug") or tool_name)
+            if resolved_entry
+            else tool_name
+        )
 
         # If the resolved slug is a recipe, transparently redirect to the
         # `aztea_run_recipe` meta-tool so callers can use the recipe by slug
@@ -1261,7 +1533,10 @@ class RegistryBridge:
 
         agent_id = self._agent_id_for_tool(resolved_tool_name)
         if not agent_id:
-            return False, {"error": "TOOL_NOT_FOUND", "message": f"Unknown tool '{tool_name}'."}
+            return False, {
+                "error": "TOOL_NOT_FOUND",
+                "message": f"Unknown tool '{tool_name}'.",
+            }
 
         budget_cents = self._session_state.get("budget_cents")
         if budget_cents is not None:
@@ -1309,7 +1584,9 @@ class RegistryBridge:
                 if entry is not None:
                     price_usd = entry.get("price_per_call_usd")
                     if price_usd is not None:
-                        _session_accrue(self._session_state, round(float(price_usd) * 100))
+                        _session_accrue(
+                            self._session_state, round(float(price_usd) * 100)
+                        )
                 return True, parsed_body
             return True, {"result": parsed_body}
 
@@ -1322,7 +1599,12 @@ class RegistryBridge:
         }
         if isinstance(parsed_body, dict):
             # Top-level keys (from direct JSON responses)
-            for key in ("refunded", "refund_amount_cents", "cost_usd", "wallet_balance_cents"):
+            for key in (
+                "refunded",
+                "refund_amount_cents",
+                "cost_usd",
+                "wallet_balance_cents",
+            ):
                 if key in parsed_body:
                     error_payload[key] = parsed_body[key]
             # HTTPException: detail is {"detail": {"code": ..., "message": ..., "data": {...}}}
@@ -1338,7 +1620,9 @@ class RegistryBridge:
             elif isinstance(detail, str) and detail:
                 error_payload["charge_message"] = detail
         if bool(error_payload.get("refunded")):
-            _session_refund(self._session_state, error_payload.get("refund_amount_cents"))
+            _session_refund(
+                self._session_state, error_payload.get("refund_amount_cents")
+            )
         return False, error_payload
 
 
@@ -1380,18 +1664,26 @@ class MCPStdioServer:
         return json.loads(body.decode("utf-8"))
 
     def _write_message(self, payload: dict[str, Any]) -> None:
-        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
         header = f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii")
         with self._write_lock:
             sys.stdout.buffer.write(header)
             sys.stdout.buffer.write(encoded)
             sys.stdout.buffer.flush()
 
-    def _jsonrpc_result(self, request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
+    def _jsonrpc_result(
+        self, request_id: Any, result: dict[str, Any]
+    ) -> dict[str, Any]:
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
     def _jsonrpc_error(
-        self, request_id: Any, code: int, message: str, data: dict[str, Any] | None = None
+        self,
+        request_id: Any,
+        code: int,
+        message: str,
+        data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"code": code, "message": message}
         if data:
@@ -1436,7 +1728,9 @@ class MCPStdioServer:
             ),
         }
 
-    def _format_tool_result(self, *, ok: bool, payload: dict[str, Any]) -> dict[str, Any]:
+    def _format_tool_result(
+        self, *, ok: bool, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         structured: dict[str, Any]
         if isinstance(payload, dict):
             structured = payload
@@ -1465,10 +1759,14 @@ class MCPStdioServer:
             return self._jsonrpc_result(request_id, {"tools": self.bridge.tools()})
         if method == "tools/call":
             if not isinstance(params, dict):
-                return self._jsonrpc_error(request_id, -32602, "tools/call params must be an object.")
+                return self._jsonrpc_error(
+                    request_id, -32602, "tools/call params must be an object."
+                )
             name = str(params.get("name") or "").strip()
             if not name:
-                return self._jsonrpc_error(request_id, -32602, "tools/call requires a tool name.")
+                return self._jsonrpc_error(
+                    request_id, -32602, "tools/call requires a tool name."
+                )
             arguments = params.get("arguments")
             if arguments is None:
                 arguments = {}
@@ -1477,7 +1775,9 @@ class MCPStdioServer:
                     request_id, -32602, "tools/call arguments must be a JSON object."
                 )
             ok, payload = self.bridge.call_tool(name, arguments)
-            return self._jsonrpc_result(request_id, self._format_tool_result(ok=ok, payload=payload))
+            return self._jsonrpc_result(
+                request_id, self._format_tool_result(ok=ok, payload=payload)
+            )
 
         return self._jsonrpc_error(request_id, -32601, f"Method '{method}' not found.")
 
@@ -1523,10 +1823,14 @@ def _env_with_legacy(new_name: str, legacy_name: str, default: str) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Expose Aztea registry as MCP tools over stdio.")
+    parser = argparse.ArgumentParser(
+        description="Expose Aztea registry as MCP tools over stdio."
+    )
     parser.add_argument(
         "--base-url",
-        default=_env_with_legacy("AZTEA_BASE_URL", "AZTEA_BASE_URL", "http://localhost:8000"),
+        default=_env_with_legacy(
+            "AZTEA_BASE_URL", "AZTEA_BASE_URL", "http://localhost:8000"
+        ),
         help="Aztea HTTP base URL (default: AZTEA_BASE_URL/AZTEA_BASE_URL or http://localhost:8000).",
     )
     parser.add_argument(
@@ -1537,13 +1841,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--refresh-seconds",
         type=int,
-        default=int(_env_with_legacy("AZTEA_MCP_REFRESH_SECONDS", "AZTEA_MCP_REFRESH_SECONDS", "60")),
+        default=int(
+            _env_with_legacy(
+                "AZTEA_MCP_REFRESH_SECONDS", "AZTEA_MCP_REFRESH_SECONDS", "60"
+            )
+        ),
         help="Tool manifest refresh interval in seconds (default: 60).",
     )
     parser.add_argument(
         "--timeout-seconds",
         type=float,
-        default=float(_env_with_legacy("AZTEA_MCP_TIMEOUT_SECONDS", "AZTEA_MCP_TIMEOUT_SECONDS", "10")),
+        default=float(
+            _env_with_legacy(
+                "AZTEA_MCP_TIMEOUT_SECONDS", "AZTEA_MCP_TIMEOUT_SECONDS", "10"
+            )
+        ),
         help="HTTP timeout for registry and tool calls (default: 10).",
     )
     parser.add_argument(
@@ -1555,7 +1867,9 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="[aztea-mcp] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, stream=sys.stderr, format="[aztea-mcp] %(message)s"
+    )
     args = _parse_args()
     api_key = str(args.api_key or "").strip()
     if not api_key:
