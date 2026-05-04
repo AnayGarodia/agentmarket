@@ -826,3 +826,29 @@ def test_shell_executor_blocks_multiple_c_flags_in_python3():
         assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
     except ValueError as exc:
         assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
+
+
+def test_git_diff_analyzer_detects_test_function_removal():
+    from agents import git_diff_analyzer
+
+    diff = (
+        "diff --git a/tests/test_auth.py b/tests/test_auth.py\n"
+        "index abc..def 100644\n"
+        "--- a/tests/test_auth.py\n"
+        "+++ b/tests/test_auth.py\n"
+        "@@ -1,6 +1,1 @@\n"
+        "-def test_login_with_valid_credentials():\n"
+        "-    assert auth.login('user', 'pass') is True\n"
+        "-\n"
+        "-def test_login_rejects_wrong_password():\n"
+        "-    assert auth.login('user', 'bad') is False\n"
+        "-\n"
+        " # remaining test file content\n"
+    )
+
+    result = git_diff_analyzer.run({"diff": diff})
+    assert "error" not in result
+    risk = result.get("risk_summary", {})
+    assert risk.get("tests_removed") is True, "should detect removed test functions"
+    all_warnings = [w for f in result.get("files", []) for w in f.get("warnings", [])]
+    assert any("test function" in w.lower() or "test case" in w.lower() for w in all_warnings)

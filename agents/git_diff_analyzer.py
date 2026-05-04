@@ -121,6 +121,10 @@ _RENAME_FROM_RE = re.compile(r"^rename from (.+)$")
 _RENAME_TO_RE = re.compile(r"^rename to (.+)$")
 _BINARY_RE = re.compile(r"^Binary files .+ differ$|^GIT binary patch$")
 _HUNK_RE = re.compile(r"^@@ ")
+_TEST_FUNCTION_RE = re.compile(
+    r"^(?:def test_\w+|    def test_\w+|\s*it\s*\(|\s*describe\s*\(|\s*@Test\b)",
+    re.MULTILINE,
+)
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -240,6 +244,15 @@ def _classify_file(file_lines: list[str], extra_risk_paths: list[str] | None = N
     if "test" in risk_tags and change_type == "removed":
         warnings.append("Test file deleted entirely.")
 
+    # Detect test function removal within a surviving test file (not full deletion).
+    if "test" in risk_tags and change_type != "removed" and removed_blob:
+        removed_fn_count = len(_TEST_FUNCTION_RE.findall("\n".join(removed_blob)))
+        if removed_fn_count > 0:
+            warnings.append(
+                f"{removed_fn_count} test function(s) removed from {path}."
+            )
+            risk_tags.append("test_functions_removed")
+
     todos_added = len(_TODO_RE.findall(added_text))
     if todos_added:
         warnings.append(f"{todos_added} new TODO/FIXME/XXX/HACK comment(s) added.")
@@ -330,7 +343,7 @@ def run(payload: dict) -> dict:
             risk_summary["public_api_changes"] += 1
         if "test" in info["risk_tags"]:
             risk_summary["test_files"] += 1
-            if info["change_type"] == "removed":
+            if info["change_type"] == "removed" or "test_functions_removed" in info["risk_tags"]:
                 risk_summary["tests_removed"] = True
 
         if any("error-handling decrease" in w for w in info["warnings"]):
@@ -356,7 +369,7 @@ def run(payload: dict) -> dict:
     if risk_summary["secret_pattern_added"]:
         bullet_points.append("⚠ Possible credential added — review immediately.")
     if risk_summary["tests_removed"]:
-        bullet_points.append("⚠ One or more test files deleted entirely.")
+        bullet_points.append("⚠ Test coverage removed (file deleted or test functions removed).")
     if risk_summary["error_handling_removed"]:
         bullet_points.append("⚠ Net error-handling decrease detected.")
     if total_binary:
