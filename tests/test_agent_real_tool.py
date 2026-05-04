@@ -808,3 +808,21 @@ def test_shell_executor_blocks_subprocess_import_in_python3_c():
         assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
     except ValueError as exc:
         assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
+
+
+def test_shell_executor_blocks_from_socket_import_in_python3_c():
+    from agents import shell_executor
+    try:
+        result = shell_executor.run({"command": "python3 -c 'from socket import connect'"})
+        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
+    except ValueError as exc:
+        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
+
+
+def test_shell_executor_blocks_multiple_c_flags_in_python3():
+    from agents import shell_executor
+    try:
+        result = shell_executor.run({"command": "python3 -c 'pass' -c 'import socket'"})
+        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
+    except ValueError as exc:
+        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()

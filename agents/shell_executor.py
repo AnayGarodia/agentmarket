@@ -57,6 +57,8 @@ _PYTHON_INLINE_BLOCKED = (
     r"import\s+urllib",
     r"import\s+http\.client",
     r"\bos\.sy" + r"stem\b",
+    r"from\s+(socket|requests|urllib|http)\s+import",
+    r"from\s+subprocess\s+import",
 )
 
 
@@ -104,6 +106,10 @@ def _is_allowed(command: str) -> bool:
             return False
     # Must start with an allowed prefix
     lower = stripped.lower()
+    # Reject python3/python commands with multiple -c flags — can hide blocked code in later flags.
+    if lower.startswith(("python3 ", "python ")):
+        if len(_re.findall(r'\s-c[\s]', lower)) > 1:
+            return False
     # For python3 -c INLINE, apply static analysis to the inline code.
     inline = _extract_python_inline(stripped)
     if inline is not None:
