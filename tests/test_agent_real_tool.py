@@ -711,3 +711,26 @@ def test_shell_executor_does_not_forward_host_secrets(monkeypatch):
     result = shell_executor.run({"command": "python -V"})
     assert result["exit_code"] == 0
     assert "AZTEA_API_KEY" not in captured
+
+
+def test_type_checker_falls_back_to_npx_when_tsc_missing(monkeypatch):
+    """If global tsc is absent, _run_tsc should use npx --package typescript tsc."""
+    import importlib
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: None if name == "tsc" else f"/usr/bin/{name}")
+
+    import subprocess as _subprocess
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        return _subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(_subprocess, "run", fake_run)
+
+    import agents.type_checker as tc
+    importlib.reload(tc)
+    tc._run_tsc("const x: number = 1;", {}, False)
+    assert captured.get("cmd", [None])[0] == "npx", "should fall back to npx"
+    assert "--package" in captured["cmd"], "must specify --package typescript"
+    assert "tsc" in captured["cmd"]

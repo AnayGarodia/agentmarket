@@ -207,8 +207,21 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 f,
             )
 
-        tsc_bin = shutil.which("tsc") or "tsc"
-        cmd = [tsc_bin, "--noEmit", "--project", os.path.join(tmpdir, "tsconfig.json")]
+        # Prefer a global tsc; fall back to npx (auto-installs typescript on demand).
+        tsc_bin = shutil.which("tsc")
+        if tsc_bin:
+            cmd = [tsc_bin, "--noEmit", "--project", os.path.join(tmpdir, "tsconfig.json")]
+        else:
+            if not shutil.which("npx"):
+                return _err(
+                    "type_checker.tool_unavailable",
+                    "tsc is not installed and npx is not available. "
+                    "Install Node.js or TypeScript globally: npm install -g typescript",
+                )
+            cmd = [
+                "npx", "--yes", "--package", "typescript", "tsc",
+                "--noEmit", "--project", os.path.join(tmpdir, "tsconfig.json"),
+            ]
 
         try:
             result = subprocess.run(
@@ -227,13 +240,19 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
             )
 
         raw = result.stdout + result.stderr
-        version_result = subprocess.run(
-            [tsc_bin, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        tool_version = version_result.stdout.strip() or "tsc"
+        version_str = ""
+        try:
+            if tsc_bin:
+                v = subprocess.run([tsc_bin, "--version"], capture_output=True, text=True, timeout=5)
+            else:
+                v = subprocess.run(
+                    ["npx", "--yes", "--package", "typescript", "tsc", "--version"],
+                    capture_output=True, text=True, timeout=15,
+                )
+            version_str = (v.stdout + v.stderr).strip()
+        except Exception:
+            pass
+        tool_version = version_str or "tsc"
         diagnostics = _parse_tsc_diagnostics(raw)
 
         return {
