@@ -566,6 +566,61 @@ def test_fix10_payout_curve_clawback_uses_supported_types_and_stays_zero_sum(pay
     assert _total_wallet_balance(payments) == 500
 
 
+# ---------------------------------------------------------------------------
+# Fix 11 — _resolve_payload must detect missing fields from oneOf variants
+# ---------------------------------------------------------------------------
+
+def test_fix11_auto_hire_detects_missing_fields_for_oneof_schema():
+    """_resolve_payload must detect missing fields from oneOf variants, not just top-level required."""
+    from core.registry.auto_hire import CandidateAgent, decide
+    import unittest.mock as mock
+
+    cve_agent = CandidateAgent(
+        agent_id="a3e239dd-ea92-556b-9c95-0a213a3daf59",
+        slug="cve_lookup_agent",
+        name="CVE Lookup Agent",
+        description="live CVE data for a package or CVE ID security vulnerability nvd",
+        tags=["security", "cve"],
+        category="Security",
+        price_per_call_usd=0.01,
+        trust_score=90.0,
+        success_rate=0.98,
+        stability_tier="stable",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "cve_id": {"type": "string"},
+                "packages": {"type": "array", "items": {"type": "string"}},
+            },
+            "oneOf": [
+                {"required": ["cve_id"]},
+                {"required": ["packages"]},
+            ],
+        },
+        raw={"call_count": 100, "codex_recommended": True},
+    )
+
+    with mock.patch("core.feature_flags.auto_invoke_enabled", return_value=True), \
+         mock.patch("core.feature_flags.auto_invoke_confidence_floor", return_value=0.0), \
+         mock.patch("core.feature_flags.auto_invoke_trust_floor", return_value=0.0), \
+         mock.patch("core.feature_flags.auto_invoke_success_floor", return_value=0.0), \
+         mock.patch("core.feature_flags.auto_invoke_server_cap_usd", return_value=10.0):
+        decision = decide(
+            intent="look up CVE-2021-44228",
+            explicit_input=None,
+            max_cost_usd=1.0,
+            candidates=[cve_agent],
+        )
+
+    if decision.auto_invoked:
+        assert decision.payload and (
+            "cve_id" in decision.payload or "packages" in decision.payload
+        ), "auto-invoked with empty payload — oneOf required fields were not detected"
+    else:
+        assert decision.reason == "missing_fields", f"Expected missing_fields gate, got: {decision.reason}"
+        assert decision.missing_fields, "missing_fields must be non-empty"
+
+
 def test_fix10_payout_curve_clawback_skips_cleanly_on_insufficient_balance(payments_db):
     from core import payout_curve
 

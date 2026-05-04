@@ -394,36 +394,56 @@ def _resolve_payload(
     intent: str,
     explicit_input: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Build the payload to pass to the agent, or list missing required fields.
+    """Build the payload or list missing required fields.
 
-    Strategy:
-      1. If `explicit_input` is provided, use it as-is. Validate that every
-         required field is present; return missing fields if not.
-      2. Otherwise, if the agent has exactly one required field of type
-         "string", set it to the intent text.
-      3. Otherwise, return missing_fields = required fields and let the LLM
-         re-call with structured `input`.
+    Handles both top-level ``required`` and composite ``oneOf``/``anyOf``/``allOf``
+    variants so agents like CVE lookup (which use oneOf instead of a flat required
+    list) are correctly gated.
     """
     schema = agent.input_schema if isinstance(agent.input_schema, dict) else {}
     required = list(schema.get("required") or [])
     properties = dict(schema.get("properties") or {})
 
+    # Collect required fields from composite schema keywords (oneOf/anyOf/allOf).
+    composite_variants: list[list[str]] = []
+    for keyword in ("oneOf", "anyOf", "allOf"):
+        variants = schema.get(keyword)
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict):
+                    vreq = list(variant.get("required") or [])
+                    if vreq:
+                        composite_variants.append(vreq)
+
     if explicit_input is not None:
         missing = [f for f in required if f not in explicit_input]
+        if missing:
+            return explicit_input, missing
+        if composite_variants:
+            for variant_required in composite_variants:
+                if all(f in explicit_input for f in variant_required):
+                    return explicit_input, []
+            return explicit_input, [f for f in composite_variants[0] if f not in explicit_input]
         return explicit_input, missing
 
-    # Empty schema or no required fields: pass intent verbatim.
-    if not required:
+    # No explicit_input. Determine all required fields.
+    all_required = required or (composite_variants[0] if composite_variants else [])
+    if not all_required:
         return {"intent": intent}, []
 
-    if len(required) == 1:
-        field_name = required[0]
+    # Single top-level string field: auto-fill from intent.
+    if len(all_required) == 1 and not composite_variants:
+        field_name = all_required[0]
         field_spec = properties.get(field_name) or {}
         field_type = str(field_spec.get("type") or "").lower()
         if field_type in {"string", ""}:
             return {field_name: intent}, []
 
-    return {}, required
+    # Composite schema without explicit_input: cannot auto-fill structured fields.
+    if composite_variants:
+        return {}, composite_variants[0]
+
+    return {}, all_required
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
