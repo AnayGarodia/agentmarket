@@ -374,14 +374,24 @@ def test_visual_regression_returns_annotated_artifact(monkeypatch):
         def __init__(self, content: bytes, status_code: int = 200):
             self.content = content
             self.status_code = status_code
+            self.headers = {}
 
         def raise_for_status(self) -> None:
             return None
 
+        def iter_content(self, chunk_size=None):
+            yield self.content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
     payloads = [left.getvalue(), right.getvalue()]
 
-    def fake_get(url, timeout=None, headers=None, allow_redirects=None):
-        del timeout, headers
+    def fake_get(url, timeout=None, headers=None, allow_redirects=None, stream=False):
+        del timeout, headers, stream
         assert url.startswith("https://example.com/")
         assert allow_redirects is False
         return _FakeResponse(payloads.pop(0))

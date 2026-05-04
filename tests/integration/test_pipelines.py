@@ -16,12 +16,25 @@ from tests.integration.helpers import (
 
 class _FakeResponse:
     def __init__(self, payload: dict):
+        import json as _json
+
         self._payload = payload
+        self._body = _json.dumps(payload).encode()
         self.status_code = 200
         self.ok = True
+        self.headers = {}
 
     def json(self):
         return self._payload
+
+    def iter_content(self, chunk_size=None):
+        yield self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
 
 
 def test_pipeline_run_executes_nodes_in_order_and_returns_terminal_output(client, monkeypatch):
@@ -45,8 +58,8 @@ def test_pipeline_run_executes_nodes_in_order_and_returns_terminal_output(client
 
     calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
-        del headers, timeout, allow_redirects
+    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None, stream=False):
+        del headers, timeout, allow_redirects, stream
         calls.append((url, dict(json or {})))
         task = (json or {}).get("task")
         if task == "source text":

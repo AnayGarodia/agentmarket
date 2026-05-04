@@ -127,6 +127,11 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
             )
 
         raw = result.stdout + result.stderr
+        if "No module named mypy" in raw or "No module named 'mypy'" in raw:
+            return _err(
+                "type_checker.tool_unavailable",
+                "mypy is not installed on this executor. Install it with: pip install mypy",
+            )
         diagnostics: list[dict] = []
         # mypy --output=json emits JSON Lines (one diagnostic dict per line),
         # not a JSON array. The previous version's ``json.loads`` call on the
