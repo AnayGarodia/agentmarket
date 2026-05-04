@@ -307,10 +307,15 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
             """,
             (*agent_ids, since),
         ).fetchall()
+        latency_expr = (
+            "EXTRACT(EPOCH FROM (completed_at::timestamptz - claimed_at::timestamptz))"
+            if _db.IS_POSTGRES
+            else "(julianday(completed_at) - julianday(claimed_at)) * 86400"
+        )
         latency_rows = conn.execute(
             f"""
             SELECT agent_id,
-                   (julianday(completed_at) - julianday(claimed_at)) * 86400 AS latency_s
+                   {latency_expr} AS latency_s
             FROM jobs
             WHERE agent_id IN ({placeholders})
               AND status = 'complete'

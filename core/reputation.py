@@ -557,6 +557,11 @@ def _load_client_stats_map(
     if not agent_ids:
         return {}
     placeholders = ",".join(["%s"] * len(agent_ids))
+    latency_expr = (
+        "EXTRACT(EPOCH FROM (completed_at::timestamptz - created_at::timestamptz)) * 1000.0"
+        if _db.IS_POSTGRES
+        else "(julianday(completed_at) - julianday(created_at)) * 86400000.0"
+    )
     try:
         with _conn() as conn:
             rows = conn.execute(
@@ -569,7 +574,7 @@ def _load_client_stats_map(
                     AVG(
                         CASE
                             WHEN completed_at IS NOT NULL
-                            THEN (julianday(completed_at) - julianday(created_at)) * 86400000.0
+                            THEN {latency_expr}
                             ELSE NULL
                         END
                     ) AS avg_latency_ms

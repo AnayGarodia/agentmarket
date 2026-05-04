@@ -759,9 +759,14 @@ def ops_platform_stats(
             ).fetchone()["n"]
             or 1
         )
+        latency_expr = (
+            "EXTRACT(EPOCH FROM (completed_at::timestamptz - claimed_at::timestamptz))"
+            if _db.IS_POSTGRES
+            else "(julianday(completed_at) - julianday(claimed_at)) * 86400"
+        )
         latency_rows = conn.execute(
-            """
-            SELECT (julianday(completed_at) - julianday(claimed_at)) * 86400 AS latency_s
+            f"""
+            SELECT {latency_expr} AS latency_s
             FROM jobs
             WHERE status = 'complete' AND claimed_at IS NOT NULL AND completed_at IS NOT NULL
               AND created_at >= %s
