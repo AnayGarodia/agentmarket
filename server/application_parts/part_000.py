@@ -407,7 +407,7 @@ def _mcp_log_invocation(
                 """
                 INSERT INTO mcp_invocation_log
                     (id, agent_id, caller_key_id, tool_name, input_hash, invoked_at, duration_ms, success)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     row_id,

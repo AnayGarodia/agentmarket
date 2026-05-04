@@ -221,7 +221,7 @@ def list_child_jobs(
             if isinstance(status, str) and status in VALID_STATUSES
         )
         if normalized_statuses:
-            placeholders = ", ".join(["?"] * len(normalized_statuses))
+            placeholders = ", ".join(["%s"] * len(normalized_statuses))
             where_status = f" AND status IN ({placeholders})"
             params.extend(normalized_statuses)
     params.append(capped_limit)

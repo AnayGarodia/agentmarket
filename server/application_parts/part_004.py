@@ -602,7 +602,7 @@ def _enqueue_job_event_hook_deliveries(event: dict) -> None:
     if not owner_ids:
         return
 
-    placeholders = ",".join(["?"] * len(owner_ids))
+    placeholders = ",".join(["%s"] * len(owner_ids))
     payload_json = _stable_json_text(event)
     now = _utc_now_iso()
     with jobs._conn() as conn:

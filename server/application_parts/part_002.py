@@ -293,7 +293,7 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
     from datetime import datetime, timedelta, timezone
 
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    placeholders = ",".join("?" * len(agent_ids))
+    placeholders = ",".join(["%s"] * len(agent_ids))
     with jobs._conn() as conn:
         rows = conn.execute(
             f"""
@@ -302,7 +302,7 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
                    SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS completed,
                    SUM(CASE WHEN status = 'failed'   THEN 1 ELSE 0 END) AS failed
             FROM jobs
-            WHERE agent_id IN ({placeholders}) AND created_at >= ?
+            WHERE agent_id IN ({placeholders}) AND created_at >= %s
             GROUP BY agent_id
             """,
             (*agent_ids, since),
@@ -316,7 +316,7 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
               AND status = 'complete'
               AND claimed_at IS NOT NULL
               AND completed_at IS NOT NULL
-              AND created_at >= ?
+              AND created_at >= %s
             ORDER BY agent_id, latency_s
             """,
             (*agent_ids, since),

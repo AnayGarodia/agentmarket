@@ -25,7 +25,7 @@ def backfill_agent_signing_keys(agent_ids: list[str], now: str) -> None:
         with _conn() as conn:
             rows = conn.execute(
                 "SELECT agent_id FROM agents WHERE agent_id IN ({}) AND (signing_private_key IS NULL OR signing_private_key = '')".format(
-                    ",".join("?" * len(agent_ids))
+                    ",".join(["%s"] * len(agent_ids))
                 ),
                 agent_ids,
             ).fetchall()

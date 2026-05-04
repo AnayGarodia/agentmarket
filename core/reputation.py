@@ -361,7 +361,7 @@ def _get_agent_quality_summary_map(agent_ids: list[str]) -> dict[str, dict]:
     if not agent_ids:
         return {}
 
-    placeholders = ",".join(["?"] * len(agent_ids))
+    placeholders = ",".join(["%s"] * len(agent_ids))
     query = f"""
         SELECT agent_id, COUNT(*) AS rating_count, AVG(rating) AS average_quality_rating
         FROM job_quality_ratings
@@ -407,7 +407,7 @@ def _load_agent_stats_map(agent_ids: list[str]) -> dict[str, tuple[int, int, flo
     if not agent_ids:
         return {}
 
-    placeholders = ",".join(["?"] * len(agent_ids))
+    placeholders = ",".join(["%s"] * len(agent_ids))
     query = f"""
         SELECT agent_id, total_calls, successful_calls, avg_latency_ms
         FROM agents
@@ -436,7 +436,7 @@ def _get_caller_quality_summary_map(caller_owner_ids: list[str]) -> dict[str, di
     init_reputation_db()
     if not caller_owner_ids:
         return {}
-    placeholders = ",".join(["?"] * len(caller_owner_ids))
+    placeholders = ",".join(["%s"] * len(caller_owner_ids))
     query = f"""
         SELECT caller_owner_id, COUNT(*) AS rating_count, AVG(rating) AS average_rating
         FROM caller_ratings
@@ -496,7 +496,7 @@ def _load_dispute_rates_map(agent_ids: list[str]) -> dict[str, int]:
     """Return {agent_id: dispute_count} for each agent_id. Returns empty dict if tables missing."""
     if not agent_ids:
         return {}
-    placeholders = ",".join("?" * len(agent_ids))
+    placeholders = ",".join(["%s"] * len(agent_ids))
     try:
         with _conn() as conn:
             rows = conn.execute(
@@ -519,7 +519,7 @@ def _load_client_quality_summary_map(
 ) -> dict[tuple[str, str], dict]:
     if not agent_ids:
         return {}
-    placeholders = ",".join("?" * len(agent_ids))
+    placeholders = ",".join(["%s"] * len(agent_ids))
     try:
         with _conn() as conn:
             rows = conn.execute(
@@ -556,7 +556,7 @@ def _load_client_stats_map(
 ) -> dict[tuple[str, str], tuple[int, int, float]]:
     if not agent_ids:
         return {}
-    placeholders = ",".join("?" * len(agent_ids))
+    placeholders = ",".join(["%s"] * len(agent_ids))
     try:
         with _conn() as conn:
             rows = conn.execute(

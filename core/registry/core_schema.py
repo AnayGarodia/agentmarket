@@ -510,7 +510,7 @@ def _load_embeddings_for_agents(agent_ids: set[str]) -> dict[str, np.ndarray]:
 
     loaded: dict[str, np.ndarray] = {}
     if missing:
-        placeholders = ",".join("?" for _ in missing)
+        placeholders = ",".join("%s" for _ in missing)
         with _conn() as conn:
             rows = conn.execute(
                 f"SELECT agent_id, embedding FROM agent_embeddings WHERE agent_id IN ({placeholders})",
