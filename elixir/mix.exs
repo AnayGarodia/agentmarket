@@ -5,8 +5,9 @@ defmodule Aztea.MixProject do
     [
       app: :aztea,
       version: "0.1.0",
-      elixir: "~> 1.16",
+      elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
+      releases: releases(),
       deps: deps(),
       aliases: aliases()
     ]
@@ -30,6 +31,15 @@ defmodule Aztea.MixProject do
       {:jason, "~> 1.4"},
       # Test helpers
       {:ex_machina, "~> 2.8", only: :test}
+    ]
+  end
+
+  defp releases do
+    [
+      aztea: [
+        include_executables_for: [:unix],
+        runtime_config_path: "config/runtime.exs"
+      ]
     ]
   end
 

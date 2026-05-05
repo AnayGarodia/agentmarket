@@ -1,0 +1,29 @@
+[Unit]
+Description=Aztea Elixir OTP service (job lifecycle + PubSub)
+After=network.target postgresql.service aztea.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=aztea
+Group=aztea
+WorkingDirectory=/home/aztea/elixir-release
+
+# Load the same .env as the Python server so DATABASE_URL is available.
+EnvironmentFile=/home/aztea/app/.env
+
+ExecStart=/home/aztea/elixir-release/bin/aztea start
+ExecStop=/home/aztea/elixir-release/bin/aztea stop
+
+Restart=on-failure
+RestartSec=5s
+
+# OTP crash dumps land here; readable without sudo.
+Environment=ERL_CRASH_DUMP=/home/aztea/elixir-release/erl_crash.dump
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aztea-elixir
+
+[Install]
+WantedBy=multi-user.target

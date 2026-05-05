@@ -159,6 +159,13 @@ defmodule Aztea.Jobs.JobServer do
     end
   end
 
+  # Deferred stop: sent by apply_terminal/3 so the caller's GenServer.call reply
+  # is delivered before the process exits.
+  @impl true
+  def handle_info(:stop_after_terminal, state) do
+    {:stop, :normal, state}
+  end
+
   # Stop cleanly when job hits a terminal state.
   @impl true
   def terminate(reason, state) do

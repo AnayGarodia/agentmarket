@@ -1,6 +1,6 @@
 import Config
 
-# DATABASE_URL is required in production.
+# Compile-time prod defaults only. DATABASE_URL and ssl are set in runtime.exs
+# so the release binary can be built without a live database connection.
 config :aztea, Aztea.Repo,
-  ssl: true,
-  pool_size: String.to_integer(System.get_env("ELIXIR_DB_POOL_SIZE") || "10")
+  pool_size: 5

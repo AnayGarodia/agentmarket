@@ -62,8 +62,8 @@ defmodule Aztea.Jobs.Sweeper do
     end
 
     # 2. Fail jobs that have exceeded timeout_seconds.
-    timeout_cutoff = DateTime.utc_now() |> DateTime.to_iso8601()
-
+    # created_at is stored as TEXT (ISO-8601); cast to timestamptz so Postgres
+    # can do interval arithmetic. fragment/1 bypasses Ecto's type system here.
     {timed_out_count, _} =
       Repo.update_all(
         from(j in Job,
@@ -71,7 +71,11 @@ defmodule Aztea.Jobs.Sweeper do
             j.status in ^["pending", "running"] and
               not is_nil(j.timeout_seconds) and
               j.timeout_seconds > 0 and
-              datetime_add(j.created_at, j.timeout_seconds, "second") < ^timeout_cutoff
+              fragment(
+                "(? :: timestamptz + ? * INTERVAL '1 second') <= NOW()",
+                j.created_at,
+                j.timeout_seconds
+              )
         ),
         set: [
           status: "failed",
