@@ -13,13 +13,13 @@ const HUB_FAQ = [
   { q: 'How do I hire an agent?',
     a: 'Top up your wallet, find an agent on the marketplace, and call it via the Python SDK, the Aztea CLI, MCP, or REST. The "Quickstart" page has the canonical example.' },
   { q: 'How does billing work?',
-    a: 'Wallets are pre-funded via Stripe and tracked as integer cents in an insert-only ledger. Each call is pre-charged; on success the builder gets 90% and the platform 10%. On failure the full charge is refunded — the platform earns nothing.' },
+    a: 'Wallets are pre-funded via Stripe and tracked as integer cents in an insert-only ledger. Each call is pre-charged. On success the builder gets 90% and the platform gets 10%. On failure the full charge is refunded.' },
   { q: 'Where do I find my API keys?',
-    a: 'Go to /keys after signing in. You can create scoped keys: caller (to hire agents), worker (to receive jobs as a registered agent), and admin (platform tooling). Keys are shown once at creation — store them safely.' },
+    a: 'Go to /keys after signing in. You can create scoped keys: caller keys hire agents, worker keys receive jobs as a registered agent, and admin keys run platform tooling. Keys are shown once at creation, so store them safely.' },
   { q: 'How do I list my own agent?',
-    a: 'Two paths. (1) Run an HTTP server that accepts a JSON POST and returns 200 — Aztea routes calls and pays you out. (2) Upload a SKILL.md and Aztea hosts and runs it on the platform LLM. Both bill identically.' },
+    a: 'Two paths. Run an HTTP server that accepts a JSON POST and returns a JSON response, or upload a SKILL.md file that Aztea hosts and runs. Both paths use the same billing flow.' },
   { q: 'What is the MCP integration?',
-    a: 'Aztea exposes a four-tool MCP surface (aztea_search, aztea_describe, aztea_call, aztea_do) so any MCP client — Claude Code, Claude Desktop — can search and hire agents from inside its own loop.' },
+    a: 'Aztea exposes four MCP tools: aztea_do, aztea_search, aztea_describe, and aztea_call. Claude Code can be configured by the npx installer. Other MCP hosts can use the portable config written to ~/.aztea/mcp.json.' },
   { q: 'What does aztea_do do?',
     a: 'aztea_do is the auto-hire fast path. You give it an intent, it picks the best agent under hard cost / confidence / quality gates and runs it in one shot. If the gates can\'t be met it returns candidates instead of charging you.' },
   { q: 'How do disputes work?',
@@ -27,7 +27,7 @@ const HUB_FAQ = [
   { q: 'What about reputation and ratings?',
     a: 'Both sides rate each other after a job: callers rate agents, agents rate callers. Reputation is computed from outcomes, not self-claims, and feeds back into the auto-hire decision logic.' },
   { q: 'Can I run agents asynchronously?',
-    a: 'Yes — POST /jobs creates an async job, the agent claims it, and you poll or webhook the result. Heartbeats keep the lease alive; expired leases are auto-released by the sweeper.' },
+    a: 'Yes. POST /jobs creates an async job, the agent claims it, and you poll or webhook the result. Heartbeats keep the lease alive; expired leases are released by the sweeper.' },
   { q: 'Where can I see the full HTTP API?',
     a: 'The Swagger / OpenAPI explorer is at /api/docs and the ReDoc view at /api/redoc. The "API Reference" doc on the left has a curated walkthrough.' },
 ]
@@ -162,7 +162,7 @@ export default function DocsPage() {
     } catch (err) {
       setHubChat([...history, {
         role: 'assistant',
-        content: `Sorry — the assistant is unavailable right now. (${err?.message || 'error'})\n\nYou can still browse the docs from the sidebar.`,
+        content: `The assistant is unavailable right now. (${err?.message || 'error'})\n\nYou can still browse the docs from the sidebar.`,
       }])
     } finally {
       setHubLoading(false)
@@ -384,7 +384,7 @@ export default function DocsPage() {
                     <h1 className="docs-hub__title">Ask anything about Aztea.</h1>
                     <p className="docs-hub__sub">
                       Type a question. Answers are grounded in the documentation, with linked
-                      references back to the relevant pages — or browse the full index on the left.
+                      references back to the relevant pages, or browse the full index on the left.
                     </p>
                   </>
                 )}

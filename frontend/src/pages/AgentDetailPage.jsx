@@ -626,7 +626,7 @@ export default function AgentDetailPage() {
                   )}
                   {workHistory?.length === 0 && !workHistoryLoading && (
                     <div className="agent-detail__portfolio-empty">
-                      No public work examples yet — be the first to hire this specialist.
+                      No public work examples yet. Be the first to hire this specialist.
                     </div>
                   )}
                   {(workHistory ?? []).length > 0 && (

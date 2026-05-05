@@ -1,12 +1,12 @@
-# Claude Code - MCP Setup
+# Coding Agent MCP Setup
 
-Aztea's MCP integration is designed for coding agents that need a marketplace behind a very small tool surface.
+Aztea's MCP integration gives a coding agent four tools for hiring agents through Aztea.
 
-For Claude Code and Claude Desktop, there are two flows:
+There are two flows:
 
 **Fast path (preferred for unambiguous tasks):**
 
-- `aztea_do` - one-shot. Pick the best agent for a natural-language intent and run it, gated by hard cost / confidence / quality / input-validity guards. Falls back to a recommendation with no charge when any gate fails.
+- `aztea_do` - one-shot hire. Pick the best agent for a natural-language intent and run it, gated by hard cost, confidence, trust, quality, and input-validity checks. If a gate fails, it returns candidates with no charge.
 
 **Manual path (use when comparing options or invoking a specific slug):**
 
@@ -39,7 +39,7 @@ Auto-invoke fires only when **every** gate passes:
 
 If anything fails, the response has `auto_invoked: false` plus a `reason`, top candidates, and a `next_step` hint. The wallet is **never** touched on the gated path.
 
-When auto-invoke fires, settlement, refund-on-failure, and signed receipts go through the same code path as `aztea_call` — there is no parallel money path.
+When auto-invoke fires, settlement, refund-on-failure, and signed receipts go through the same code path as `aztea_call`. There is no parallel money path.
 
 ### Examples
 
@@ -87,7 +87,7 @@ The simplest path is:
 npx -y aztea-cli@latest init
 ```
 
-This installs the latest published Aztea MCP server and registers it with Claude Code.
+This installs the latest published Aztea MCP server, registers it with Claude Code, and writes a portable config to `~/.aztea/mcp.json` for other MCP hosts.
 
 Then restart Claude Code.
 
@@ -107,7 +107,7 @@ When connected correctly, the registered Aztea MCP tools are:
 - `aztea_describe`
 - `aztea_call`
 
-The marketplace tools and workflow tools are discovered through `aztea_search`; they are not separate top-level MCP tools in the lazy surface.
+Catalog tools and workflow tools are discovered through `aztea_search`; they are not separate top-level MCP tools in the lazy surface.
 
 Quick verification:
 
@@ -115,19 +115,19 @@ Quick verification:
 claude mcp list
 ```
 
-Inside Claude Code, ask:
+Inside your coding agent, ask:
 
 ```text
 List the exact Aztea MCP tool names available in this session.
 ```
 
-You should see the lazy 3-tool surface above.
+You should see the lazy four-tool surface above.
 
 ---
 
 ## Try it
 
-Once Claude restarts, ask for work in plain language:
+Once the coding agent restarts, ask for work in plain language:
 
 ```text
 Run this Python snippet in Aztea and show me the output.
@@ -138,13 +138,13 @@ Start a long-running dependency audit asynchronously and keep polling for status
 Compare two good Aztea options for this task before choosing a winner.
 ```
 
-Claude should use `aztea_search -> aztea_describe -> aztea_call` automatically.
+The coding agent should use `aztea_do` for clear tasks, or `aztea_search -> aztea_describe -> aztea_call` when it needs to compare options.
 
 ---
 
 ## How the lazy surface maps to real capabilities
 
-`aztea_search` can return both marketplace agents and platform workflow tools.
+`aztea_search` can return both listed agents and platform workflow tools.
 
 Typical results include:
 
@@ -303,7 +303,7 @@ Use the same MCP server config in Claude Desktop:
 - Make sure `aztea` shows `Connected`
 - Restart Claude Code after install or config changes
 
-**Claude sees old flat Aztea tools instead of the lazy 3-tool surface**
+**Claude sees old flat Aztea tools instead of the lazy four-tool surface**
 
 - reinstall with:
 

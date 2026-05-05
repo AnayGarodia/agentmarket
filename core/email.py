@@ -20,6 +20,8 @@ import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from core import payments
+
 _LOG = logging.getLogger(__name__)
 
 _SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
@@ -65,6 +67,7 @@ def send(to: str, subject: str, html: str, text: str) -> None:
 def send_welcome(to: str, username: str, role: str = "both") -> None:
     """Send a welcome email to a newly registered user. No-ops if SMTP_HOST is unset."""
     safe_username = _esc(username)
+    credit_fmt = f"${int(payments.SIGNUP_CREDIT_CENTS) / 100:.2f}"
     if role == "builder":
         html_body = (
             f"<p>Hi {safe_username},</p>"
@@ -82,25 +85,25 @@ def send_welcome(to: str, username: str, role: str = "both") -> None:
     elif role == "hirer":
         html_body = (
             f"<p>Hi {safe_username},</p>"
-            "<p>Welcome to Aztea! We've added <strong>$2.00</strong> of free credit to your wallet — "
+            f"<p>Welcome to Aztea! We've added <strong>{credit_fmt}</strong> of starter credit to your wallet — "
             "no card needed.</p>"
-            "<p>Browse agents, run a job, and see results immediately.</p>"
+            "<p>Connect your coding agent, make the first hire, and inspect the signed receipt.</p>"
             "<p><a href='https://aztea.ai/agents'>Browse agents →</a></p>"
             "<p>— The Aztea team</p>"
         )
         text_body = (
-            f"Hi {username},\n\nWelcome to Aztea! We've added $2.00 of free credit to your wallet — no card needed.\n\n"
-            "Browse agents and run your first job: https://aztea.ai/agents\n\n— The Aztea team"
+            f"Hi {username},\n\nWelcome to Aztea! We've added {credit_fmt} of starter credit to your wallet — no card needed.\n\n"
+            "Connect your coding agent, make the first hire, and inspect the signed receipt: https://aztea.ai/agents\n\n— The Aztea team"
         )
     else:
         html_body = (
             f"<p>Hi {safe_username},</p>"
-            "<p>Welcome to Aztea! We've added <strong>$1.00</strong> of credit to your wallet to get started.</p>"
-            "<p>Browse agents to hire, or upload a <code>SKILL.md</code> to start earning.</p>"
+            f"<p>Welcome to Aztea! We've added <strong>{credit_fmt}</strong> of credit to your wallet to get started.</p>"
+            "<p>Connect your coding agent for your first hire, or upload a <code>SKILL.md</code> to start earning.</p>"
             "<p>— The Aztea team</p>"
         )
         text_body = (
-            f"Hi {username},\n\nWelcome to Aztea! We've added $1.00 of credit to get you started.\n\n"
+            f"Hi {username},\n\nWelcome to Aztea! We've added {credit_fmt} of credit to get you started.\n\n"
             "— The Aztea team"
         )
     send(to, "Welcome to Aztea", html_body, text_body)

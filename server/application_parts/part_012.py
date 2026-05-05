@@ -436,6 +436,13 @@ def registry_auto_hire(
         return JSONResponse(
             content={
                 "auto_invoked": False,
+                "mode": "recommendation",
+                "charge_status": "not_charged",
+                "delegation": {
+                    "status": "not_hired",
+                    "reason": decision.reason,
+                    "intent": body.intent,
+                },
                 "reason": decision.reason,
                 "confidence": decision.confidence,
                 "candidates": decision.candidates,
@@ -460,9 +467,17 @@ def registry_auto_hire(
         return JSONResponse(
             content={
                 "auto_invoked": False,
+                "mode": "dry_run",
+                "charge_status": "not_charged",
                 "reason": "dry_run",
                 "would_invoke": True,
                 "agent": chosen.public_dict(),
+                "delegation": {
+                    "status": "would_hire",
+                    "intent": body.intent,
+                    "specialist": chosen.public_dict(),
+                    "spend_cap_usd": float(body.max_cost_usd),
+                },
                 "payload": payload,
                 "confidence": decision.confidence,
                 "estimated_cost_usd": chosen.price_per_call_usd,
@@ -489,7 +504,19 @@ def registry_auto_hire(
             status_code=exc.status_code,
             content={
                 "auto_invoked": True,
+                "mode": "hired_specialist",
+                "charge_status": "refunded_or_not_charged",
                 "agent": chosen.public_dict(),
+                "delegation": {
+                    "status": "failed",
+                    "intent": body.intent,
+                    "specialist": chosen.public_dict(),
+                    "spend_cap_usd": float(body.max_cost_usd),
+                },
+                "settlement": {
+                    "status": "refunded_if_charged",
+                    "refund_on_failure": True,
+                },
                 "confidence": decision.confidence,
                 "error": detail,
                 "next_step": (
@@ -509,19 +536,51 @@ def registry_auto_hire(
         # Belt-and-suspenders: registry_call always returns JSONResponse today.
         inner = {}
 
+    job_id = inner.get("job_id")
+    cost_cents = inner.get("cost_cents")
     response_body: dict[str, Any] = {
         "auto_invoked": True,
+        "mode": "hired_specialist",
         "agent": chosen.public_dict(),
+        "delegation": {
+            "status": "hired",
+            "intent": body.intent,
+            "specialist": chosen.public_dict(),
+            "spend_cap_usd": float(body.max_cost_usd),
+        },
         "confidence": decision.confidence,
         "cost_usd": (
-            int(inner.get("cost_cents") or 0) / 100
-            if inner.get("cost_cents") is not None
+            int(cost_cents or 0) / 100
+            if cost_cents is not None
             else chosen.price_per_call_usd
         ),
-        "job_id": inner.get("job_id"),
+        "job_id": job_id,
+        "charge_status": (
+            "settled" if job_id and not inner.get("cached") else "cached_or_settled"
+        ),
+        "settlement": {
+            "status": (
+                "settled"
+                if job_id and not inner.get("cached")
+                else "cached_or_settled"
+            ),
+            "refund_on_failure": True,
+            "ledger": "pre_call_charge -> post_call_payout/refund",
+        },
+        "receipt": {
+            "status": "available" if job_id else "unavailable",
+            "job_id": job_id,
+            "signature_endpoint": f"/jobs/{job_id}/signature" if job_id else None,
+            "verify_with": "aztea_verify_job",
+        },
         "output": inner.get("output"),
         "latency_ms": inner.get("latency_ms"),
         "cached": bool(inner.get("cached", False)),
+        "next_step": (
+            f"Verify the signed receipt with aztea_verify_job(job_id='{job_id}')."
+            if job_id
+            else "No new receipt was created for this response."
+        ),
     }
     if "rendered_output" in inner:
         response_body["rendered_output"] = inner["rendered_output"]

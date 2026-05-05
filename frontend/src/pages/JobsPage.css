@@ -112,7 +112,7 @@
 
 .jobs__head {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   gap: 16px;
   align-items: center;
   padding: 10px 20px;
@@ -130,7 +130,7 @@
 
 .jobs__row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   gap: 16px;
   align-items: center;
   padding: 13px 20px;
@@ -166,6 +166,17 @@
   white-space: nowrap;
 }
 
+.jobs__receipt {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.jobs__receipt--signed {
+  color: var(--positive);
+  font-weight: 600;
+}
+
 .jobs__created {
   font-size: 0.75rem;
   color: var(--text-muted);
@@ -186,6 +197,8 @@
   .jobs__row { grid-template-columns: 1fr auto; }
   .jobs__head span:nth-child(3),
   .jobs__head span:nth-child(4),
+  .jobs__head span:nth-child(5),
+  .jobs__receipt,
   .jobs__cost,
   .jobs__created { display: none; }
 }

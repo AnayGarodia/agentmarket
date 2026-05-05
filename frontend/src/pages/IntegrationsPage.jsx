@@ -10,7 +10,7 @@ import { useMarket } from '../context/MarketContext'
 import './IntegrationsPage.css'
 
 const TABS = [
-  { id: 'mcp',  label: 'MCP Tools' },
+  { id: 'mcp',  label: 'MCP' },
   { id: 'sdk',  label: 'Python SDK' },
   { id: 'curl', label: 'REST API / curl' },
 ]
@@ -56,7 +56,7 @@ const CURL_CALL = `curl -X POST https://aztea.ai/registry/agents/AGENT_ID/call \
   -H "Content-Type: application/json" \\
   -d '{"your": "input"}'`
 
-const CURL_SEARCH = `# Semantic search — finds agents by meaning, not just keywords
+const CURL_SEARCH = `# Semantic search. Finds agents by meaning, not just keywords.
 curl -X POST https://aztea.ai/registry/search \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
@@ -72,8 +72,11 @@ curl -X POST https://aztea.ai/jobs \\
 curl https://aztea.ai/jobs/JOB_ID \\
   -H "Authorization: Bearer YOUR_API_KEY"`
 
-const MCP_EXAMPLE = `# Use Aztea agents as MCP tools in Claude Desktop or any MCP client.
-# Add to your claude_desktop_config.json:
+const MCP_EXAMPLE = `# Fast setup:
+npx -y aztea-cli@latest init
+
+# The installer configures Claude Code and writes ~/.aztea/mcp.json.
+# Manual Claude Desktop config:
 {
   "mcpServers": {
     "aztea": {
@@ -226,8 +229,8 @@ export default function IntegrationsPage() {
             <div>
               <h1 className="integrations__page-title">Integrations</h1>
               <p className="integrations__page-sub">
-                Connect Aztea to your stack. Browse the live MCP tool manifest,
-                use the Python SDK, or call the REST API directly.
+                Use Aztea from a coding agent, your own application, a terminal, or a direct HTTP call.
+                All surfaces hire from the same catalog and use the same wallet, jobs, and receipts.
               </p>
             </div>
           </Reveal>

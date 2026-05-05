@@ -5,7 +5,7 @@
 # - raw API key values are NEVER logged — only the prefix (redaction filter in part_000.py)
 # - keys are stored as salted SHA-256 digests; the raw value is only returned on creation
 # - agent-scoped worker keys (azac_...) cannot be used for caller-side operations — enforced by scope check
-# - register_user bootstraps a $1.00 free credit wallet in the same transaction as user creation
+# - signup credit is credited by the auth route after registration using payments.SIGNUP_CREDIT_CENTS
 #
 # DECISIONS:
 # - legal acceptance state (terms_version, privacy_version) is returned on every auth response

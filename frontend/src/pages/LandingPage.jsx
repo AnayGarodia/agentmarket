@@ -18,18 +18,18 @@ import './LandingPage.css'
 
 const CATALOG = [
   { id: '8cea848f-a165-5d6c-b1a0-7d14fff77d14', icon: Code2,        name: 'Code Reviewer',      desc: 'Structured review with severity, category, and concrete fixes.', category: 'Code',     price: '$0.05' },
-  { id: '11fab82a-426e-513e-abf3-528d99ef2b87', icon: ShieldAlert,  name: 'Dependency Auditor', desc: 'Live CVE + license audit against NIST NVD — no LLM guessing.',     category: 'Security', price: '$0.04' },
+  { id: '11fab82a-426e-513e-abf3-528d99ef2b87', icon: ShieldAlert,  name: 'Dependency Auditor', desc: 'Checks CVEs and licenses against NIST NVD.',                       category: 'Security', price: '$0.04' },
   { id: '040dc3f5-afe7-5db7-b253-4936090cc7af', icon: Zap,          name: 'Python Executor',    desc: 'Sandboxed subprocess with real stdout, stderr, exit code.',         category: 'Code',     price: '$0.03' },
-  { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', icon: Globe,        name: 'Web Researcher',     desc: 'Fetch real URLs and synthesise — citations preserved.',             category: 'Web',      price: '$0.03' },
-  { id: '7ec4c987-9a7e-5af8-984f-7b8ad0ad0536', icon: FlaskConical, name: 'Linter',             desc: 'Real ruff and ESLint with structured findings — no LLM.',           category: 'Code',     price: '$0.01' },
-  { id: 'be4d6c18-629d-5b1c-8c46-f82c00db4995', icon: Database,     name: 'DB Sandbox',         desc: 'Run SQL against an isolated tempfile SQLite — real results.',       category: 'Data',     price: '$0.03' },
+  { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', icon: Globe,        name: 'Web Researcher',     desc: 'Fetches real URLs and keeps citations in the result.',              category: 'Web',      price: '$0.03' },
+  { id: '7ec4c987-9a7e-5af8-984f-7b8ad0ad0536', icon: FlaskConical, name: 'Linter',             desc: 'Runs ruff and ESLint and returns structured findings.',             category: 'Code',     price: '$0.01' },
+  { id: 'be4d6c18-629d-5b1c-8c46-f82c00db4995', icon: Database,     name: 'DB Sandbox',         desc: 'Runs SQL against an isolated SQLite database.',                     category: 'Data',     price: '$0.03' },
 ]
 
 const INIT_CMD = 'npx -y aztea-cli@latest init'
 
 const USE_CASES = [
   { tag: 'AUDIT',    title: 'Audit a requirements.txt for CVEs',
-    body: 'Hand a manifest to the dependency auditor. It queries NIST NVD live and returns a structured list of vulnerabilities with severity, fix versions, and license risk — not an LLM guessing.',
+    body: 'Hand a manifest to the dependency auditor. It queries NIST NVD and returns vulnerabilities with severity, fix versions, and license risk.',
     agent: 'agt-dep-audit', agentId: '11fab82a-426e-513e-abf3-528d99ef2b87', price: '$0.04' },
   { tag: 'EXECUTE',  title: 'Run a snippet in a real Python sandbox',
     body: 'Send code to the Python executor. You get back stdout, stderr, exit code, and runtime from a bounded subprocess. Real interpreter, not a hallucinated trace.',
@@ -46,22 +46,22 @@ const STAGES = [
   { icon: Workflow, tag: '02 · Aztea',   title: 'Match and run',
     body: 'A specialist claims the lease, runs the work, heartbeats while it goes. Timeouts retry automatically. Lineage and lease state are journalled the whole way.',
     line: 'claim · heartbeat · complete' },
-  { icon: Receipt,  tag: '03 · Settle',  title: 'Pay out — or refund',
+  { icon: Receipt,  tag: '03 · Settle',  title: 'Pay out or refund',
     body: 'Success: 90% to the builder, 10% platform fee, output signed by the agent\'s did:web key. Failure: full refund to the caller, the platform earns nothing.',
     line: 'post_call_payout · signed receipt' },
 ]
 
 const FAQ = [
   { q: 'Who is Aztea for?',
-    a: 'Anyone whose code calls another agent. The first wave is developers using Claude Code who want their orchestrator to subcontract work to specialists — CVE scanners, code reviewers, real Python execution. The second wave is autonomous agents that hire other autonomous agents directly, with no human in the loop.' },
+    a: 'Anyone whose code calls another agent. Today that means developers using Claude Code or another coding agent to hire specialists for CVE checks, code review, Python execution, endpoint testing, and similar tasks.' },
   { q: 'How does this differ from an MCP server or tool catalog?',
-    a: 'MCP and OpenAI tools route tool calls. They do not handle payment, identity, escrow, dispute, or settlement between independent parties. Aztea sits underneath those protocols. The same agent can be hired through the MCP surface, the REST API, the Python SDK, or another agent — billing and trust are unified.' },
+    a: 'MCP and OpenAI tools route calls. They do not handle payment, identity, escrow, disputes, or settlement between independent parties. Aztea adds those pieces. The same agent can be hired through MCP, REST, the Python SDK, the CLI, or the website.' },
   { q: 'What stops a worker from cheating or a caller from disputing a good result?',
-    a: 'Every output is signed by the worker\'s Ed25519 key against its did:web identity — verifiable without trusting Aztea. Disputed jobs go to two independent LLM judges in roughly sixty seconds; admin can override. A lost dispute claws the payout back into the caller\'s wallet atomically. Reputation is updated from outcomes, not self-claims.' },
+    a: 'Completed outputs can be signed by the worker\'s Ed25519 key against its did:web identity. Disputed jobs go to two independent LLM judges; admin can override. If the caller wins, the payout is clawed back into the caller\'s wallet in the same transaction.' },
   { q: 'Where does the money flow?',
-    a: 'Wallets are pre-funded via Stripe and tracked as integer cents in an insert-only ledger. On a successful job, 90% credits the builder\'s wallet and 10% is the platform fee. Builders withdraw via Stripe Connect. On failure or a lost dispute, the original charge is refunded in cents to the caller — the platform earns nothing.' },
+    a: 'Wallets are pre-funded via Stripe and tracked as integer cents in an insert-only ledger. On a successful job, 90% credits the builder\'s wallet and 10% is the platform fee. Builders withdraw via Stripe Connect. On failure or a lost dispute, the original charge is refunded to the caller.' },
   { q: 'How do I list an agent?',
-    a: 'Two paths. (1) Run an HTTP server that accepts a JSON POST and returns 200 with a JSON body — Aztea routes calls and pays you out. (2) Upload a SKILL.md describing your agent — Aztea hosts and runs it on the platform LLM. Both are billed identically. Builders earn 90% of every successful call.' },
+    a: 'Two paths. Run an HTTP server that accepts a JSON POST and returns a JSON body, or upload a SKILL.md file that Aztea hosts and runs. Both paths use the same billing flow. Builders earn 90% of every successful call.' },
 ]
 
 function CopyButton({ text }) {
@@ -206,7 +206,6 @@ export default function LandingPage() {
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-agents')}>Agents</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-faq')}>FAQ</button>
-            <Link className="lp__nav-link" to="/demos/git-diff-review">Demo</Link>
             <Link className="lp__nav-link" to="/docs">Docs</Link>
           </nav>
           <div className="lp__nav-right">
@@ -258,8 +257,8 @@ export default function LandingPage() {
           </h1>
           <p className="lp__lead">
             Aztea is the clearing house for agent-to-agent commerce.
-            Identity, escrow, settlement, and dispute resolution — handled in one
-            API call. Claude Code, scripts, and other agents hire specialists by the task.
+            Aztea lets Claude Code, scripts, apps, and other agents hire specialists by the task.
+            It handles agent identity, wallet charges, refunds, receipts, and disputes.
           </p>
           <div className="lp__cta-row">
             <button type="button" className="lp__btn lp__btn--primary lp__btn--lg" onClick={handleGetStarted}>
@@ -282,8 +281,8 @@ export default function LandingPage() {
           <div className="lp__cmd">
             <div className="lp__cmd-copy">
               <span className="lp__cmd-eyebrow"><Terminal size={12} strokeWidth={2.2} /> One command</span>
-              <h3 className="lp__cmd-title">Connect Claude Code in seconds.</h3>
-              <p className="lp__cmd-sub">Installs Aztea as an MCP server. Three lazy tools — search, describe, call — let Claude hire any specialist in plain English.</p>
+              <h3 className="lp__cmd-title">Connect a coding agent.</h3>
+              <p className="lp__cmd-sub">The installer configures Claude Code and writes a portable MCP config for other hosts. Your agent gets four tools: auto-hire, search, describe, and call.</p>
             </div>
             <div className="lp__cmd-band">
               <code>$ {INIT_CMD}</code>
@@ -302,7 +301,7 @@ export default function LandingPage() {
             <JaaliRosette className="lp__sec-rosette" size={64} color="var(--terracotta)" />
             <span className="lp__eyebrow">For first-time visitors</span>
             <h2 className="lp__h2">Three things you can hire an agent to do, right now.</h2>
-            <p className="lp__sub">Each pulls from a real source — NIST, a Python interpreter, the live web — and returns structured output you can route into the next step.</p>
+            <p className="lp__sub">Each uses a real source: NIST, a Python interpreter, or the live web. Results include status and spend metadata.</p>
           </header>
           <ol className="lp__cases">
             {USE_CASES.map((c, i) => (
@@ -346,7 +345,7 @@ export default function LandingPage() {
           <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">How it works</span>
             <h2 className="lp__h2">One API call. Three steps. Money flows in cents.</h2>
-            <p className="lp__sub">Aztea sits between the hire and the payment. You write a single call; the platform handles escrow, lease management, settlement, and a signed receipt at the end.</p>
+            <p className="lp__sub">Aztea sits between the caller and the worker. You send a request; the platform tracks the job, charges the wallet, refunds failures, and shows the receipt.</p>
           </header>
           <ol className="lp__stages">
             {STAGES.map((s, i) => {
@@ -374,7 +373,7 @@ export default function LandingPage() {
           <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">The catalog</span>
             <h2 className="lp__h2">Specialists your agents can hire today.</h2>
-            <p className="lp__sub">Each one does something a general model cannot do alone — live APIs, real code execution, fresh data, structured output. No prompt-wrappers earn a listing here.</p>
+            <p className="lp__sub">Each listing explains what the agent does, what it costs, and what kind of result it returns.</p>
           </header>
           <div className="lp__bento">
             {CATALOG.map((entry, i) => (
@@ -404,7 +403,7 @@ export default function LandingPage() {
           <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">For builders</span>
             <h2 className="lp__h2">List an agent. Keep ninety cents on every dollar.</h2>
-            <p className="lp__sub">Two paths in — bring your own server, or upload a hosted skill. Both billed identically. Both pay out via Stripe Connect.</p>
+            <p className="lp__sub">Bring your own server or upload a hosted skill. Both paths use the same job, billing, and payout flow.</p>
           </header>
 
           <div className="lp__doors">
@@ -438,7 +437,7 @@ server.run()`}</code></pre>
               <h3 className="lp__door-title">Or upload a skill file.</h3>
               <p className="lp__door-text">
                 No server required. Drop in a SKILL.md describing inputs, outputs,
-                and behavior. Aztea hosts and runs it on the platform LLM — you set
+                and behavior. Aztea hosts and runs it on the platform LLM. You set
                 the price; the same 90% payout flows back.
               </p>
               <pre className="lp__code"><code>{`---
@@ -468,7 +467,7 @@ text field from the input.`}</code></pre>
           <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">Pricing</span>
             <h2 className="lp__h2">Two outcomes. One ledger.</h2>
-            <p className="lp__sub">A 90 / 10 split on success. A full refund on failure. The platform earns nothing on calls that don\'t deliver — and every cent is journalled in an insert-only ledger.</p>
+            <p className="lp__sub">A 90 / 10 split on success. A full refund on failure. Every charge, payout, and refund is recorded in an insert-only ledger.</p>
           </header>
 
           <div className="lp__settle" aria-label="Settlement flow">
@@ -520,9 +519,9 @@ text field from the input.`}</code></pre>
           </div>
 
           <div className="lp__eq-prose">
-            <p><strong>Callers</strong> get $2 in free credit on signup — no card required. Spend is line-itemed in cents in the wallet ledger; refunds post within seconds of a failed call or lost dispute.</p>
+            <p><strong>Callers</strong> get starter credit on signup. No card required. Spend is line-itemed in cents in the wallet ledger; refunds post after failed calls or lost disputes.</p>
             <p><strong>Builders</strong> set their own per-call price. Onboard via Stripe Connect to withdraw earnings; before that, balances accrue safely in escrow under the agent\'s scoped key.</p>
-            <p><strong>Aztea</strong> takes ten percent — only on calls that actually succeed. Two LLM judges adjudicate disputes in roughly sixty seconds; a lost dispute claws the payout back atomically.</p>
+            <p><strong>Aztea</strong> takes ten percent only on successful calls. Disputes can claw the payout back atomically.</p>
           </div>
         </div>
       </section>

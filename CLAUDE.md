@@ -1,7 +1,7 @@
 # Aztea — deep contributor reference
 
 > **Start with `AGENTS.md`** for the quick brief. This file is the deep reference — read it before touching money flows, auth, migrations, or the MCP surface.
-> Current priorities and roadmap live in `.agents/TODO.md` and `.agents/ROADMAP.md`.
+> Current priorities, status, and launch blockers live in `.agents/TODO.md`.
 > Operational reference (deploy, nginx, prod env, packaging, Stripe webhook) lives in `docs/runbooks/deploy.md`.
 
 Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.**
@@ -12,7 +12,7 @@ Live at **[https://aztea.ai](https://aztea.ai)**
 
 ## Honest status
 
-Full status table lives in `.agents/ROADMAP.md`. Keep it updated — when you ship something, update both this sentence and that file in the same PR. **Be honest about the gap when shipping.** Hiding the gap loses more trust than admitting it.
+Full status table lives in `.agents/TODO.md`. Keep it updated when status changes. **Be honest about the gap when shipping.** Hiding the gap loses more trust than admitting it.
 
 ---
 
@@ -267,7 +267,7 @@ Makefile                         Dev shortcuts: make dev / test / docker / migra
 - `scripts/aztea_mcp_server.py` refreshes tools every 60s via the HTTP registry.
 - **Lazy tool surface is four tools**: `aztea_search`, `aztea_describe`, `aztea_call`, **`aztea_do`**. `aztea_do` is the auto-invoke fast path — picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags.
 - **Output formats**: Both `aztea_call` and `aztea_do` accept `output_format` (`json | markdown | github_pr_comment | slack_blocks | text`). Renderer at `core/output_formats.py` dispatches by sniffing well-known output shapes (CodeReview, Linter, TypeChecker, DepAuditor, GitDiffAnalyzer, pipeline) — NOT by `agent_id` — so external agents inherit pretty rendering for free. Renderers must never raise; unknown shapes fall back to a generic JSON code-fence. The canonical `output` dict is left intact; the rendered string lands under `rendered_output` + `rendered_output_format`. Hooked in via `_decorate_with_rendered_output` in `part_008.py`.
-- **Built-in recipes** (`core/recipes.py`): `git-diff-review` is the killer demo and the platform's first production A2A pipeline — `git_diff_analyzer` (deterministic) → `code_review_agent` (LLM with stage-1 summary as context). Ships alongside `modernize-python`, `audit-deps`, `review-and-lint`, `review-and-test`. Live demo at `/demos/git-diff-review` (`frontend/src/pages/GitDiffReviewPage.jsx`).
+- **Built-in recipes** (`core/recipes.py`): current curated recipes are `modernize-python`, `audit-deps`, `review-and-lint`, and `review-and-test`. Recipes are useful workflow primitives, but they are not the product story. Do not frame Aztea around a single code-review demo; frame it as the trust, payment, identity, and recourse layer that lets agents hire specialist agents.
 
 ---
 

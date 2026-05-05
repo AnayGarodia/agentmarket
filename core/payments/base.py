@@ -114,6 +114,7 @@ def _env_int(
 
 
 PLATFORM_FEE_PCT = _env_int("PLATFORM_FEE_PCT", 10, minimum=0, maximum=100)
+SIGNUP_CREDIT_CENTS = _env_int("SIGNUP_CREDIT_CENTS", 200, minimum=0)
 VALID_FEE_BEARER_POLICIES = {"worker", "caller", "split"}
 DEFAULT_FEE_BEARER_POLICY = "caller"
 

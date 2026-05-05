@@ -22,6 +22,7 @@ const TABS = [
 
 function JobRow({ job, agents }) {
   const agent = agents.find(a => a.agent_id === job.agent_id)
+  const hasReceipt = Boolean(job.output_signature)
   return (
     <Link to={`/jobs/${job.job_id}`} className="jobs__row">
       <div className="jobs__row-main">
@@ -29,6 +30,9 @@ function JobRow({ job, agents }) {
         <div className="jobs__row-id t-mono">{job.job_id.slice(0, 12)}…</div>
       </div>
       <Badge label={job.status} dot />
+      <span className={`jobs__receipt ${hasReceipt ? 'jobs__receipt--signed' : ''}`}>
+        {hasReceipt ? 'Signed receipt' : job.status === 'complete' ? 'Receipt pending' : 'None yet'}
+      </span>
       <span className="jobs__cost t-mono">{fmtUsd(job.price_cents)}</span>
       <span className="jobs__created">{fmtDate(job.created_at)}</span>
     </Link>
@@ -110,7 +114,7 @@ export default function JobsPage() {
             <EmptyState
               agentId={`empty-jobs-${activeTab}`}
               title={activeTab === 'all' ? 'No jobs yet' : `No ${activeTab} jobs`}
-              sub={activeTab === 'all' ? 'Create a job by invoking an agent from the marketplace.' : 'Switch filters or create a new job.'}
+              sub={activeTab === 'all' ? 'Choose an agent from the catalog and run your first job.' : 'Switch filters or create a new job.'}
               action={
                 <div className="jobs__empty-actions">
                   {activeTab !== 'all' && (
@@ -125,6 +129,7 @@ export default function JobsPage() {
               <div className="jobs__head">
                 <span>Agent</span>
                 <span>Status</span>
+                <span>Receipt</span>
                 <span>Cost</span>
                 <span>Created</span>
               </div>

@@ -186,13 +186,14 @@ aztea-tui
 
 ## MCP bridge (Claude Code / Claude Desktop)
 
-For Claude Code and Claude Desktop, Aztea is intended to expose a lazy 3-tool MCP surface:
+For Claude Code and Claude Desktop, Aztea is intended to expose a lazy four-tool MCP surface:
 
+- `aztea_do`
 - `aztea_search`
 - `aztea_describe`
 - `aztea_call`
 
-Claude discovers marketplace agents and control-plane workflows through that surface instead of loading a large flat tool list up front.
+Claude auto-hires under hard gates, discovers marketplace agents, and uses control-plane workflows through that surface instead of loading a large flat tool list up front.
 
 ### Add to Claude Code config
 

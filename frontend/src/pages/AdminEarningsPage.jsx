@@ -155,7 +155,7 @@ export default function AdminEarningsPage() {
                               <div key={tx.tx_id} className="admin-earnings__tx">
                                 <div>
                                   <span className={`admin-earnings__tx-type admin-earnings__tx-type--${txTypeLabel(tx)}`}>{txTypeLabel(tx)}</span>
-                                  <span className="admin-earnings__tx-memo">{tx.memo || '—'}</span>
+                                  <span className="admin-earnings__tx-memo">{tx.memo || 'No memo'}</span>
                                 </div>
                                 <div className="admin-earnings__tx-right">
                                   <span className={`admin-earnings__tx-amt ${Number(tx.amount_cents) >= 0 ? 'pos' : 'neg'}`}>

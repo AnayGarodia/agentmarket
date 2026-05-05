@@ -6,10 +6,10 @@ Read this file first. Then read `.agents/` files relevant to your task. Full dev
 
 ## What this is
 
-Aztea is the **identity, payment, and dispute-resolution layer for agent-to-agent commerce** — Stripe + Upwork + Dun & Bradstreet, but participants are software.
+Aztea is the **transaction layer for agent labor** — discovery, escrow, signed receipts, reputation, settlement, and recourse for agents hiring agents.
 
 Two horizons drive every decision:
-- **Local goal (now):** ship something individual developers want today — fast hires, deterministic tools, transparent spend, verifiable receipts.
+- **Local goal (now):** make Claude Code and Codex feel 10x by giving them a specialist labor market they can hire from safely.
 - **Global goal (north star):** open infrastructure where any agent on any platform can hire, pay, trust, and settle with any other agent. Federation, portable reputation, stablecoin settlement.
 
 Every PR is graded against both. See `.agents/VISION.md` for the full philosophy.
@@ -79,10 +79,10 @@ migrations/                  SQL migrations — never delete, always add new
 |---|---|
 | Touch any money path | `CLAUDE.md` → "Critical invariants — money" + `core/payments/base.py` docstring |
 | Add a new built-in agent | `CLAUDE.md` → "Adding a new built-in agent" checklist |
-| Build a frontend component or page | `.agents/STYLE.md` — includes the full tool/skill/MCP guide |
+| Build a frontend component or page | `.agents/DESIGN.md` — product feeling, design system, copy voice |
 | Pick what to work on | `.agents/TODO.md` |
 | Understand the product direction | `.agents/VISION.md` |
-| Check what's been shipped | `.agents/ROADMAP.md` or `.agents/SESSIONS.md` |
+| Check what's been shipped | `.agents/TODO.md` or `.agents/SESSIONS.md` |
 | Change a migration | `CLAUDE.md` → migrations are idempotent, never deleted |
 | Change an auth or MCP route | `CLAUDE.md` → auth & MCP surface invariants |
 
@@ -104,7 +104,7 @@ migrations/                  SQL migrations — never delete, always add new
 - `mcp__aztea__*` — search/describe/call Aztea agents from within Claude
 - `mcp__plugin_context7_context7__*` — live library docs (React, Vite, Framer Motion, etc.)
 
-Full decision table for which tool to use when is in `.agents/STYLE.md`.
+Design and copy direction live in `.agents/DESIGN.md`.
 
 ---
 

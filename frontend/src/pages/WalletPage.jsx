@@ -92,6 +92,7 @@ export default function WalletPage() {
   const [demoLoading, setDemoLoading] = useState(false)
   const [stripeEnabled, setStripeEnabled] = useState(false)
   const [paymentBanner, setPaymentBanner] = useState(null)
+  const [topupError, setTopupError] = useState('')
   const [agentEarnings, setAgentEarnings] = useState(null)
   const [connectStatus, setConnectStatus] = useState(null)
   const [connectLoading, setConnectLoading] = useState(false)
@@ -226,13 +227,14 @@ export default function WalletPage() {
   const handleStripeTopup = async (e) => {
     e.preventDefault()
     if (!wallet?.wallet_id) return
+    setTopupError('')
     const cents = Math.round(Number(amount) * 100)
     if (!Number.isFinite(cents) || cents < MIN_DEPOSIT_CENTS) {
-      showToast?.(`Minimum top-up is ${fmtUsd(MIN_DEPOSIT_CENTS)}.`, 'error')
+      setTopupError(`Minimum top-up is ${fmtUsd(MIN_DEPOSIT_CENTS)}.`)
       return
     }
     if (cents > 50000) {
-      showToast?.('Maximum top-up is $500.00.', 'error')
+      setTopupError('Maximum top-up is $500.00.')
       return
     }
     setStripeLoading(true)
@@ -240,7 +242,7 @@ export default function WalletPage() {
       const session = await createTopupSession(apiKey, wallet.wallet_id, cents)
       window.location.href = session.checkout_url
     } catch (err) {
-      showToast?.(err?.message ?? 'Could not start payment session.', 'error')
+      setTopupError(err?.message ?? 'Could not start payment session.')
     } finally {
       setStripeLoading(false)
     }
@@ -288,9 +290,10 @@ export default function WalletPage() {
   const handleDemoDeposit = async (e) => {
     e.preventDefault()
     if (!wallet?.wallet_id) return
+    setTopupError('')
     const cents = Math.round(Number(amount) * 100)
     if (!Number.isFinite(cents) || cents < MIN_DEPOSIT_CENTS) {
-      showToast?.(`Minimum deposit is ${fmtUsd(MIN_DEPOSIT_CENTS)}.`, 'error')
+      setTopupError(`Minimum deposit is ${fmtUsd(MIN_DEPOSIT_CENTS)}.`)
       return
     }
     setDemoLoading(true)
@@ -300,7 +303,7 @@ export default function WalletPage() {
       showToast?.('Funds added to wallet.', 'success')
       setAmount('10')
     } catch (err) {
-      showToast?.(err?.message ?? 'Deposit failed.', 'error')
+      setTopupError(err?.message ?? 'Deposit failed.')
     } finally {
       setDemoLoading(false)
     }
@@ -329,7 +332,7 @@ export default function WalletPage() {
           )}
           {paymentBanner === 'cancelled' && (
             <div className="wallet__banner wallet__banner--warn">
-              <p className="wallet__banner-sub">Payment cancelled — your balance was not changed.</p>
+              <p className="wallet__banner-sub">Payment cancelled. Your balance was not changed.</p>
               <button onClick={() => setPaymentBanner(null)} className="wallet__banner-close"><X size={16} /></button>
             </div>
           )}
@@ -382,7 +385,7 @@ export default function WalletPage() {
                     max="500"
                     step="1"
                     value={amount}
-                    onChange={e => setAmount(e.target.value)}
+                    onChange={e => { setAmount(e.target.value); setTopupError('') }}
                     required
                     mono
                     hint={`Min ${fmtUsd(MIN_DEPOSIT_CENTS)} · Max $500.00`}
@@ -392,23 +395,25 @@ export default function WalletPage() {
                       <button
                         key={v}
                         type="button"
-                        onClick={() => setAmount(v)}
+                        onClick={() => { setAmount(v); setTopupError('') }}
                         className={`wallet__quick-btn${amount === v ? ' wallet__quick-btn--active' : ''}`}
                       >${v}</button>
                     ))}
                   </div>
                   {stripeEnabled ? (
                     <form onSubmit={handleStripeTopup}>
+                      {topupError && <p className="wallet__action-error">{topupError}</p>}
                       <Button type="submit" variant="primary" loading={stripeLoading} icon={<CreditCard size={14} />} style={{ width: '100%' }}>
                         Pay {fmtUsd(Math.round((Number(amount) || 0) * 100))} with card
                       </Button>
                     </form>
                   ) : (
                     <form onSubmit={handleDemoDeposit}>
+                      {topupError && <p className="wallet__action-error">{topupError}</p>}
                       <Button type="submit" variant="primary" loading={demoLoading} icon={<Plus size={14} />} style={{ width: '100%' }}>
                         Add {fmtUsd(Math.round((Number(amount) || 0) * 100))}
                       </Button>
-                      <p className="wallet__action-note">Demo mode — instant credit, no real payment.</p>
+                      <p className="wallet__action-note">Demo mode. Instant credit, no real payment.</p>
                     </form>
                   )}
                 </div>
@@ -434,7 +439,7 @@ export default function WalletPage() {
                     <>
                       <div className="wallet__inline-warn">
                         <AlertCircle size={14} />
-                        <span>Onboarding incomplete — finish setup to enable payouts.</span>
+                        <span>Onboarding incomplete. Finish setup to enable payouts.</span>
                       </div>
                       <Button variant="secondary" loading={connectLoading} icon={<ExternalLink size={13} />} style={{ width: '100%' }} onClick={handleConnectOnboard}>
                         Resume onboarding
@@ -499,7 +504,7 @@ export default function WalletPage() {
                   <Skeleton variant="rect" height={32} />
                 </div>
               ) : !spendSummary || spendSummary.total_cents === 0 ? (
-                <EmptyState title="No spend in this period" sub="Charges from agent hires post here in cents — refunds reverse them." />
+                <EmptyState title="No spend in this period" sub="Charges from agent hires post here in cents. Refunds reverse them." />
               ) : (
                 <>
                   <div className="wallet__spend-totals">
@@ -514,7 +519,7 @@ export default function WalletPage() {
                     <div className="wallet__spend-stat">
                       <span className="wallet__spend-stat-label">Avg / job</span>
                       <span className="wallet__spend-stat-value">
-                        {spendSummary.total_jobs > 0 ? fmtUsd(Math.round(spendSummary.total_cents / spendSummary.total_jobs)) : '—'}
+                        {spendSummary.total_jobs > 0 ? fmtUsd(Math.round(spendSummary.total_cents / spendSummary.total_jobs)) : 'None'}
                       </span>
                     </div>
                   </div>
@@ -576,7 +581,7 @@ export default function WalletPage() {
             </Card.Header>
             <Card.Body>
               {activity.length === 0 ? (
-                <EmptyState title="No ledger activity yet" sub="Deposits, charges, payouts, refunds, and withdrawals — every cent shows up here, append-only." />
+                <EmptyState title="No ledger activity yet" sub="Deposits, charges, payouts, refunds, and withdrawals appear here. Every cent is append-only." />
               ) : (
                 <>
                   <div>

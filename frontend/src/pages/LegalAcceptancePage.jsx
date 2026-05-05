@@ -58,7 +58,7 @@ export default function LegalAcceptancePage() {
         <p className="legal-accept__eyebrow">Required before access</p>
         <h1 className="legal-accept__title">Accept Terms and Privacy Policy</h1>
         <p className="legal-accept__desc">
-          To use the marketplace, you must accept the current legal documents.
+          To use Aztea, you must accept the current legal documents.
         </p>
 
         <div className="legal-accept__docs">

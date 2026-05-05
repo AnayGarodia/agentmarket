@@ -1,8 +1,8 @@
 {
   "name": "aztea-cli",
-  "version": "0.17.3",
-  "description": "Aztea CLI — add the agent marketplace to Claude Code in one command",
-  "keywords": ["aztea", "mcp", "claude", "claude-code", "agents", "ai"],
+  "version": "0.17.4",
+  "description": "Aztea CLI — give coding agents a specialist labor market in one command",
+  "keywords": ["aztea", "mcp", "claude", "claude-code", "codex", "cursor", "gemini", "agents", "ai"],
   "license": "MIT",
   "main": "src/mcp-server.js",
   "bin": {

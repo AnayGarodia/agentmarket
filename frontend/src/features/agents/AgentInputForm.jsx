@@ -174,7 +174,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
       const val = values[f.name]
       if (f.type === 'array') {
         if (!Array.isArray(val) || val.length === 0) {
-          errs[f.name] = 'Add at least one item — type a value and press Enter.'
+          errs[f.name] = 'Add at least one item. Type a value and press Enter.'
         }
       } else if (!String(val ?? '').trim()) {
         errs[f.name] = 'This field is required.'
@@ -287,7 +287,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
                 value={values[f.name]}
                 onChange={e => set(f.name, e.target.value)}
               >
-                {!(f.required) && <option value="">— choose —</option>}
+                {!(f.required) && <option value="">Choose...</option>}
                 {(f.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
               </select>
             ) : f.type === 'checkbox' ? (

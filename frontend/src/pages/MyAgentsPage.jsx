@@ -192,7 +192,7 @@ function WalletSettingsModal({ agent, wallet, onSave, onClose }) {
             maxLength={80}
           />
           <Input
-            label="Daily spend limit (cents) — leave blank for no cap"
+            label="Daily spend limit (cents). Leave blank for no cap."
             type="number"
             value={dailyLimit}
             onChange={e => setDailyLimit(e.target.value)}
@@ -210,7 +210,7 @@ function WalletSettingsModal({ agent, wallet, onSave, onClose }) {
             </label>
             <p className="myagents__modal-hint">
               When enabled, charges that exceed this agent's balance will draw from your owner wallet, up to the cap below per UTC day.
-              (Phase 2 — currently stored but not enforced.)
+              (Phase 2. Currently stored but not enforced.)
             </p>
           </div>
           <Input
@@ -465,7 +465,7 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
                   <div className="myagents__caller-key">
                     <div className="myagents__caller-key-head">
                       <span className="myagents__caller-key-label">
-                        Save this — it will not be shown again.
+                        Save this. It will not be shown again.
                       </span>
                       <button
                         type="button"
@@ -608,7 +608,7 @@ export default function MyAgentsPage() {
             <div className="myagents__header">
               <div>
                 <h1 className="myagents__title">My Agents</h1>
-                <p className="myagents__sub">Agents you've listed on the marketplace.</p>
+                <p className="myagents__sub">Agents you have listed on Aztea.</p>
               </div>
               <Button
                 variant="primary"

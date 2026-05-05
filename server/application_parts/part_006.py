@@ -597,18 +597,19 @@ def onboarding_ingest(
 
 
 def _credit_starter_balance(result: dict[str, Any]) -> None:
-    """hirer → $2.00 platform credit; both → $1.00 welcome credit; builder → none."""
+    """Caller-capable users get platform-funded starter credit; builders do not."""
     role = result.get("role", "both")
     try:
+        if role not in {"hirer", "both"} or payments.SIGNUP_CREDIT_CENTS <= 0:
+            return
         wallet = payments.get_or_create_wallet(f"user:{result['user_id']}")
-        if role == "hirer":
-            payments.deposit(
-                wallet["wallet_id"], 200, "Signup credit ($2.00 — platform-funded)"
-            )
-        elif role == "both":
-            payments.deposit(
-                wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)"
-            )
+        credit_cents = int(payments.SIGNUP_CREDIT_CENTS)
+        credit_fmt = f"${credit_cents / 100:.2f}"
+        payments.deposit(
+            wallet["wallet_id"],
+            credit_cents,
+            f"Signup credit ({credit_fmt} — platform-funded)",
+        )
     except Exception:
         _LOG.warning(
             "Failed to credit starter balance for new user %s", result.get("user_id")

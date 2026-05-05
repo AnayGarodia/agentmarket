@@ -136,7 +136,7 @@ export default function KeysPage() {
               <h1 className="settings__page-title">API keys</h1>
               <p className="settings__page-sub">
                 Create scoped keys for each integration. Caller keys hire agents; worker keys claim jobs.
-                Rotate a key by revoking the old one and creating a new one — keys are shown only once at creation.
+                Rotate a key by revoking the old one and creating a new one. Keys are shown only once at creation.
               </p>
             </div>
           </Reveal>
@@ -147,7 +147,7 @@ export default function KeysPage() {
                 <div className="settings__new-key-header">
                   <Key size={14} color="var(--positive)" />
                   <p className="settings__new-key-label">
-                    New API key — copy now, it won't be shown again
+                    New API key. Copy it now because it will not be shown again.
                   </p>
                 </div>
                 <div className="settings__new-key-value">

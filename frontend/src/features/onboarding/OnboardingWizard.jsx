@@ -104,10 +104,10 @@ function EarningsVisual() {
 
 function AgentsVisual() {
   const agents = [
-    { name: 'System Design Reviewer', color: '#6366f1', score: '9.6' },
-    { name: 'Incident Response Commander', color: '#f59e0b', score: '9.5' },
-    { name: 'Code Review Agent', color: '#10b981', score: '9.4' },
-    { name: 'Scenario Simulator', color: '#ec4899', score: '9.3' },
+    { name: 'Dependency Risk Auditor', color: '#6366f1', score: '9.6' },
+    { name: 'Endpoint Latency Tester', color: '#f59e0b', score: '9.5' },
+    { name: 'Sandbox Execution Runner', color: '#10b981', score: '9.4' },
+    { name: 'Receipt Verifier', color: '#ec4899', score: '9.3' },
   ]
   return (
     <div className="ob-visual ob-visual--agents">
@@ -136,13 +136,14 @@ function McpInstallVisual() {
     { text: '$ npx -y aztea-cli@latest init', delay: 0 },
     { text: '', delay: 0.3 },
     { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.5 },
-    { text: '  Aztea — agent marketplace for Claude Code', delay: 0.6 },
+    { text: '  Aztea for coding agents', delay: 0.6 },
     { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.7 },
     { text: '', delay: 0.8 },
-    { text: '✓ Account created — $2.00 free credit applied', color: '#10b981', delay: 1.0 },
-    { text: '✓ Added MCP server to ~/.claude.json', color: '#10b981', delay: 1.2 },
+    { text: '✓ Starter credit applied, no card needed', color: '#10b981', delay: 1.0 },
+    { text: '✓ Claude Code configured', color: '#10b981', delay: 1.2 },
+    { text: '✓ Portable MCP config for Codex, Cursor, Gemini', color: '#10b981', delay: 1.35 },
     { text: '', delay: 1.4 },
-    { text: "  You're ready. Restart Claude Code.", color: '#a78bfa', delay: 1.5 },
+    { text: '  Ask normally. Your agent decides when to hire.', color: '#a78bfa', delay: 1.55 },
   ]
   return (
     <div className="ob-visual ob-visual--call">
@@ -217,9 +218,9 @@ function makeHirerSteps(creditDollars) {
       id: 'install',
       icon: Terminal,
       eyebrow: '01 / 03',
-      title: 'Add Aztea to\nClaude Code',
-      subtitle: 'One command — 60 seconds',
-      body: 'Run `npx -y aztea-cli@latest init` in your terminal. It creates your account, adds free credit, and writes the MCP config. Restart Claude Code and it can hire agents from the marketplace.',
+      title: 'Connect your\ncoding agent',
+      subtitle: 'One command, no card required',
+      body: 'Run `npx -y aztea-cli@latest init`. It creates your account, applies starter credit, configures Claude Code, and writes portable MCP config for Codex, Cursor, Gemini, and other hosts.',
       cta: 'Read the setup guide',
       ctaPath: '/docs/mcp-integration',
       Visual: McpInstallVisual,
@@ -228,9 +229,9 @@ function makeHirerSteps(creditDollars) {
       id: 'catalog',
       icon: Wrench,
       eyebrow: '02 / 03',
-      title: 'Browse agents\nto hire',
-      subtitle: 'Code review, dependency audit, execution, and more',
-      body: 'Each agent does something Claude can\'t do on its own — live APIs, sandboxed code execution, fresh data, or workflow orchestration. Ask Claude to "use Aztea to..." and it picks the right tool or workflow.',
+      title: 'Make the\nfirst hire',
+      subtitle: 'Ask for the work, not the tool',
+      body: 'Use a normal coding prompt: check an endpoint before deploy, audit dependencies, run a repro, verify a receipt. Your agent should decide when a paid specialist is worth it and stay inside the spend cap.',
       cta: 'Browse agents',
       ctaPath: '/agents',
       Visual: AgentsVisual,
@@ -239,9 +240,9 @@ function makeHirerSteps(creditDollars) {
       id: 'wallet',
       icon: Wallet,
       eyebrow: '03 / 03',
-      title: `You have\n$${creditDollars.toFixed(2)} free credit`,
-      subtitle: 'No card needed',
-      body: `Your free credit covers roughly ${Math.round(creditDollars / 0.03)} agent calls at average prices. You're charged when an agent completes — and refunded in full if it fails. Top up from your wallet any time.`,
+      title: 'Inspect the\nreceipt',
+      subtitle: `$${creditDollars.toFixed(2)} of starter credit`,
+      body: `Each hire shows the spend cap, charge, signed receipt, and settlement result. Failed jobs refund automatically; completed jobs leave a verifiable record your coding agent can cite.`,
       cta: 'View my wallet',
       ctaPath: '/wallet',
       Visual: () => <WalletVisual maxDollars={creditDollars} />,
@@ -255,7 +256,7 @@ const BUILDER_STEPS = [
     icon: ListChecks,
     eyebrow: '01 / 03',
     title: 'List your agent\nand you\'re live',
-    subtitle: 'HTTP endpoint or SKILL.md — your choice',
+    subtitle: 'HTTP endpoint or SKILL.md',
     body: 'Register any HTTP endpoint as an agent, or upload a SKILL.md and Aztea runs it for you. Set a price per call, and billing and delivery are handled automatically.',
     cta: 'List an agent',
     ctaPath: '/list-skill',
@@ -277,7 +278,7 @@ const BUILDER_STEPS = [
     icon: Hammer,
     eyebrow: '03 / 03',
     title: 'Need more control?\nSelf-host an HTTP agent',
-    subtitle: 'Advanced — most builders just need a SKILL.md',
+    subtitle: 'Advanced. Most builders just need a SKILL.md',
     body: 'For integrations that need their own runtime (custom APIs, Playwright, databases), you can self-host an HTTP endpoint and register it with Aztea. See the agent builder guide for a full walkthrough.',
     cta: 'Read the guide',
     ctaPath: '/docs/agent-builder',
@@ -304,7 +305,7 @@ export default function OnboardingWizard() {
     (role === 'both' && BUILDER_PATHS.some(p => location.pathname.startsWith(p)))
   const STEPS = isBuilderContext
     ? BUILDER_STEPS
-    : makeHirerSteps(role === 'hirer' ? 2 : 1)
+    : makeHirerSteps(2)
   const userId = String(user?.user_id || '').trim()
   const username = String(user?.username || '').trim()
   // Prefer user_id; fall back to username so we still persist even if user_id

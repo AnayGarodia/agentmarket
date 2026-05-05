@@ -9,6 +9,28 @@ const readline = require('readline')
 const { execFileSync, spawnSync } = require('child_process')
 
 const BASE_URL = process.env.AZTEA_BASE_URL || 'https://aztea.ai'
+const USE_COLOR = process.stdout.isTTY && process.env.NO_COLOR == null
+const ANSI = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  teal: '\x1b[36m',
+  green: '\x1b[32m',
+  amber: '\x1b[33m',
+  violet: '\x1b[35m',
+}
+
+function c(color, text) {
+  return USE_COLOR ? `${ANSI[color]}${text}${ANSI.reset}` : text
+}
+
+function ok(text) {
+  console.log(`${c('green', '✓')} ${text}`)
+}
+
+function muted(text) {
+  return c('dim', text)
+}
 
 // ── HTTP helpers ─────────────────────────────────────────────
 
@@ -28,7 +50,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.14.4',
+        'User-Agent': 'aztea-cli/0.17.4',
       },
     }, (res) => {
       let data = ''
@@ -166,6 +188,30 @@ function hasClaudeCli() {
 // directly — instant startup every time.
 const AZTEA_LOCAL_DIR = path.join(os.homedir(), '.aztea')
 
+function mcpServerConfig(apiKey, mcpScript) {
+  return mcpScript
+    ? {
+        type: 'stdio',
+        command: process.execPath,
+        args: [mcpScript],
+        env: {
+          AZTEA_API_KEY: apiKey,
+          AZTEA_BASE_URL: BASE_URL,
+          AZTEA_CLIENT_ID: 'coding-agent',
+        },
+      }
+    : {
+        type: 'stdio',
+        command: 'npx',
+        args: ['-y', 'aztea-cli', 'mcp'],
+        env: {
+          AZTEA_API_KEY: apiKey,
+          AZTEA_BASE_URL: BASE_URL,
+          AZTEA_CLIENT_ID: 'coding-agent',
+        },
+      }
+}
+
 function ensureLocalInstall() {
   fs.mkdirSync(AZTEA_LOCAL_DIR, { recursive: true })
   const r = spawnSync('npm', ['install', '--silent', '--prefix', AZTEA_LOCAL_DIR, 'aztea-cli@latest'], {
@@ -224,19 +270,36 @@ function injectViaFile(apiKey, mcpScript) {
   }
   if (!cfg.mcpServers || typeof cfg.mcpServers !== 'object') cfg.mcpServers = {}
   cfg.mcpServers.aztea = mcpScript
-    ? {
-        type: 'stdio',
-        command: process.execPath,
-        args: [mcpScript],
-        env: { AZTEA_API_KEY: apiKey, AZTEA_BASE_URL: BASE_URL },
-      }
-    : {
-        type: 'stdio',
-        command: 'npx',
-        args: ['-y', 'aztea-cli', 'mcp'],
-        env: { AZTEA_API_KEY: apiKey, AZTEA_BASE_URL: BASE_URL },
-      }
+    ? mcpServerConfig(apiKey, mcpScript)
+    : mcpServerConfig(apiKey, null)
   fs.writeFileSync(CLAUDE_USER_CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf8')
+}
+
+function writePortableAgentConfigs(apiKey, mcpScript) {
+  fs.mkdirSync(AZTEA_LOCAL_DIR, { recursive: true })
+  const config = { mcpServers: { aztea: mcpServerConfig(apiKey, mcpScript) } }
+  const portablePath = path.join(AZTEA_LOCAL_DIR, 'mcp.json')
+  fs.writeFileSync(portablePath, JSON.stringify(config, null, 2) + '\n', 'utf8')
+
+  const guidePath = path.join(AZTEA_LOCAL_DIR, 'coding-agent-setup.md')
+  fs.writeFileSync(guidePath, [
+    '# Aztea MCP setup',
+    '',
+    'Aztea exposes one portable stdio MCP server. Point Codex, Cursor, Gemini CLI, or any MCP host at this config:',
+    '',
+    `\`${portablePath}\``,
+    '',
+    'The important behavior is in the server instructions: the coding agent should call `aztea_do` proactively when a specialist hire is useful. The user should not need to type "use Aztea".',
+    '',
+    'Server config:',
+    '',
+    '```json',
+    JSON.stringify(config, null, 2),
+    '```',
+    '',
+  ].join('\n'), 'utf8')
+
+  return { portablePath, guidePath }
 }
 
 function injectMcpConfig(apiKey) {
@@ -252,13 +315,15 @@ function injectMcpConfig(apiKey) {
   if (hasClaudeCli()) {
     try {
       injectViaClaudeCli(apiKey, mcpScript)
-      return { method: 'claude mcp add', path: '~/.claude.json (managed by claude)' }
+      const portable = writePortableAgentConfigs(apiKey, mcpScript)
+      return { method: 'claude mcp add', path: '~/.claude.json (managed by claude)', ...portable }
     } catch (err) {
       console.warn(`(claude mcp add failed — falling back to direct file write)`)
     }
   }
   injectViaFile(apiKey, mcpScript)
-  return { method: 'direct write', path: CLAUDE_USER_CONFIG_PATH }
+  const portable = writePortableAgentConfigs(apiKey, mcpScript)
+  return { method: 'direct write', path: CLAUDE_USER_CONFIG_PATH, ...portable }
 }
 
 // ── Stale config cleanup ─────────────────────────────────────
@@ -286,9 +351,10 @@ function removeLegacyMcpEntry() {
 async function run() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 
-  console.log('\n' + '─'.repeat(52))
-  console.log('  Aztea — agent marketplace for Claude Code')
-  console.log('─'.repeat(52) + '\n')
+  console.log('\n' + c('teal', '━'.repeat(56)))
+  console.log(`  ${c('bold', 'Aztea')} ${muted('for coding agents')}`)
+  console.log(`  ${c('amber', 'Hire specialists. Cap spend. Verify receipts.')}`)
+  console.log(c('teal', '━'.repeat(56)) + '\n')
 
   const hasAccount = await prompt(rl, 'Do you already have an Aztea account? (y/n): ')
   const isExisting = hasAccount.trim().toLowerCase().startsWith('y')
@@ -334,11 +400,11 @@ async function run() {
       console.error('Server did not return an API key. Please try again or visit https://aztea.ai.')
       process.exit(1)
     }
-    console.log('✓ Signed in')
+    ok('Signed in')
   } else {
     // ── Register ──
     console.log()
-    console.log('Creating your account (free, no card required).')
+    console.log(`${c('bold', 'Create your account')} ${muted('(free, no card required).')}`)
     console.log()
     const username = (await prompt(rl, 'Username: ')).trim()
     const email = (await prompt(rl, 'Email: ')).trim()
@@ -376,7 +442,7 @@ async function run() {
     const credit = res.body.balance_cents != null
       ? `$${(res.body.balance_cents / 100).toFixed(2)}`
       : '$2.00'
-    console.log(`✓ Account created — ${credit} free credit applied, no card needed`)
+    ok(`Account created — ${credit} starter credit applied, no card needed`)
   }
 
   // ── Write config ──
@@ -384,7 +450,8 @@ async function run() {
   let result
   try {
     result = injectMcpConfig(apiKey)
-    console.log(`✓ Added Aztea to Claude Code (${result.method})`)
+    ok(`Claude Code configured (${result.method})`)
+    ok(`Portable MCP config written for Codex, Cursor, Gemini, and other MCP hosts`)
   } catch (err) {
     console.error(`Could not register MCP server: ${err.message}`)
     console.log('\nAdd this manually to ~/.claude.json:')
@@ -401,18 +468,19 @@ async function run() {
   }
 
   console.log()
-  console.log('─'.repeat(52))
-  console.log("  You're ready. Restart Claude Code, then try:")
+  console.log(c('teal', '━'.repeat(56)))
+  console.log(`  ${c('bold', 'Ready for the first hire')}`)
+  console.log(`  Restart Claude Code. For other MCP hosts, import: ${c('violet', result.portablePath)}`)
   console.log()
-  console.log('  "Run this Python script and show me the output"')
-  console.log('  "Fetch the top Hacker News stories right now"')
-  console.log('  "Are there any CVEs in express@4.17.1?"')
-  console.log('  "Find recent arXiv papers on diffusion models"')
-  console.log('  "Generate an image of a futuristic city at dawn"')
+  console.log(`  ${muted('Try normal coding-agent prompts. Do not say "use Aztea".')}`)
+  console.log('  "Before I deploy, check this API for latency and obvious risk."')
+  console.log('  "Audit this package list for known vulnerabilities."')
+  console.log('  "Run this repro script and tell me what actually happens."')
   console.log()
-  console.log('  Verify it loaded:    claude mcp list')
-  console.log(`  Browse agents:       ${BASE_URL}/agents`)
-  console.log('─'.repeat(52))
+  console.log(`  Verify Claude:       ${c('violet', 'claude mcp list')}`)
+  console.log(`  Other agents guide:  ${c('violet', result.guidePath)}`)
+  console.log(`  Browse agents:       ${c('violet', `${BASE_URL}/agents`)}`)
+  console.log(c('teal', '━'.repeat(56)))
   console.log()
 }
 
@@ -429,10 +497,11 @@ async function loginWithKey(apiKey) {
     console.error(`Could not register MCP server: ${err.message}`)
     process.exit(1)
   }
-  console.log(`\n${'─'.repeat(52)}`)
-  console.log('  Aztea — logged in')
-  console.log('─'.repeat(52))
-  console.log(`\n✓ API key configured (${result.method})`)
+  console.log(`\n${c('teal', '━'.repeat(56))}`)
+  console.log(`  ${c('bold', 'Aztea')} ${muted('logged in')}`)
+  console.log(c('teal', '━'.repeat(56)))
+  ok(`API key configured (${result.method})`)
+  ok(`Portable MCP config written: ${result.portablePath}`)
   console.log('\nRestart Claude Code to apply the new key.')
   console.log(`Browse agents: ${BASE_URL}/agents`)
   console.log()

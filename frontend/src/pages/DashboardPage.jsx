@@ -86,10 +86,8 @@ export default function DashboardPage() {
   const postAuthAgent = postAuthAgentId ? agents.find(a => a.agent_id === postAuthAgentId) : null
   const balance = loading ? '…' : fmtUsd(wallet?.balance_cents ?? 0)
   const isAdmin = (user?.scopes ?? []).includes('admin')
-  const creditLabel = role === 'hirer' ? '$2.00' : '$1.00'
-  const creditSubtext = role === 'hirer'
-    ? "That's enough for about 200 calls at $0.01 each. No card needed to try it."
-    : "That's enough for about 100 calls at $0.01 each. No card needed to try it."
+  const creditLabel = '$2.00'
+  const creditSubtext = 'Use it for your first specialist hire: dependency audit, endpoint check, sandbox run, or receipt verification. No card needed.'
 
   useEffect(() => {
     if (!isAdmin || !apiKey) {
@@ -122,7 +120,7 @@ export default function DashboardPage() {
               {role === 'builder' ? (
                 <NewUserBanner
                   icon={<Hammer size={20} color="#fff" />}
-                  title={`Welcome${user?.username ? `, ${user.username}` : ''} — list your first skill and start earning.`}
+                  title={`Welcome${user?.username ? `, ${user.username}` : ''}. List your first skill and start earning.`}
                   sub="Upload a SKILL.md, set a price, and Aztea handles billing and execution for you."
                   primaryTo="/list-skill" primaryLabel="List a skill"
                   secondaryTo="/wallet" secondaryLabel="View earnings"
@@ -130,7 +128,7 @@ export default function DashboardPage() {
               ) : (
                 <NewUserBanner
                   icon={<Wallet size={20} color="#fff" />}
-                  title={`Welcome${user?.username ? `, ${user.username}` : ''} — you have ${creditLabel} of free credit.`}
+                  title={`Welcome${user?.username ? `, ${user.username}` : ''}. You have ${creditLabel} of starter credit.`}
                   sub={creditSubtext}
                   primaryTo="/agents" primaryLabel="Browse agents"
                   secondaryTo="/wallet" secondaryLabel="View wallet"
@@ -214,14 +212,14 @@ export default function DashboardPage() {
               <Card.Body className="dashboard__steps">
                 {role === 'builder' ? (
                   <>
-                    <ActionStep done={false} title="List your first agent" copy="Register an HTTP endpoint or upload a SKILL.md. Set a price per call — Aztea handles billing and delivery." actionTo="/list-skill" actionLabel="List an agent" />
+                    <ActionStep done={false} title="List your first agent" copy="Register an HTTP endpoint or upload a SKILL.md. Set a price per call. Aztea handles billing and delivery." actionTo="/list-skill" actionLabel="List an agent" />
                     <ActionStep done={false} title="Connect Stripe to withdraw earnings" copy="Payouts land in your Aztea wallet after every successful call. Connect a bank account to cash out." actionTo="/wallet" actionLabel="Connect Stripe" />
                     <ActionStep done={false} title="Create a scoped API key" copy="One key per integration so a leak only affects one surface, not your whole account." actionTo="/keys" actionLabel="Manage keys" />
                   </>
                 ) : (
                   <>
                     <ActionStep done={agents.length > 0} title="Browse the catalog" copy="Each listing shows what the specialist does, what it costs per call, and example outputs." actionTo="/agents" actionLabel={agents.length > 0 ? 'Open catalog' : 'Start here'} />
-                    <ActionStep done={jobs.length > 0} title="Track your hires" copy="Pending, running, and settled jobs in one timeline — with signed receipts." actionTo="/jobs" actionLabel="Open jobs" />
+                    <ActionStep done={jobs.length > 0} title="Track your hires" copy="Pending, running, and settled jobs appear in one timeline with signed receipts." actionTo="/jobs" actionLabel="Open jobs" />
                     <ActionStep done={hasBalance} title="Fund the wallet" copy="Charges debit at hire time, refund automatically on failure. Every cent is journalled." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
                   </>
                 )}
@@ -245,7 +243,7 @@ export default function DashboardPage() {
                   <EmptyState
                     agentId="empty-jobs"
                     title="No jobs yet"
-                    sub="Hire an agent from the marketplace to get started."
+                    sub="Choose an agent from the catalog and run your first job."
                     action={<Link to="/agents"><Button variant="primary">Browse agents</Button></Link>}
                   />
                 ) : (

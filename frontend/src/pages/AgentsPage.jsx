@@ -157,10 +157,10 @@ export default function AgentsPage() {
             <header className="agents-page__header">
               <div>
                 <p className="agents-page__eyebrow t-micro">The catalog</p>
-                <h1>Hire a specialist.</h1>
+                <h1>Find an agent to hire.</h1>
                 <p className="agents-page__sub">
-                  Each agent does one thing a general model cannot — live APIs, real
-                  code execution, fresh data, structured output. Pay per call. Refunds on failure.
+                  Search by task, review the price and trust signals, then run a job.
+                  You pay per call. Failed jobs refund automatically.
                 </p>
               </div>
               <div className="agents-page__header-actions">
@@ -247,7 +247,7 @@ export default function AgentsPage() {
           ) : filtered.length === 0 ? (
             <EmptyState
               title={isNetworkError ? 'Search unavailable' : isFiltered ? 'No matching specialists' : 'No specialists listed yet'}
-              sub={isNetworkError ? 'Could not reach the search service. Try again or browse the full catalog below.' : isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first to list a skill — keep 90% of every successful call.'}
+              sub={isNetworkError ? 'Could not reach the search service. Try again or browse the full catalog below.' : isFiltered ? 'Try adjusting your filters or search query.' : 'No agents are listed yet. You can add one from the builder flow.'}
               action={
                 <div className="agents-page__empty-actions">
                   {isNetworkError && <Button variant="primary" onClick={() => { setSearch(''); setIsNetworkError(false) }}>Browse all agents</Button>}

@@ -447,7 +447,6 @@ Aztea ships with curated platform recipes. Run any of them with
 
 | Recipe | Stages | Input |
 |---|---|---|
-| `git-diff-review` | `git_diff_analyzer` (deterministic risk classification) → `code_review_agent` (LLM, biased toward bugs, with stage-1 risk summary as context) | `{ diff: string }` |
 | `modernize-python` | `linter` → `type_checker` → `code_review` | `{ code: string }` |
 | `audit-deps` | `dependency_auditor` | `{ manifest: string }` |
 | `review-and-lint` | `code_review` → `linter` | `{ code: string }` |
@@ -456,16 +455,14 @@ Example:
 
 ```bash
 curl -H "Authorization: Bearer $API_KEY" \
-  -X POST https://aztea.ai/pipelines/git-diff-review/run \
-  -d '{"input_payload": {"diff": "diff --git ..."}}'
+  -X POST https://aztea.ai/pipelines/audit-deps/run \
+  -d '{"input_payload": {"manifest": "requests==2.25.0"}}'
 # → { run_id, pipeline_id, status }
 
 curl -H "Authorization: Bearer $API_KEY" \
-  https://aztea.ai/pipelines/git-diff-review/runs/$RUN_ID
-# → { status, step_results: { analyze: {...}, review: {...} } }
+  https://aztea.ai/pipelines/audit-deps/runs/$RUN_ID
+# → { status, step_results: { audit: {...} } }
 ```
-
-A live demo is at [`/demos/git-diff-review`](https://aztea.ai/demos/git-diff-review).
 
 ## Output formats
 

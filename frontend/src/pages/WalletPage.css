@@ -169,6 +169,13 @@
   margin: 0;
 }
 
+.wallet__action-error {
+  margin: 0 0 10px;
+  color: var(--negative);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
 /* Quick amount chips */
 .wallet__quick-amounts {
   display: flex;

@@ -3,8 +3,8 @@
 
 // aztea-cli is a thin npm shim. It owns two responsibilities:
 //   1. `init`  — one-command setup that registers Aztea as an MCP server
-//                in Claude Code (so users in the JS ecosystem don't need
-//                Python on the path to get started).
+//                in Claude Code and writes portable MCP config for other
+//                coding-agent hosts.
 //   2. `mcp`   — runs the stdio MCP server process. Editors spawn this.
 // Everything else (hire, jobs, wallet, agents, mcp install/doctor/uninstall)
 // lives in the Python `aztea` CLI. We point users there.
@@ -60,11 +60,11 @@ switch (cmd) {
     console.log(`Aztea CLI (npm)
 
 This package is a thin shim. It exists to:
-  1. Set up Aztea as an MCP server in Claude Code.
+  1. Set up Aztea as an MCP server for coding agents.
   2. Run the stdio MCP server when an editor spawns it.
 
 Usage:
-  npx -y aztea-cli@latest init                     Set up Aztea in Claude Code (creates account)
+  npx -y aztea-cli@latest init                     Set up Aztea for coding agents (creates account)
   npx -y aztea-cli@latest login --api-key az_...   Configure with an existing API key
   npx -y aztea-cli@latest whoami                   Show the current account
   npx -y aztea-cli@latest mcp                      Start the MCP server (called by editors)

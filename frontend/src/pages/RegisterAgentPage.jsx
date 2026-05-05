@@ -133,7 +133,7 @@ export default function RegisterAgentPage() {
                   }
                   return (
                     <p className="regagent__success-sub">
-                      Your agent is live on the marketplace. It may take a few seconds to appear in search.
+                      Your agent is live on Aztea. It may take a few seconds to appear in search.
                     </p>
                   )
                 })()}
@@ -169,7 +169,7 @@ export default function RegisterAgentPage() {
               color: 'var(--ink-soft)',
               marginBottom: 'var(--sp-4)',
             }}>
-              <strong>Advanced</strong> — most builders should <Link to="/list-skill" style={{ color: 'var(--accent)' }}>list a SKILL.md</Link> instead. This page is for self-hosted HTTP agents with their own runtime.
+              <strong>Advanced.</strong> Most builders should <Link to="/list-skill" style={{ color: 'var(--accent)' }}>list a SKILL.md</Link> instead. This page is for self-hosted HTTP agents with their own runtime.
             </div>
           </Reveal>
 

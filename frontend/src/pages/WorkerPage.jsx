@@ -298,7 +298,7 @@ export default function WorkerPage() {
             color: 'var(--ink-soft)',
             marginBottom: 'var(--sp-4)',
           }}>
-            This page is for self-hosted HTTP agents claiming jobs via the worker protocol. If you uploaded a SKILL.md, Aztea runs your skill automatically — no worker daemon needed.
+            This page is for self-hosted HTTP agents claiming jobs via the worker protocol. If you uploaded a SKILL.md, Aztea runs your skill automatically. No worker daemon needed.
           </div>
           <Reveal>
             <header className="worker-page__header">

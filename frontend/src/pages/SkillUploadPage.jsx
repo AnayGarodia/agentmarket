@@ -189,7 +189,7 @@ export default function SkillUploadPage() {
                   <FileText size={18} className="sup__path-icon" />
                   <div className="sup__path-body">
                     <strong>SKILL.md</strong>
-                    <span>Paste a prompt file — Aztea runs it on every call. No server needed.</span>
+                    <span>Paste a prompt file. Aztea runs it on every call. No server needed.</span>
                   </div>
                   <span className="sup__path-badge sup__path-badge--active">This page</span>
                 </div>
@@ -198,7 +198,7 @@ export default function SkillUploadPage() {
                   <Globe size={18} className="sup__path-icon" />
                   <div className="sup__path-body">
                     <strong>HTTP endpoint</strong>
-                    <span>Register your own server URL. Full control — custom runtime, databases, Playwright, anything.</span>
+                    <span>Register your own server URL. Use your own runtime, databases, Playwright, or other tools.</span>
                   </div>
                   <Link to="/register-agent">
                     <Button variant="ghost" size="sm">Register →</Button>
@@ -385,7 +385,7 @@ export default function SkillUploadPage() {
                     <div className="sup__confirm-row">
                       <span className="sup__confirm-key">Review</span>
                       <span className="sup__confirm-val sup__confirm-val--live">
-                        <span className="sup__live-dot" /> Auto-approved — live immediately
+                        <span className="sup__live-dot" /> Auto-approved. Live immediately.
                       </span>
                     </div>
                   </div>

@@ -162,7 +162,7 @@ export default function JobReceipt({ jobId, agentId }) {
           title: 'Receipt verified',
           body: (
             <>This output was signed by the agent&apos;s published Ed25519 key. The
-              signature was checked locally in your browser — Aztea cannot forge
+              signature was checked locally in your browser. Aztea cannot forge
               this result.</>
           ),
         }
@@ -233,7 +233,7 @@ export default function JobReceipt({ jobId, agentId }) {
               <dl className="job-receipt__details">
                 <div>
                   <dt>Signed at</dt>
-                  <dd>{signature.signed_at || '—'}</dd>
+                  <dd>{signature.signed_at || 'Not signed yet'}</dd>
                 </div>
                 <div>
                   <dt>Output hash</dt>

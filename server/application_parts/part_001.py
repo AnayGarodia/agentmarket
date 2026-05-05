@@ -1204,7 +1204,7 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
                 status_code=401,
                 detail={
                     "error": "AUTHENTICATION_REQUIRED",
-                    "message": "No API key provided. Sign up to get one; it includes $1 free credit.",
+                    "message": "No API key provided. Sign up to get starter credit; no card required.",
                     "details": {
                         "signup_url": _SIGNUP_URL,
                         "docs_url": _DOCS_URL,

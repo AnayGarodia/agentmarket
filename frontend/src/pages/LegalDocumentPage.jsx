@@ -51,7 +51,7 @@ export default function LegalDocumentPage({ title, crumb, slug }) {
           </button>
           {needsLegalAcceptance && (
             <div className="legal-page__accept-cta">
-              <p>You must accept the latest Terms of Service and Privacy Policy before accessing the marketplace.</p>
+              <p>You must accept the latest Terms of Service and Privacy Policy before using Aztea.</p>
               <Link to="/legal/accept" className="legal-page__accept-btn">
                 Review and accept now
               </Link>
