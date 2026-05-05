@@ -48,42 +48,47 @@ export function MarketProvider({ apiKey, children }) {
   }, [showToast])
 
   const refresh = useCallback(async () => {
-    try {
-      const [ag, wl, ru, jb] = await Promise.all([
-        fetchAgents(apiKey),
-        fetchWalletMe(apiKey),
-        fetchRuns(apiKey),
-        fetchJobs(apiKey, { limit: 50 }),
-      ])
-      setAgents(ag.agents ?? [])
-      setWallet(wl)
-      setRuns(ru.runs ?? [])
-      setJobs(jb.jobs ?? [])
+    // allSettled so a single failing endpoint (e.g. wallet) doesn't blank the others.
+    const [agR, wlR, ruR, jbR] = await Promise.allSettled([
+      fetchAgents(apiKey),
+      fetchWalletMe(apiKey),
+      fetchRuns(apiKey),
+      fetchJobs(apiKey, { limit: 50 }),
+    ])
+    if (agR.status === 'fulfilled') setAgents(agR.value.agents ?? [])
+    if (wlR.status === 'fulfilled') setWallet(wlR.value)
+    if (ruR.status === 'fulfilled') setRuns(ruR.value.runs ?? [])
+    if (jbR.status === 'fulfilled') setJobs(jbR.value.jobs ?? [])
+    const firstError = [agR, wlR, ruR, jbR].find(r => r.status === 'rejected')
+    if (firstError) {
+      reportRefreshError(firstError.reason, 'Failed to refresh dashboard data.')
+    } else {
       lastRefreshError.current = ''
-    } catch (err) {
-      reportRefreshError(err, 'Failed to refresh dashboard data.')
     }
   }, [apiKey, reportRefreshError])
 
   // Background poll: only refresh wallet + recent jobs (not full agent list)
   const backgroundPoll = useCallback(async () => {
-    try {
-      const [wl, jb] = await Promise.all([
-        fetchWalletMe(apiKey),
-        fetchJobs(apiKey, { limit: 50 }),
-      ])
-      setWallet(wl)
+    const [wlR, jbR] = await Promise.allSettled([
+      fetchWalletMe(apiKey),
+      fetchJobs(apiKey, { limit: 50 }),
+    ])
+    if (wlR.status === 'fulfilled') setWallet(wlR.value)
+    if (jbR.status === 'fulfilled') {
       setJobs(prev => {
-        const incoming = jb.jobs ?? []
+        const incoming = jbR.value.jobs ?? []
         // Merge: update existing rows, prepend truly new ones
         const existingIds = new Set(prev.map(j => j.job_id))
         const updated = prev.map(j => incoming.find(i => i.job_id === j.job_id) ?? j)
         const newOnes = incoming.filter(j => !existingIds.has(j.job_id))
         return [...newOnes, ...updated]
       })
+    }
+    const firstError = [wlR, jbR].find(r => r.status === 'rejected')
+    if (firstError) {
+      reportRefreshError(firstError.reason, 'Failed to refresh dashboard data.')
+    } else {
       lastRefreshError.current = ''
-    } catch (err) {
-      reportRefreshError(err, 'Failed to refresh dashboard data.')
     }
   }, [apiKey, reportRefreshError])
 

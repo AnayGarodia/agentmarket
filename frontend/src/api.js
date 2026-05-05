@@ -6,14 +6,22 @@ const CLIENT_ID = 'web-app'
 let _onSessionExpired = null
 export function setSessionExpiredHandler(fn) { _onSessionExpired = fn }
 
-function isInvalidApiKeyError(status, parsedBody) {
+// Returns true only when the server explicitly identifies the key as invalid/expired.
+// A plain 401 (e.g. transient server restart, brief config issue) is NOT included here
+// so it goes through verifyAndExpire rather than immediately tearing down the session.
+function isExplicitAuthFailure(status, parsedBody) {
   const code = typeof parsedBody?.error === 'string' ? parsedBody.error.trim().toUpperCase() : ''
   const message = typeof parsedBody?.message === 'string' ? parsedBody.message.trim().toLowerCase() : ''
   return (
-    status === 401
-    || (status === 403 && code === 'INVALID_API_KEY')
+    (status === 403 && code === 'INVALID_API_KEY')
     || message === 'api key is invalid or expired.'
   )
+}
+
+// Kept for makeApiError — marks the error object so callers (AuthContext) know
+// it was a real auth failure, not a transient network problem.
+function isInvalidApiKeyError(status, parsedBody) {
+  return status === 401 || isExplicitAuthFailure(status, parsedBody)
 }
 
 // A 401 from a single data endpoint does NOT mean the session is dead — it
@@ -236,12 +244,12 @@ async function request(path, {
   const parsedBody = await parseResponseBody(response)
   if (!response.ok && throwOnError) {
     if (_onSessionExpired && !path.startsWith('/auth/') && key) {
-      if (isInvalidApiKeyError(response.status, parsedBody)) {
-        // An explicit invalid/expired key response should fail closed
-        // immediately instead of leaving the UI in a broken signed-in state.
+      if (isExplicitAuthFailure(response.status, parsedBody)) {
+        // Server explicitly rejected the key — fail closed immediately.
         _onSessionExpired()
       } else if (response.status === 401) {
-        // Verify with /auth/me before tearing down — see verifyAndExpire above.
+        // Ambiguous 401 (transient server issue, restart, etc.) — verify with
+        // /auth/me before tearing down the session. See verifyAndExpire above.
         verifyAndExpire(key)
       }
     }
@@ -748,10 +756,10 @@ export async function rateJob(key, jobId, rating, { idempotencyKey } = {}) {
 // ── Disputes ──────────────────────────────────────────────────────────────────
 
 export async function getJobDispute(key, jobId) {
-  // Returns the dispute for this job, or null if none exists
+  // Returns the dispute for this job, or null if none exists / any error
   const { body, status } = await request(`/jobs/${jobId}/dispute`, { key, throwOnError: false })
-  if (status === 404) return null
-  return body
+  if (status === 200) return body
+  return null
 }
 
 export async function fileDispute(key, jobId, { reason, evidence, side }) {

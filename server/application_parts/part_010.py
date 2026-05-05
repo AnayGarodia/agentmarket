@@ -915,6 +915,7 @@ def jobs_dispute(
     lock_summary: dict[str, Any] = {}
     deposit_summary: dict[str, Any] = {}
     insufficient_phase = "dispute_create"
+    _committed = False
     try:
         conn.execute("BEGIN IMMEDIATE")
         created = disputes.create_dispute(
@@ -936,6 +937,7 @@ def jobs_dispute(
         insufficient_phase = "clawback_lock"
         lock_summary = payments.lock_dispute_funds(created["dispute_id"], conn=conn)
         conn.execute("COMMIT")
+        _committed = True
     except _db.IntegrityError:
         conn.execute("ROLLBACK")
         raise HTTPException(
@@ -944,6 +946,9 @@ def jobs_dispute(
     except ValueError as exc:
         conn.execute("ROLLBACK")
         raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        conn.execute("ROLLBACK")
+        raise HTTPException(status_code=403, detail=str(exc))
     except payments.InsufficientBalanceError as exc:
         conn.execute("ROLLBACK")
         error_code = (
@@ -959,6 +964,14 @@ def jobs_dispute(
                 "required_cents": exc.required_cents,
             },
         )
+    except Exception:
+        if not _committed:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+        _LOG.exception("Unexpected error filing dispute for job %s", job_id)
+        raise HTTPException(status_code=500, detail="Failed to file dispute.")
     _record_job_event(
         job,
         "job.dispute_filed",

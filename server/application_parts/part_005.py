@@ -1383,6 +1383,9 @@ def _ensure_output_rejection_dispute(
     except ValueError as exc:
         conn.execute("ROLLBACK")
         raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        conn.execute("ROLLBACK")
+        raise HTTPException(status_code=403, detail=str(exc))
     except payments.InsufficientBalanceError as exc:
         conn.execute("ROLLBACK")
         error_code = (
@@ -1398,6 +1401,16 @@ def _ensure_output_rejection_dispute(
                 "required_cents": exc.required_cents,
             },
         )
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        _LOG.exception(
+            "Unexpected error opening output-rejection dispute for job %s",
+            job.get("job_id"),
+        )
+        raise HTTPException(status_code=500, detail="Failed to open dispute.")
 
 
 def _cascade_fail_active_child_jobs(

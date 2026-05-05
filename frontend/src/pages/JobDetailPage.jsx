@@ -143,6 +143,8 @@ export default function JobDetailPage() {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [countdown, setCountdown] = useState(null)
+  // True until the first pollJob() completes — prevents flashing "not found" before the fetch.
+  const [initialLoading, setInitialLoading] = useState(true)
 
   const contextJob = useMemo(() => jobs.find(j => j.job_id === id), [jobs, id])
   const job = localJob ?? contextJob
@@ -195,6 +197,8 @@ export default function JobDetailPage() {
       }
     } catch {
       // Network blip during polling - keep stale data rather than clearing
+    } finally {
+      setInitialLoading(false)
     }
   }, [id, apiKey]) // eslint-disable-line
 
@@ -384,15 +388,20 @@ export default function JobDetailPage() {
       <main className="job-detail">
         <Topbar crumbs={[{ to: '/jobs', label: 'Jobs' }, { label: 'Job' }]} />
         <div className="job-detail__scroll">
-          <EmptyState
-            title="Job not found"
-            sub="This job may not be visible to your key."
-            action={
-              <Link to="/jobs">
-                <Button variant="secondary" icon={<ArrowLeft size={14} />}>Back to jobs</Button>
-              </Link>
-            }
-          />
+          {initialLoading
+            ? <EmptyState title="Loading…" sub="Fetching job details." />
+            : (
+              <EmptyState
+                title="Job not found"
+                sub="This job may not be visible to your key."
+                action={
+                  <Link to="/jobs">
+                    <Button variant="secondary" icon={<ArrowLeft size={14} />}>Back to jobs</Button>
+                  </Link>
+                }
+              />
+            )
+          }
         </div>
       </main>
     )

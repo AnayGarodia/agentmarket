@@ -217,11 +217,20 @@ def create_dispute(
         raise ValueError("reason must be a non-empty string.")
 
     # Enforce that the filer is actually a party to the job, regardless of call site.
-    with _conn() as _check_conn:
-        job_row = _check_conn.execute(
+    # When a conn is provided we must use it directly — opening a second `with _conn()`
+    # would get the same thread-local connection and its __exit__ would commit the
+    # caller's in-progress BEGIN IMMEDIATE, breaking atomicity.
+    def _fetch_job_parties(c: _db.DbConnection) -> dict | None:
+        return c.execute(
             "SELECT caller_owner_id, agent_owner_id FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
+
+    if conn is not None:
+        job_row = _fetch_job_parties(conn)
+    else:
+        with _conn() as _check_conn:
+            job_row = _fetch_job_parties(_check_conn)
     if job_row is None:
         raise ValueError(f"Job '{job_id}' not found.")
     parties = {job_row["caller_owner_id"], job_row["agent_owner_id"]}

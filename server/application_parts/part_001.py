@@ -950,8 +950,14 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
 
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
-        request.state._caller = None
-        return None
+        # EventSource (SSE) cannot set custom headers; accept ?key= as a fallback.
+        # This is intentional — see frontend JobDetailPage SSE connection.
+        # Keys in query params appear in access logs so this is only a fallback.
+        key_param = (request.query_params.get("key") or "").strip()
+        if not key_param:
+            request.state._caller = None
+            return None
+        auth = f"Bearer {key_param}"
 
     raw = auth[7:]
     if hmac.compare_digest(raw, _MASTER_KEY):

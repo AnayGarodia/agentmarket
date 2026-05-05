@@ -533,6 +533,7 @@ def _record_job_event(
                 (job_id, agent_id, agent_owner_id, caller_owner_id,
                  event_type, actor_owner_id, payload, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
             """,
             (
                 job["job_id"],
@@ -545,10 +546,7 @@ def _record_job_event(
                 created_at,
             ),
         )
-        row = conn.execute(
-            "SELECT * FROM job_events WHERE event_id = %s",
-            (cur.lastrowid,),
-        ).fetchone()
+        row = cur.fetchone()
 
     event = _event_row_to_dict(row)
     logging_utils.log_event(
