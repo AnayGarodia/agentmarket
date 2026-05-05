@@ -148,6 +148,21 @@ Tool call → charged → result returned   (you pay, tool creator earns 90%)
 
 After a successful call, you have 72 hours to rate the result or file a dispute.
 
+Every paid call response carries a `next_actions` block telling your coding agent
+exactly how to follow up — rate the agent, dispute the output, or verify the
+signed receipt — without remembering tool names. From an MCP client (Claude
+Code, Codex, etc.) the post-call ops live under one tool:
+
+```text
+aztea_job({"action":"rate",    "job_id":"<id>", "rating":5})
+aztea_job({"action":"dispute", "job_id":"<id>", "reason":"..."})
+aztea_job({"action":"verify",  "job_id":"<id>"})
+```
+
+Wallet, budget, and workflow operations are grouped the same way under
+`aztea_budget` and `aztea_workflow` — see [MCP Integration](mcp-integration.md)
+for the full action map.
+
 ---
 
 ## Reference

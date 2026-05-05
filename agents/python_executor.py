@@ -468,15 +468,12 @@ def run(payload: dict) -> dict:
         )
 
     if not _is_safe(code):
-        return {
-            "stdout": "",
-            "stderr": "Blocked: code contains disallowed operations (network, file writes, shell execution).",
-            "exit_code": 1,
-            "timed_out": False,
-            "execution_time_ms": 0,
-            "explanation": "",
-            "variables_captured": {},
-        }
+        # Pre-execution safety block: no interpreter ran, no real work was done.
+        # Return as a structured error so the settlement layer refunds the caller.
+        return _err(
+            "python_executor.blocked_unsafe_code",
+            "Blocked: code contains disallowed operations (network, file writes, shell execution).",
+        )
 
     stdin_data = str(payload.get("stdin", "") or "")
     if len(stdin_data) > 65536:

@@ -430,3 +430,76 @@ def test_auto_hire_propagates_rendered_output_when_format_set(client, monkeypatc
     assert body["rendered_output_format"] == "markdown"
     assert "## Code Review" in body["rendered_output"]
     assert "magic number" in body["rendered_output"]
+
+
+# ── Unit tests for the keyword routing layer ───────────────────────────────
+
+
+def _kw_candidate(slug: str, name: str, *, match=None, block=None):
+    """Build a minimal CandidateAgent for scorer unit tests."""
+    from core.registry import auto_hire as ah
+
+    return ah.CandidateAgent(
+        agent_id=f"agt-{slug}",
+        slug=slug,
+        name=name,
+        description=f"{name} test fixture.",
+        tags=[],
+        category="",
+        price_per_call_usd=0.01,
+        trust_score=50.0,
+        success_rate=1.0,
+        stability_tier="stable",
+        input_schema={},
+        raw={"agent_id": f"agt-{slug}", "call_count": 100},
+        match_keywords=list(match or []),
+        block_keywords=list(block or []),
+    )
+
+
+def test_match_keywords_boost_correct_agent_for_dependency_audit_intent():
+    """Locks in the routing fix: 'audit my npm deps for vulnerabilities'
+    must score dependency_auditor strictly higher than json_schema_validator."""
+    from core.registry import auto_hire as ah
+
+    intent = "Find vulnerabilities in this package.json: {\"axios\":\"0.21.0\"}"
+
+    auditor = _kw_candidate(
+        "dependency_auditor",
+        "Dependency Auditor",
+        match=["vulnerabilities", "package.json", "audit", "dependencies"],
+    )
+    validator = _kw_candidate(
+        "json_schema_validator",
+        "JSON Schema Validator",
+        block=["vulnerabilities", "package.json", "cve"],
+    )
+
+    auditor_score = ah._score_candidate(auditor, intent).score
+    validator_score = ah._score_candidate(validator, intent).score
+
+    assert auditor_score > validator_score, (
+        f"dependency_auditor={auditor_score} must beat "
+        f"json_schema_validator={validator_score} for vulnerability-audit intent"
+    )
+
+
+def test_block_keywords_apply_negative_score():
+    """A block_keyword present in intent should reduce the candidate's score."""
+    from core.registry import auto_hire as ah
+
+    blocked = _kw_candidate(
+        "json_schema_validator",
+        "JSON Schema Validator",
+        block=["vulnerabilities"],
+    )
+    unblocked = _kw_candidate("json_schema_validator", "JSON Schema Validator")
+
+    blocked_score = ah._score_candidate(
+        blocked, "Find vulnerabilities in this manifest"
+    ).score
+    unblocked_score = ah._score_candidate(
+        unblocked, "Find vulnerabilities in this manifest"
+    ).score
+
+    assert blocked_score < unblocked_score

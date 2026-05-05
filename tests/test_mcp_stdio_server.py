@@ -64,7 +64,10 @@ def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
     ]
     tools = bridge.tools()
     names = [tool["name"] for tool in tools]
-    assert names == ["aztea_search", "aztea_describe", "aztea_call", "aztea_do"]
+    # Lazy mode: 4 core lazy tools + 3 always-visible resource-grouped tools.
+    # Order matters: lazy core first, then grouped resource dispatchers.
+    assert names[:4] == ["aztea_search", "aztea_describe", "aztea_call", "aztea_do"]
+    assert set(names[4:]) == {"aztea_job", "aztea_budget", "aztea_workflow"}
     assert tools[0]["annotations"]["readOnlyHint"] is True
     assert tools[2]["annotations"]["readOnlyHint"] is False
 
@@ -248,3 +251,50 @@ def test_mcp_text_formatter_makes_search_results_readable():
     assert "Aztea matches for: review many files" in text
     assert "parallel subtasks" in text
     assert "Workflow hints:" in text
+
+
+def test_aztea_call_forwards_output_format_into_underlying_call(monkeypatch):
+    """Regression: aztea_call(slug=..., arguments={...}, output_format='markdown')
+    used to silently drop output_format. The bridge must merge it into the
+    inner tool_arguments so the registry call attaches `rendered_output`."""
+    monkeypatch.setattr(_MODULE._feature_flags, "LAZY_MCP_SCHEMAS", True)
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    bridge._auth_required = False
+    bridge._entries = [
+        {
+            "agent_id": "agent-1",
+            "tool_name": "linter_agent",
+            "tool": {
+                "name": "linter_agent",
+                "description": "lint",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            },
+        }
+    ]
+
+    real_call_tool = _MODULE.RegistryBridge.call_tool
+    captured: dict = {}
+
+    def _spy_call_tool(self, slug, tool_arguments):
+        # The aztea_call branch recurses with the resolved slug. Capture that
+        # second hop and short-circuit; the first hop (slug='aztea_call')
+        # still goes through the real method.
+        if slug != "aztea_call":
+            captured["slug"] = slug
+            captured["tool_arguments"] = dict(tool_arguments)
+            return True, {"ok": True}
+        return real_call_tool(self, slug, tool_arguments)
+
+    monkeypatch.setattr(_MODULE.RegistryBridge, "call_tool", _spy_call_tool)
+    bridge.call_tool(
+        "aztea_call",
+        {
+            "slug": "linter_agent",
+            "arguments": {"language": "python", "code": "x = 1"},
+            "output_format": "markdown",
+        },
+    )
+    assert captured["slug"] == "linter_agent"
+    assert captured["tool_arguments"]["output_format"] == "markdown"
+    assert captured["tool_arguments"]["code"] == "x = 1"

@@ -388,16 +388,28 @@ def registry_agent_work_history(
 
 def _extract_sync_cache_controls(
     payload: dict[str, Any],
-) -> tuple[dict[str, Any], bool, int]:
+) -> tuple[dict[str, Any], bool | None, int]:
+    """Extract cache controls from a /call body.
+
+    Returns (cleaned_payload, use_cache, cache_ttl_hours).
+
+    `use_cache` is tri-state:
+      - True  → caller explicitly opted in
+      - False → caller explicitly opted out
+      - None  → caller didn't say. The call site defaults to True for any
+                agent flagged cacheable so deterministic builtins (CVE lookup,
+                linter, type_checker, etc.) cache organically without every
+                client having to remember to pass use_cache=True.
+    """
     raw = dict(payload or {})
     raw.pop("output_format", None)  # extracted separately by _extract_output_format
     use_cache_raw = raw.pop("use_cache", None)
     cache_ttl_raw = raw.pop("cache_ttl_hours", None)
     try:
-        use_cache = (
+        use_cache: bool | None = (
             bool(_normalize_optional_bool(use_cache_raw, field_name="use_cache"))
             if use_cache_raw is not None
-            else False
+            else None
         )
     except ValueError as exc:
         raise HTTPException(
@@ -459,6 +471,71 @@ def _decorate_with_rendered_output(
         return response_payload
     response_payload["rendered_output"] = rendered
     response_payload["rendered_output_format"] = output_format
+    return response_payload
+
+
+_POST_CALL_ACTION_DOCS = "https://github.com/AnayGarodia/aztea/blob/main/docs/api-reference.md"
+
+
+def _attach_post_call_actions(
+    response_payload: dict[str, Any],
+    *,
+    job: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Attach a `next_actions` block telling the caller how to rate, dispute,
+    or verify the job. The block lists both the HTTP endpoint and the MCP tool
+    name so SDK / MCP / raw-HTTP callers all get the same hint format.
+
+    The dispute deadline is computed from completed_at + dispute_window_hours.
+    Best-effort: if any field is missing the block still includes the available
+    actions but omits the deadline.
+    """
+    if not isinstance(response_payload, dict):
+        return response_payload
+    job_id = response_payload.get("job_id")
+    if not job_id:
+        return response_payload
+
+    deadline_iso: str | None = None
+    if isinstance(job, dict):
+        completed_at = job.get("completed_at") or job.get("settled_at")
+        window_hours = job.get("dispute_window_hours")
+        if completed_at and window_hours:
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                base = str(completed_at)
+                # SQLite/Postgres ISO strings sometimes lack tz; treat as UTC.
+                dt = datetime.fromisoformat(base.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                deadline_iso = (dt + timedelta(hours=int(window_hours))).isoformat()
+            except (TypeError, ValueError):
+                deadline_iso = None
+
+    actions: dict[str, Any] = {
+        "rate": {
+            "tool": "aztea_rate_job",
+            "endpoint": f"POST /jobs/{job_id}/rating",
+            "args": {"job_id": job_id},
+            "purpose": "Rate the agent's output 1-5 to feed trust/quality signals.",
+        },
+        "dispute": {
+            "tool": "aztea_dispute_job",
+            "endpoint": f"POST /jobs/{job_id}/dispute",
+            "args": {"job_id": job_id},
+            "purpose": "Open a dispute if the output is wrong; clawback escrowed payout.",
+        },
+        "verify": {
+            "tool": "aztea_verify_job",
+            "endpoint": f"GET /jobs/{job_id}/signature",
+            "args": {"job_id": job_id},
+            "purpose": "Fetch the Ed25519-signed receipt to verify provenance.",
+        },
+    }
+    if deadline_iso:
+        actions["dispute"]["deadline_iso"] = deadline_iso
+    response_payload["next_actions"] = actions
     return response_payload
 
 
@@ -990,6 +1067,11 @@ def registry_call(
         and _cache.agent_cacheable(agent)
         and not private_task
     )
+    # Default: cache reads/writes are on whenever the agent is cacheable. Caller
+    # can still opt out explicitly with use_cache=False. The previous opt-in
+    # default left the cache dormant — even repeated CVE lookups never hit.
+    if use_cache is None:
+        use_cache = cache_enabled
     if use_cache and cache_enabled:
         cached_output = _cache.get_cached(
             agent_id, payload, version_token=cache_version_token
@@ -1174,6 +1256,9 @@ def registry_call(
                 )
             response_payload = _decorate_with_rendered_output(
                 response_payload, output_format=requested_output_format
+            )
+            response_payload = _attach_post_call_actions(
+                response_payload, job=completed
             )
             # Always wrap in a consistent envelope so callers can reliably
             # read job_id, status, and output without sniffing the shape.
@@ -1546,6 +1631,7 @@ def registry_call(
     response_payload = _decorate_with_rendered_output(
         response_payload, output_format=requested_output_format
     )
+    response_payload = _attach_post_call_actions(response_payload, job=settled)
     if idempotency_key:
         _idempotency_store(
             caller_owner_id_early, agent_id, idempotency_key, response_payload

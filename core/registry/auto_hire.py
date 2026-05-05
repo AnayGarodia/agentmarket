@@ -57,6 +57,12 @@ class CandidateAgent:
     stability_tier: str
     input_schema: dict[str, Any]
     raw: dict[str, Any]  # full agent record for downstream public_dict()
+    # High-signal vocabulary curated per-agent for routing. `match_keywords` boost
+    # the score when present in the intent; `block_keywords` deduct when present.
+    # Both are case-insensitive substring matches against the raw intent text.
+    # Defaulted because tests construct CandidateAgent positionally.
+    match_keywords: list[str] = field(default_factory=list)
+    block_keywords: list[str] = field(default_factory=list)
 
     @classmethod
     def from_agent_record(cls, record: dict[str, Any]) -> "CandidateAgent":
@@ -72,6 +78,16 @@ class CandidateAgent:
             success_rate=_safe_float(record.get("success_rate"), 0.0),
             stability_tier=str(record.get("stability_tier") or "").strip().lower(),
             input_schema=dict(record.get("input_schema") or {}),
+            match_keywords=[
+                str(k).lower().strip()
+                for k in (record.get("match_keywords") or [])
+                if str(k).strip()
+            ],
+            block_keywords=[
+                str(k).lower().strip()
+                for k in (record.get("block_keywords") or [])
+                if str(k).strip()
+            ],
             raw=record,
         )
 
@@ -345,6 +361,21 @@ def _score_candidate(
     if c.raw.get("codex_recommended"):
         score += 5
         reasons.append("recommended")
+
+    # Curated routing vocabulary — strongest natural-language signal.
+    # match_keywords push the agent toward intents it should serve; block_keywords
+    # push it away from intents it should NOT serve (e.g. json_schema_validator
+    # should not match "package.json vulnerabilities").
+    if c.match_keywords:
+        hits = [kw for kw in c.match_keywords if kw and kw in intent_lower]
+        if hits:
+            score += min(60, len(hits) * 20)
+            reasons.append(f"keyword match: {','.join(hits[:3])}")
+    if c.block_keywords:
+        blocks = [kw for kw in c.block_keywords if kw and kw in intent_lower]
+        if blocks:
+            score -= min(60, len(blocks) * 30)
+            reasons.append(f"blocked by: {','.join(blocks[:3])}")
 
     # Schema-shape match — the strongest disambiguator when the caller
     # provides an explicit input payload. We don't validate types

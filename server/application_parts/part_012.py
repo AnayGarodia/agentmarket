@@ -383,6 +383,43 @@ class _AutoHireRequestBody(BaseModel):
     output_format: str | None = None
 
 
+@lru_cache(maxsize=1)
+def _builtin_routing_overlay() -> dict[str, dict[str, list[str]]]:
+    """Map agent_id → {match_keywords, block_keywords} from builtin specs.
+
+    Cached because builtin specs are static at process startup. Recompute by
+    bouncing the process; do not mutate at runtime.
+    """
+    overlay: dict[str, dict[str, list[str]]] = {}
+    for spec in _builtin_specs.builtin_agent_specs():
+        agent_id = str(spec.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        match_kw = spec.get("match_keywords") or []
+        block_kw = spec.get("block_keywords") or []
+        if match_kw or block_kw:
+            overlay[agent_id] = {
+                "match_keywords": list(match_kw),
+                "block_keywords": list(block_kw),
+            }
+    return overlay
+
+
+def _merge_routing_overlay(
+    record: dict[str, Any], overlay: dict[str, dict[str, list[str]]]
+) -> dict[str, Any]:
+    agent_id = str(record.get("agent_id") or "").strip()
+    extra = overlay.get(agent_id)
+    if not extra:
+        return record
+    merged = dict(record)
+    if "match_keywords" not in merged or not merged.get("match_keywords"):
+        merged["match_keywords"] = list(extra.get("match_keywords") or [])
+    if "block_keywords" not in merged or not merged.get("block_keywords"):
+        merged["block_keywords"] = list(extra.get("block_keywords") or [])
+    return merged
+
+
 @app.post(
     "/registry/agents/auto-hire",
     response_model=core_models.DynamicObjectResponse,
@@ -417,8 +454,14 @@ def registry_auto_hire(
 
     # 1. Build candidate set from the live, public agent registry.
     raw_agents = _mcp_active_agents()
+    # Overlay routing vocabulary from builtin specs onto DB records. The agents
+    # table does not persist match_keywords/block_keywords; the spec is the
+    # source of truth for those routing hints.
+    routing_overlay = _builtin_routing_overlay()
     candidates = [
-        _auto_hire.CandidateAgent.from_agent_record(record)
+        _auto_hire.CandidateAgent.from_agent_record(
+            _merge_routing_overlay(record, routing_overlay)
+        )
         for record in raw_agents
         if _caller_can_access_agent(caller, record)
     ]

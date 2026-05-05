@@ -852,7 +852,292 @@ _TOOLS: list[dict[str, Any]] = [
     },
 ]
 
-META_TOOL_NAMES: frozenset[str] = frozenset(t["name"] for t in _TOOLS)
+# ─── Resource-grouped tools ─────────────────────────────────────────────────
+#
+# These three tools collapse 22 of the underlying meta-tools into a small,
+# always-visible surface. Each takes an `action` enum that the dispatcher maps
+# to the underlying meta-tool. The action's required arguments live alongside
+# `action` in the same call — no nesting. Token cost is far lower than
+# exposing 22 distinct tools, while every capability stays reachable.
+#
+# Mapping (grouped → underlying):
+#   aztea_job(action=rate)           → aztea_rate_job
+#   aztea_job(action=dispute)        → aztea_dispute_job
+#   aztea_job(action=verify)         → aztea_verify_job
+#   aztea_job(action=verify_output)  → aztea_verify_output
+#   aztea_job(action=cancel)         → aztea_cancel_job
+#   aztea_job(action=status)         → aztea_job_status
+#   aztea_job(action=follow)         → aztea_follow_job
+#   aztea_job(action=clarify)        → aztea_clarify
+#   aztea_job(action=examples)       → aztea_get_examples
+#
+#   aztea_budget(action=balance)        → aztea_wallet_balance
+#   aztea_budget(action=estimate)       → aztea_estimate_cost
+#   aztea_budget(action=topup_url)      → aztea_topup_url
+#   aztea_budget(action=set_daily_limit)→ aztea_set_daily_limit
+#   aztea_budget(action=set_session_budget) → aztea_set_session_budget
+#   aztea_budget(action=session_summary)→ aztea_session_summary
+#   aztea_budget(action=spend_summary)  → aztea_spend_summary
+#   aztea_budget(action=retention)      → aztea_data_retention_policy
+#
+#   aztea_workflow(action=hire_async)   → aztea_hire_async
+#   aztea_workflow(action=hire_batch)   → aztea_hire_batch
+#   aztea_workflow(action=batch_status) → aztea_batch_status
+#   aztea_workflow(action=run_pipeline) → aztea_run_pipeline
+#   aztea_workflow(action=pipeline_status)→ aztea_pipeline_status
+#   aztea_workflow(action=run_recipe)   → aztea_run_recipe
+#   aztea_workflow(action=list_pipelines)→ aztea_list_pipelines
+#   aztea_workflow(action=list_recipes) → aztea_list_recipes
+#   aztea_workflow(action=compare)      → aztea_compare_agents
+#   aztea_workflow(action=compare_status)→ aztea_compare_status
+#   aztea_workflow(action=compare_select)→ aztea_select_compare_winner
+
+_GROUPED_DISPATCH: dict[str, dict[str, str]] = {
+    "aztea_job": {
+        "rate": "aztea_rate_job",
+        "dispute": "aztea_dispute_job",
+        "verify": "aztea_verify_job",
+        "verify_output": "aztea_verify_output",
+        "cancel": "aztea_cancel_job",
+        "status": "aztea_job_status",
+        "follow": "aztea_follow_job",
+        "clarify": "aztea_clarify",
+        "examples": "aztea_get_examples",
+    },
+    "aztea_budget": {
+        "balance": "aztea_wallet_balance",
+        "estimate": "aztea_estimate_cost",
+        "topup_url": "aztea_topup_url",
+        "set_daily_limit": "aztea_set_daily_limit",
+        "set_session_budget": "aztea_set_session_budget",
+        "session_summary": "aztea_session_summary",
+        "spend_summary": "aztea_spend_summary",
+        "retention": "aztea_data_retention_policy",
+    },
+    "aztea_workflow": {
+        "hire_async": "aztea_hire_async",
+        "hire_batch": "aztea_hire_batch",
+        "batch_status": "aztea_batch_status",
+        "run_pipeline": "aztea_run_pipeline",
+        "pipeline_status": "aztea_pipeline_status",
+        "run_recipe": "aztea_run_recipe",
+        "list_pipelines": "aztea_list_pipelines",
+        "list_recipes": "aztea_list_recipes",
+        "compare": "aztea_compare_agents",
+        "compare_status": "aztea_compare_status",
+        "compare_select": "aztea_select_compare_winner",
+    },
+}
+
+GROUPED_TOOL_NAMES: frozenset[str] = frozenset(_GROUPED_DISPATCH.keys())
+
+
+_GROUPED_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "aztea_job",
+        "description": (
+            "Post-call operations on an Aztea job. Pick action by what you need:\n"
+            "  • rate(job_id, rating[1-5], comment?) — rate the agent's output, feeds trust signals.\n"
+            "  • dispute(job_id, reason, evidence?) — open a dispute; clawback escrow.\n"
+            "  • verify(job_id) — fetch the Ed25519-signed receipt to prove provenance.\n"
+            "  • verify_output(job_id, accept|reject, reason?) — accept/reject inside the verification window.\n"
+            "  • cancel(job_id) — abort a pending or running job and refund the pre-charge.\n"
+            "  • status(job_id) — get current state of an async job.\n"
+            "  • follow(job_id, max_wait_seconds?) — long-poll until the job terminates.\n"
+            "  • clarify(job_id, response) — answer a clarification request from the agent.\n"
+            "  • examples(slug, limit?) — fetch recent public work examples for an agent slug."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "rate",
+                        "dispute",
+                        "verify",
+                        "verify_output",
+                        "cancel",
+                        "status",
+                        "follow",
+                        "clarify",
+                        "examples",
+                    ],
+                    "description": "Which post-call operation to run.",
+                },
+                "job_id": {"type": "string", "description": "Job ID for job-targeted actions."},
+                "rating": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5,
+                    "description": "rate: integer 1-5.",
+                },
+                "comment": {"type": "string", "description": "rate: optional free-text feedback."},
+                "reason": {"type": "string", "description": "dispute / verify_output reason."},
+                "evidence": {"type": "string", "description": "dispute: optional evidence text."},
+                "decision": {
+                    "type": "string",
+                    "enum": ["accept", "reject"],
+                    "description": "verify_output: accept or reject the agent's output.",
+                },
+                "response": {
+                    "type": "string",
+                    "description": "clarify: free-text response to the agent's question.",
+                },
+                "slug": {"type": "string", "description": "examples: agent slug whose examples to fetch."},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "examples: max examples to return (default 5).",
+                },
+                "max_wait_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 300,
+                    "description": "follow: long-poll cap.",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+        },
+    },
+    {
+        "name": "aztea_budget",
+        "description": (
+            "Wallet, spend, and budget operations. Pick action by what you need:\n"
+            "  • balance — current wallet balance + recent transactions.\n"
+            "  • estimate(slug, input?) — pre-call cost estimate for a specific agent.\n"
+            "  • topup_url(amount_cents) — Stripe Checkout URL to add credit ($1-$500).\n"
+            "  • set_daily_limit(limit_cents) — rolling 24h spend cap (0 to clear).\n"
+            "  • set_session_budget(budget_cents) — soft cap for this MCP session (0 to clear).\n"
+            "  • session_summary — today's spend + remaining balance.\n"
+            "  • spend_summary(period?) — breakdown over 1d|7d|30d|90d.\n"
+            "  • retention — data retention policy for caller-supplied inputs/outputs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "balance",
+                        "estimate",
+                        "topup_url",
+                        "set_daily_limit",
+                        "set_session_budget",
+                        "session_summary",
+                        "spend_summary",
+                        "retention",
+                    ],
+                    "description": "Which wallet/budget operation to run.",
+                },
+                "slug": {"type": "string", "description": "estimate: agent slug to estimate."},
+                "input": {
+                    "type": "object",
+                    "description": "estimate: optional input payload for variable-priced agents.",
+                    "additionalProperties": True,
+                },
+                "amount_cents": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 50000,
+                    "description": "topup_url: amount in cents.",
+                },
+                "limit_cents": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000,
+                    "description": "set_daily_limit: cents (0 to clear).",
+                },
+                "budget_cents": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "set_session_budget: cents (0 to clear).",
+                },
+                "period": {
+                    "type": "string",
+                    "enum": ["1d", "7d", "30d", "90d"],
+                    "description": "spend_summary: time window (default 7d).",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+        },
+    },
+    {
+        "name": "aztea_workflow",
+        "description": (
+            "Multi-call orchestration: async, batch, compare, pipelines, recipes. Pick action:\n"
+            "  • hire_async(slug, input, ...) — fire-and-poll an agent for long jobs.\n"
+            "  • hire_batch(jobs[]) — hire multiple agents in parallel.\n"
+            "  • batch_status(batch_id) — progress of a batch.\n"
+            "  • run_pipeline(pipeline_id, input_payload, ...) — execute a saved pipeline.\n"
+            "  • pipeline_status(run_id) — pipeline run progress.\n"
+            "  • run_recipe(recipe_id, input_payload, ...) — execute a curated recipe.\n"
+            "  • list_pipelines — saved pipeline templates available to you.\n"
+            "  • list_recipes — curated recipe catalog.\n"
+            "  • compare(intent, slugs[]) — run the same task on multiple agents.\n"
+            "  • compare_status(compare_id) — fetch compare-run progress.\n"
+            "  • compare_select(compare_id, winner_slug) — finalize the comparison."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "hire_async",
+                        "hire_batch",
+                        "batch_status",
+                        "run_pipeline",
+                        "pipeline_status",
+                        "run_recipe",
+                        "list_pipelines",
+                        "list_recipes",
+                        "compare",
+                        "compare_status",
+                        "compare_select",
+                    ],
+                    "description": "Which workflow operation to run.",
+                },
+                "slug": {"type": "string", "description": "hire_async: target agent slug."},
+                "slugs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "compare: agent slugs to compare.",
+                },
+                "intent": {"type": "string", "description": "compare: natural-language intent."},
+                "input": {
+                    "type": "object",
+                    "description": "hire_async: input payload.",
+                    "additionalProperties": True,
+                },
+                "input_payload": {
+                    "type": "object",
+                    "description": "run_pipeline / run_recipe: input payload.",
+                    "additionalProperties": True,
+                },
+                "jobs": {
+                    "type": "array",
+                    "items": {"type": "object", "additionalProperties": True},
+                    "description": "hire_batch: list of {slug, input} job specs.",
+                },
+                "pipeline_id": {"type": "string", "description": "run_pipeline target."},
+                "recipe_id": {"type": "string", "description": "run_recipe target."},
+                "batch_id": {"type": "string", "description": "batch_status target."},
+                "run_id": {"type": "string", "description": "pipeline_status target."},
+                "compare_id": {"type": "string", "description": "compare_status / compare_select target."},
+                "winner_slug": {"type": "string", "description": "compare_select: chosen agent slug."},
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+        },
+    },
+]
+
+
+META_TOOL_NAMES: frozenset[str] = frozenset(t["name"] for t in _TOOLS) | GROUPED_TOOL_NAMES
 
 _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_wallet_balance": _annotations(read_only=True, idempotent=True),
@@ -888,12 +1173,39 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_run_pipeline": _annotations(read_only=False, idempotent=False),
     "aztea_pipeline_status": _annotations(read_only=True, idempotent=False),
     "aztea_run_recipe": _annotations(read_only=False, idempotent=False),
+    # Grouped tools dispatch to varied actions; mark as non-read-only.
+    "aztea_job": _annotations(read_only=False, idempotent=False),
+    "aztea_budget": _annotations(read_only=False, idempotent=True),
+    "aztea_workflow": _annotations(read_only=False, idempotent=False),
 }
 
 
 def get_meta_tools() -> list[dict[str, Any]]:
+    """All meta-tools surfaced to the MCP client.
+
+    Grouped tools (aztea_job/budget/workflow) come first because they are the
+    expected entry point; the underlying singular tools remain reachable for
+    callers that already know the exact name.
+    """
     enriched: list[dict[str, Any]] = []
-    for tool in _TOOLS:
+    for tool in _GROUPED_TOOLS + _TOOLS:
+        item = dict(tool)
+        item["annotations"] = dict(
+            _META_TOOL_ANNOTATIONS.get(item["name"], _annotations(read_only=False))
+        )
+        enriched.append(item)
+    return enriched
+
+
+def always_visible_tools() -> list[dict[str, Any]]:
+    """Subset of meta-tools that should be visible even in lazy MCP mode.
+
+    Returns the three grouped resource dispatchers — they cover 22 of the 28
+    underlying singular tools at low token cost. The remaining singular tools
+    stay discoverable through aztea_search.
+    """
+    enriched: list[dict[str, Any]] = []
+    for tool in _GROUPED_TOOLS:
         item = dict(tool)
         item["annotations"] = dict(
             _META_TOOL_ANNOTATIONS.get(item["name"], _annotations(read_only=False))
@@ -930,6 +1242,36 @@ def call_meta_tool(
         _CLIENT_ID_HEADER: _DEFAULT_CLIENT_ID,
     }
     base = base_url.rstrip("/")
+
+    # Resource-grouped tools dispatch by `action` to an underlying meta-tool.
+    # Strip `action` from the args before recursing so the underlying handler
+    # receives only the fields it expects.
+    if tool_name in GROUPED_TOOL_NAMES:
+        action = str(arguments.get("action") or "").strip()
+        action_map = _GROUPED_DISPATCH.get(tool_name, {})
+        if not action:
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": f"`action` is required for {tool_name}.",
+                "allowed_actions": sorted(action_map.keys()),
+            }
+        underlying = action_map.get(action)
+        if not underlying:
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": f"Unknown action '{action}' for {tool_name}.",
+                "allowed_actions": sorted(action_map.keys()),
+            }
+        sub_args = {k: v for k, v in arguments.items() if k != "action"}
+        return call_meta_tool(
+            underlying,
+            sub_args,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            session=session,
+            session_state=session_state,
+        )
 
     # aztea_set_session_budget: pure client-side state change, no API call needed
     if tool_name == "aztea_set_session_budget":

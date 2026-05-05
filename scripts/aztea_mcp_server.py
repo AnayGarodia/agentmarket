@@ -930,11 +930,16 @@ class RegistryBridge:
                 return [_AUTH_TOOL]
             registry_tools = [dict(entry["tool"]) for entry in self._entries]
         if _feature_flags.LAZY_MCP_SCHEMAS:
+            # Lazy mode: 4 core tools + 3 always-visible resource-grouped tools.
+            # The grouped tools (aztea_job/budget/workflow) cover post-call
+            # operations, wallet/budget, and workflow orchestration without
+            # bloating the tool list with 22 separate names.
             return [
                 _LAZY_SEARCH_TOOL,
                 _LAZY_DESCRIBE_TOOL,
                 _LAZY_CALL_TOOL,
                 _LAZY_DO_TOOL,
+                *meta_tools.always_visible_tools(),
             ]
         return meta_tools.get_meta_tools() + registry_tools
 
@@ -1442,6 +1447,15 @@ class RegistryBridge:
                     "error": "INVALID_INPUT",
                     "message": "arguments must be an object.",
                 }
+            # Forward `output_format` from the lazy aztea_call wrapper into the
+            # underlying call so the renderer can attach `rendered_output`.
+            # Backend expects this field at the same level as the agent fields,
+            # never on the outer envelope; merging it here is the only way the
+            # MCP-side hint reaches the registry call site.
+            output_format = arguments.get("output_format")
+            if output_format and "output_format" not in tool_arguments:
+                tool_arguments = dict(tool_arguments)
+                tool_arguments["output_format"] = output_format
             return self.call_tool(slug, tool_arguments)
 
         resolved_entry = self._catalog_entry(tool_name)

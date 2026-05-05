@@ -684,3 +684,89 @@ def test_cancel_job_is_in_meta_tool_names_and_schema():
     schema = tools["aztea_cancel_job"]["input_schema"]
     assert "job_id" in schema["properties"]
     assert schema["required"] == ["job_id"]
+
+
+# ── Resource-grouped tools (aztea_job / aztea_budget / aztea_workflow) ─────
+
+
+def test_grouped_tools_listed_first_in_get_meta_tools():
+    tools = meta_tools.get_meta_tools()
+    first_three_names = [t["name"] for t in tools[:3]]
+    assert set(first_three_names) == {"aztea_job", "aztea_budget", "aztea_workflow"}
+
+
+def test_always_visible_returns_only_three_grouped_tools():
+    visible = meta_tools.always_visible_tools()
+    names = sorted(t["name"] for t in visible)
+    assert names == ["aztea_budget", "aztea_job", "aztea_workflow"]
+
+
+def test_grouped_tool_names_in_meta_tool_names():
+    for name in ("aztea_job", "aztea_budget", "aztea_workflow"):
+        assert name in meta_tools.META_TOOL_NAMES
+
+
+def test_grouped_dispatch_routes_rate_action_to_underlying(monkeypatch):
+    """aztea_job(action='rate', ...) must dispatch to aztea_rate_job and strip
+    `action` from the args before invoking it."""
+    captured: dict[str, object] = {}
+
+    real_call = meta_tools.call_meta_tool
+
+    def _spy(tool_name, arguments, **kwargs):
+        # Record the inner call (after action stripping) and short-circuit.
+        if tool_name == "aztea_rate_job":
+            captured["tool_name"] = tool_name
+            captured["arguments"] = dict(arguments)
+            return True, {"ok": True}
+        # Fall through to real dispatcher for the grouped wrapper itself.
+        return real_call(tool_name, arguments, **kwargs)
+
+    monkeypatch.setattr(meta_tools, "call_meta_tool", _spy)
+    ok, _ = meta_tools.call_meta_tool(
+        "aztea_job",
+        {"action": "rate", "job_id": "job_42", "rating": 5, "comment": "great"},
+        base_url="https://aztea.test",
+        api_key="key",
+        timeout=5,
+        session=None,
+        session_state={},
+    )
+    assert ok is True
+    assert captured["tool_name"] == "aztea_rate_job"
+    args = captured["arguments"]
+    assert "action" not in args  # stripped before dispatch
+    assert args["job_id"] == "job_42"
+    assert args["rating"] == 5
+    assert args["comment"] == "great"
+
+
+def test_grouped_dispatch_rejects_unknown_action():
+    ok, result = meta_tools.call_meta_tool(
+        "aztea_workflow",
+        {"action": "teleport"},
+        base_url="https://aztea.test",
+        api_key="key",
+        timeout=5,
+        session=None,
+        session_state={},
+    )
+    assert ok is False
+    assert result.get("error") == "INVALID_INPUT"
+    assert "allowed_actions" in result
+    assert "hire_async" in result["allowed_actions"]
+
+
+def test_grouped_dispatch_requires_action():
+    ok, result = meta_tools.call_meta_tool(
+        "aztea_budget",
+        {},
+        base_url="https://aztea.test",
+        api_key="key",
+        timeout=5,
+        session=None,
+        session_state={},
+    )
+    assert ok is False
+    assert result.get("error") == "INVALID_INPUT"
+    assert "balance" in result["allowed_actions"]

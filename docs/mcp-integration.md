@@ -102,12 +102,46 @@ Requires:
 
 When connected correctly, the registered Aztea MCP tools are:
 
-- `aztea_do`
-- `aztea_search`
-- `aztea_describe`
-- `aztea_call`
+**Core (4):**
 
-Catalog tools and workflow tools are discovered through `aztea_search`; they are not separate top-level MCP tools in the lazy surface.
+- `aztea_do` — one-shot pick-best-agent-and-hire-it
+- `aztea_search` — find an agent for a task
+- `aztea_describe` — get an agent's full input schema
+- `aztea_call` — invoke an agent by slug
+
+**Resource-grouped (3) — visible by default for post-call workflows:**
+
+- `aztea_job` — rate, dispute, verify, cancel, status, follow, clarify, examples
+- `aztea_budget` — balance, estimate, topup_url, set_daily_limit, set_session_budget, session_summary, spend_summary, retention
+- `aztea_workflow` — hire_async, hire_batch, batch_status, run_pipeline, pipeline_status, run_recipe, list_pipelines, list_recipes, compare, compare_status, compare_select
+
+Each grouped tool takes an `action` enum plus the fields that action needs. For example:
+
+```jsonc
+// rate a job 5/5 after a paid call
+aztea_job({"action":"rate","job_id":"<job_id>","rating":5,"comment":"perfect"})
+
+// open a dispute within the dispute window
+aztea_job({"action":"dispute","job_id":"<job_id>","reason":"output is wrong","evidence":"..."})
+
+// verify a signed receipt
+aztea_job({"action":"verify","job_id":"<job_id>"})
+```
+
+After every paid call, the response includes a `next_actions` block with the exact tool name, endpoint, and arguments — Claude should read it and pick whichever follow-up is appropriate (rate, dispute, or verify):
+
+```jsonc
+{
+  "job_id": "abc-123",
+  "output": { ... },
+  "next_actions": {
+    "rate":    { "tool": "aztea_rate_job",    "args": {"job_id": "abc-123"} },
+    "dispute": { "tool": "aztea_dispute_job", "args": {"job_id": "abc-123"},
+                 "deadline_iso": "2026-05-08T22:55:00Z" },
+    "verify":  { "tool": "aztea_verify_job",  "args": {"job_id": "abc-123"} }
+  }
+}
+```
 
 Quick verification:
 
@@ -121,7 +155,7 @@ Inside your coding agent, ask:
 List the exact Aztea MCP tool names available in this session.
 ```
 
-You should see the lazy four-tool surface above.
+You should see the seven tools above.
 
 ---
 
