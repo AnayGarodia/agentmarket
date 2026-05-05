@@ -1,17 +1,16 @@
-// OWNS: global polling state — agents list, wallet balance, jobs, runs (20s refresh)
+// OWNS: global state — agents list, wallet balance, jobs, runs
 // NOT OWNS: auth/session state (AuthContext), individual job detail (fetched per-page)
 //
 // INVARIANTS:
-// - polling interval is 20s — don't lower without checking server rate limits
 // - wallet balance here is for display only; always re-fetch before charging
+// - SSE /jobs/events is the primary update path; 60s poll is reconciliation only
 //
 // DECISIONS:
-// - jobs + runs fetched on the same 20s tick to keep sidebar badges in sync;
+// - jobs + runs fetched on the same poll tick to keep sidebar badges in sync;
 //   splitting to different intervals caused visible count inconsistency
+// - SSE fan-out in _record_job_event covers both caller and agent owner IDs so
+//   workers see their job queue update in real time too
 // - useRef for interval id (not useState) to avoid re-renders on every tick
-//
-// KNOWN DEBT:
-// - no granular invalidation — every poll refetches all agents even if unchanged
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { fetchAgents, fetchWalletMe, fetchRuns, fetchJobs } from '../api'
@@ -111,9 +110,57 @@ export function MarketProvider({ apiKey, children }) {
     }
   }, [apiKey, reportRefreshError])
 
+  // Merge a single job event into the jobs list without a full refetch.
+  const applyJobEvent = useCallback((event) => {
+    const jobId = event?.job_id
+    if (!jobId) return
+    setJobs(prev => {
+      const idx = prev.findIndex(j => j.job_id === jobId)
+      if (idx === -1) {
+        // New job not yet in list — trigger a reconciliation fetch.
+        fetchJobs(apiKey, { limit: 50 }).then(r => setJobs(r.jobs ?? [])).catch(() => {})
+        return prev
+      }
+      const updated = [...prev]
+      updated[idx] = { ...updated[idx], status: event.event_type?.replace('job.', '') ?? updated[idx].status }
+      return updated
+    })
+    // Wallet balance may have changed (charge or refund settled); re-fetch it.
+    fetchWalletMe(apiKey).then(setWallet).catch(() => {})
+  }, [apiKey])
+
+  // Open SSE connection for real-time job updates; fall back to 60s poll.
+  useEffect(() => {
+    if (!apiKey) return
+    const url = `/jobs/events?key=${encodeURIComponent(apiKey)}`
+    let es = null
+    let retryTimer = null
+    let closed = false
+
+    const connect = () => {
+      if (closed) return
+      es = new EventSource(url)
+      es.onmessage = (e) => {
+        try { applyJobEvent(JSON.parse(e.data)) } catch (_) {}
+      }
+      es.onerror = () => {
+        es.close()
+        if (!closed) retryTimer = setTimeout(connect, 5000)
+      }
+    }
+
+    connect()
+    return () => {
+      closed = true
+      clearTimeout(retryTimer)
+      if (es) es.close()
+    }
+  }, [apiKey, applyJobEvent])
+
   useEffect(() => {
     refresh().finally(() => setLoading(false))
-    const id = setInterval(backgroundPoll, 20000)
+    // 60s reconciliation poll — SSE keeps jobs current between ticks.
+    const id = setInterval(backgroundPoll, 60000)
     return () => clearInterval(id)
   }, [refresh, backgroundPoll])
 

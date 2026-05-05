@@ -1,0 +1,42 @@
+# docker-compose.postgres.yml — run the test suite against PostgreSQL 16.
+#
+# Usage:
+#   make test-postgres
+# or manually:
+#   docker compose -f docker-compose.postgres.yml up --abort-on-container-exit --exit-code-from tests
+#
+# The `tests` container inherits the same Python image as `api`, so the full
+# test suite runs against a live Postgres instance. This is the only way to
+# catch Postgres-specific bugs (FOR UPDATE semantics, RETURNING differences,
+# placeholder quoting, lock ordering) before they reach aztea.ai.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aztea_test
+      POSTGRES_USER: aztea
+      POSTGRES_PASSWORD: aztea_test_pw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aztea -d aztea_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  tests:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://aztea:aztea_test_pw@postgres/aztea_test
+      API_KEY: test_admin_key_for_pg_suite
+      SERVER_BASE_URL: http://localhost:8000
+      ALLOW_PRIVATE_OUTBOUND_URLS: "1"
+    command: >
+      python -m pytest tests/
+        --ignore=tests/test_sdk_contract.py
+        -q
+        --tb=short
+        -x
+    # Exit immediately when tests container finishes; don't leave postgres running.
+    restart: "no"

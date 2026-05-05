@@ -209,23 +209,39 @@ export default function AgentDetailPage() {
     return buckets
   }, [workHistory])
 
+  function _cleanValidationDetail(detail) {
+    // oneOf "valid under each of" — user filled two mutually-exclusive branches
+    if (detail.includes('is valid under each of')) {
+      const keys = [...detail.matchAll(/'required':\s*\['(\w+)'\]/g)].map(m => m[1])
+      if (keys.length > 0) {
+        return `Provide only one of: ${keys.join(' or ')}. Fill in one and leave the other empty.`
+      }
+      return 'Multiple input methods were provided. Fill in only one and leave the others empty.'
+    }
+    // Pydantic/jsonschema dump starting with the raw payload — strip it
+    if (detail.startsWith('Input validation failed:')) {
+      return 'Some fields are missing or have invalid values. Check the field descriptions and try again.'
+    }
+    return detail
+  }
+
   function extractErrorMessage(body, status) {
     if (!body) return `Call failed (HTTP ${status})`
-    if (typeof body === 'string') return body
+    if (typeof body === 'string') return _cleanValidationDetail(body)
     if (typeof body.message === 'string' && body.message) {
       const errors = body.data?.errors
       if (Array.isArray(errors) && errors.length > 0) {
         const sub = errors[0]?.msg ?? errors[0]?.message ?? null
-        if (sub) return sub.replace(/^Value error,\s*/i, '')
+        if (sub) return _cleanValidationDetail(sub.replace(/^Value error,\s*/i, ''))
       }
-      return body.message
+      return _cleanValidationDetail(body.message)
     }
-    if (typeof body.detail === 'string') return body.detail
+    if (typeof body.detail === 'string') return _cleanValidationDetail(body.detail)
     if (Array.isArray(body.detail)) {
       const first = body.detail[0]
-      if (first?.msg) return first.msg
+      if (first?.msg) return _cleanValidationDetail(first.msg)
     }
-    if (typeof body.error === 'string') return body.error
+    if (typeof body.error === 'string') return _cleanValidationDetail(body.error)
     return `Call failed (HTTP ${status})`
   }
 

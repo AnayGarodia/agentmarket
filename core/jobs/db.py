@@ -382,6 +382,38 @@ def unsubscribe_job_messages(job_id: str, subscriber: queue.Queue) -> None:
             _JOB_MESSAGE_SUBSCRIBERS.pop(job_id, None)
 
 
+# ---------------------------------------------------------------------------
+# User-level job event pub/sub — keyed by owner_id, feeds /jobs/events SSE
+# ---------------------------------------------------------------------------
+
+_USER_JOB_EVENT_SUBSCRIBERS_LOCK = threading.Lock()
+_USER_JOB_EVENT_SUBSCRIBERS: dict[str, set[queue.Queue]] = {}
+
+
+def publish_user_job_event(owner_id: str, event: dict) -> None:
+    with _USER_JOB_EVENT_SUBSCRIBERS_LOCK:
+        subscribers = list(_USER_JOB_EVENT_SUBSCRIBERS.get(owner_id, set()))
+    for subscriber in subscribers:
+        subscriber.put_nowait(event)
+
+
+def subscribe_user_job_events(owner_id: str) -> queue.Queue:
+    subscriber: queue.Queue = queue.Queue()
+    with _USER_JOB_EVENT_SUBSCRIBERS_LOCK:
+        _USER_JOB_EVENT_SUBSCRIBERS.setdefault(owner_id, set()).add(subscriber)
+    return subscriber
+
+
+def unsubscribe_user_job_events(owner_id: str, subscriber: queue.Queue) -> None:
+    with _USER_JOB_EVENT_SUBSCRIBERS_LOCK:
+        subscribers = _USER_JOB_EVENT_SUBSCRIBERS.get(owner_id)
+        if subscribers is None:
+            return
+        subscribers.discard(subscriber)
+        if not subscribers:
+            _USER_JOB_EVENT_SUBSCRIBERS.pop(owner_id, None)
+
+
 def _jobs_table_exists(conn: _db.DbConnection) -> bool:
     if _db.IS_POSTGRES:
         row = conn.execute(

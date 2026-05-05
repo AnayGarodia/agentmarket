@@ -476,6 +476,57 @@ def jobs_message_stream(
     )
 
 
+_USER_EVENTS_HEARTBEAT_SECONDS = 25
+
+
+@app.get(
+    "/jobs/events",
+    response_model=str,
+    responses={
+        200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}},
+        **_error_responses(401, 429, 500),
+    },
+    summary="Real-time job event feed for the authenticated user",
+)
+@limiter.limit("10/minute")
+def jobs_user_event_stream(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> StreamingResponse:
+    """SSE feed that emits a job event object every time any of the caller's
+    jobs change state (created, claimed, completed, failed, etc.).  The client
+    can use this to keep the jobs list in sync without polling every 20 s.
+
+    Each SSE data line is a JSON-encoded job_event row.  The stream stays open
+    until the client disconnects; a comment heartbeat fires every 25 s so
+    proxies don't close the connection.
+    """
+    owner_id: str = caller["owner_id"]
+
+    def _iter_user_events():
+        subscriber = jobs.subscribe_user_job_events(owner_id)
+        try:
+            yield ": heartbeat\n\n"
+            while True:
+                try:
+                    event = subscriber.get(timeout=_USER_EVENTS_HEARTBEAT_SECONDS)
+                except Empty:
+                    yield ": heartbeat\n\n"
+                    continue
+                try:
+                    data = json.dumps(event, default=str)
+                except (TypeError, ValueError):
+                    continue
+                yield f"data: {data}\n\n"
+        finally:
+            jobs.unsubscribe_user_job_events(owner_id, subscriber)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(
+        _iter_user_events(), media_type="text/event-stream", headers=headers
+    )
+
+
 # ---------------------------------------------------------------------------
 # Reputation + operations routes
 # ---------------------------------------------------------------------------

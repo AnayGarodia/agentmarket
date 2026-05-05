@@ -1,5 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { motion, AnimatePresence } from 'motion/react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import Button from '../../ui/Button'
 import Segmented from '../../ui/Segmented'
 import { Zap, Radio, Lock, Unlock } from 'lucide-react'
@@ -14,22 +13,17 @@ const MODE_OPTIONS = [
 function estimateCost(variablePricing, payload) {
   if (!variablePricing) return null
   const { model, field, field_type, tiers, rate_usd, min_usd } = variablePricing
-
   const raw = payload?.[field]
   if (raw == null || raw === '') return null
 
   let units
   if (field_type === 'array') {
-    if (Array.isArray(raw)) {
-      units = raw.filter(Boolean).length
-    } else {
-      units = String(raw).split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length
-    }
+    units = Array.isArray(raw) ? raw.filter(Boolean).length
+      : String(raw).split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length
   } else {
     units = parseInt(raw, 10)
     if (isNaN(units) || units <= 0) return null
   }
-
   if (units <= 0) return null
 
   if (model === 'tiered') {
@@ -41,7 +35,6 @@ function estimateCost(variablePricing, payload) {
   return null
 }
 
-// Support both legacy {fields:[]} format and standard JSON Schema {properties:{}}
 function deriveFields(schema) {
   if (Array.isArray(schema?.fields) && schema.fields.length > 0) return schema.fields
   if (!schema?.properties) return []
@@ -58,10 +51,10 @@ function deriveFields(schema) {
       name, label, type,
       options: def.enum,
       required: required.has(name),
-      placeholder: def.example ?? def.examples?.[0] ?? (def.type === 'array' ? 'val1, val2, val3' : ''),
+      placeholder: def.example ?? def.examples?.[0] ?? '',
       hint: def.description,
       transform: ['ticker', 'symbol'].includes(name) ? 'uppercase' : undefined,
-      default: def.default ?? (def.type === 'boolean' ? false : ''),
+      default: def.default ?? (def.type === 'array' ? [] : def.type === 'boolean' ? false : ''),
       max_length: def.maxLength,
       min: def.minimum,
       max: def.maximum,
@@ -70,76 +63,131 @@ function deriveFields(schema) {
   })
 }
 
-const STEP_VARIANTS = {
-  initial: { opacity: 0, y: 18 },
-  animate: { opacity: 1, y: 0 },
-  exit:    { opacity: 0, y: -18 },
+// ---------------------------------------------------------------------------
+// ArrayTagInput — proper tag-list for array fields
+// ---------------------------------------------------------------------------
+
+function ArrayTagInput({ id, value, onChange, placeholder, firstRef }) {
+  const [draft, setDraft] = useState('')
+  const items = Array.isArray(value) ? value : []
+
+  const commit = (raw) => {
+    const parts = raw.split(/[,\n]+/).map(s => s.trim()).filter(Boolean)
+    if (!parts.length) return
+    onChange([...items, ...parts])
+    setDraft('')
+  }
+
+  const remove = (i) => onChange(items.filter((_, idx) => idx !== i))
+
+  return (
+    <div className="array-tag-input">
+      {items.length > 0 && (
+        <div className="array-tag-input__chips">
+          {items.map((item, i) => (
+            <span key={i} className="array-tag-input__chip">
+              <span className="array-tag-input__chip-text">{item}</span>
+              <button
+                type="button"
+                className="array-tag-input__chip-x"
+                onClick={() => remove(i)}
+                aria-label={`Remove ${item}`}
+              >×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        id={id}
+        ref={firstRef}
+        type="text"
+        className="aif__input"
+        placeholder={items.length === 0
+          ? (placeholder || 'Type a value and press Enter to add…')
+          : 'Add another…'}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(draft) }
+          if (e.key === 'Backspace' && !draft && items.length > 0) onChange(items.slice(0, -1))
+        }}
+        onBlur={() => { if (draft.trim()) commit(draft) }}
+        onPaste={e => {
+          const text = e.clipboardData.getData('text')
+          if (text.includes(',') || text.includes('\n')) { e.preventDefault(); commit(text) }
+        }}
+      />
+      {items.length > 0 && (
+        <span className="aif__array-count">
+          {items.length} item{items.length !== 1 ? 's' : ''} · press Enter to add more
+        </span>
+      )}
+    </div>
+  )
 }
 
-const STEP_TRANSITION = { duration: 0.28, ease: [0.16, 1, 0.3, 1] }
+// ---------------------------------------------------------------------------
+// Main form
+// ---------------------------------------------------------------------------
 
 export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeChange }) {
   const fields = useMemo(() => deriveFields(agent?.input_schema), [agent])
-  const total  = fields.length
+  const firstRef = useRef(null)
 
-  const [step, setStep] = useState(0)
   const [values, setValues] = useState(() =>
-    Object.fromEntries(fields.map(f => [f.name, f.default ?? (f.type === 'checkbox' ? false : '')]))
+    Object.fromEntries(fields.map(f => [
+      f.name,
+      f.default ?? (f.type === 'array' ? [] : f.type === 'checkbox' ? false : ''),
+    ]))
   )
   const [privateTask, setPrivateTask] = useState(false)
-  const [inputError, setInputError] = useState('')
+  const [inputError, setInputError]   = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
 
-  const inputRef = useRef(null)
-
-  // Reset only when the actual agent changes, not on every parent re-render
   useEffect(() => {
-    setValues(Object.fromEntries(fields.map(f => [f.name, f.default ?? ''])))
-    setStep(0)
+    setValues(Object.fromEntries(fields.map(f => [
+      f.name,
+      f.default ?? (f.type === 'array' ? [] : f.type === 'checkbox' ? false : ''),
+    ])))
+    setInputError('')
+    setFieldErrors({})
   }, [agent?.agent_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-focus current field
   useEffect(() => {
-    const timer = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 60)
-    return () => clearTimeout(timer)
-  }, [step])
+    const t = setTimeout(() => firstRef.current?.focus({ preventScroll: true }), 80)
+    return () => clearTimeout(t)
+  }, [agent?.agent_id])
 
-  const set = (name, val) => setValues(v => ({ ...v, [name]: val }))
-
-  const goNext = useCallback(() => {
-    if (step < total - 1) setStep(s => s + 1)
-  }, [step, total])
-
-  const goBack = useCallback(() => {
-    if (step > 0) setStep(s => s - 1)
-  }, [step])
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      const f = fields[step]
-      if (f?.type !== 'textarea') {
-        // On the last field let the form's native submit run; on earlier fields
-        // Enter advances to the next field instead.
-        if (step < total - 1) {
-          e.preventDefault()
-          goNext()
-        }
-      }
-    }
+  const set = (name, val) => {
+    setValues(v => ({ ...v, [name]: val }))
+    if (fieldErrors[name]) setFieldErrors(e => ({ ...e, [name]: null }))
   }
 
   const handleSubmit = (e) => {
     e.preventDefault()
     setInputError('')
-    // Validate required fields are non-empty after trimming
+
+    // Validate required fields and collect per-field errors
+    const errs = {}
     for (const f of fields) {
-      if (f.required && !String(values[f.name] ?? '').trim()) {
-        // Scroll the user to the offending field
-        const idx = fields.indexOf(f)
-        setStep(idx)
-        setInputError(`"${f.label ?? f.name}" is required. Fill it in before running this agent.`)
-        return
+      if (!f.required) continue
+      const val = values[f.name]
+      if (f.type === 'array') {
+        if (!Array.isArray(val) || val.length === 0) {
+          errs[f.name] = 'Add at least one item — type a value and press Enter.'
+        }
+      } else if (!String(val ?? '').trim()) {
+        errs[f.name] = 'This field is required.'
       }
     }
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs)
+      // Focus the first errored field
+      const firstErrName = fields.find(f => errs[f.name])?.name
+      if (firstErrName) document.getElementById(`aif-${firstErrName}`)?.focus()
+      return
+    }
+
     const payload = {}
     fields.forEach(f => {
       let v = values[f.name]
@@ -149,258 +197,199 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
         const n = f.schema_type === 'integer' ? parseInt(v, 10) : parseFloat(v)
         payload[f.name] = isNaN(n) ? v : n
       } else if (f.type === 'array') {
-        const str = String(v ?? '').trim()
-        if (str.startsWith('[')) {
-          try { payload[f.name] = JSON.parse(str) } catch { payload[f.name] = str }
-        } else {
-          payload[f.name] = str ? str.split(',').map(s => s.trim()).filter(Boolean) : []
-        }
+        payload[f.name] = Array.isArray(v) ? v
+          : (typeof v === 'string' && v.trim()
+            ? v.split(',').map(s => s.trim()).filter(Boolean)
+            : [])
       } else {
         if (f.transform === 'uppercase') v = String(v ?? '').toUpperCase()
         payload[f.name] = v
       }
     })
-    const payloadError = validateInvokePayload(payload)
-    if (payloadError) {
-      setInputError(payloadError)
-      return
+
+    // Drop empty optional arrays — prevents oneOf "valid under each of" errors when a
+    // field is present-but-empty (e.g. urls=[]) alongside a filled sibling (url="https://...")
+    for (const f of fields) {
+      if (f.type === 'array' && !f.required) {
+        if (Array.isArray(payload[f.name]) && payload[f.name].length === 0) {
+          delete payload[f.name]
+        }
+      }
     }
+
+    // For oneOf schemas: keep only fields from the branch the user actually filled.
+    const oneOf = agent?.input_schema?.oneOf
+    if (Array.isArray(oneOf)) {
+      const activeBranch = oneOf.find(branch =>
+        (branch.required ?? []).every(key => {
+          const val = payload[key]
+          return Array.isArray(val) ? val.length > 0
+            : (val !== undefined && val !== null && val !== '')
+        })
+      )
+      if (activeBranch) {
+        for (const branch of oneOf) {
+          if (branch === activeBranch) continue
+          for (const key of branch.required ?? []) {
+            if (!(activeBranch.required ?? []).includes(key)) delete payload[key]
+          }
+        }
+      }
+    }
+
+    const payloadError = validateInvokePayload(payload)
+    if (payloadError) { setInputError(payloadError); return }
+
     onSubmit(payload, { privateTask })
   }
 
   const basePrice = `$${Number(agent?.price_per_call_usd ?? 0).toFixed(2)}`
   const estimatedCost = estimateCost(agent?.variable_pricing, values)
-  const price = estimatedCost != null
-    ? `$${Number(estimatedCost.cost).toFixed(2)}`
-    : basePrice
-  const progressPct = total > 0 ? (step / total) * 100 : 0
-
-  // No schema fallback
-  if (fields.length === 0) {
-    return (
-      <form className="invoke-panel" onSubmit={handleSubmit}>
-        <p className="invoke-panel__no-schema">
-          This agent has no defined input schema. Check its documentation.
-        </p>
-        <div className="invoke-panel__footer">
-          <Segmented options={MODE_OPTIONS} value={mode} onChange={onModeChange} />
-          <p className="invoke-panel__mode-help">
-            {mode === 'async'
-              ? 'Async queues a job you can monitor in Jobs.'
-              : 'Sync returns output immediately in this panel.'}
-          </p>
-          <div className="invoke-panel__price-bar">
-            <span className="invoke-panel__price-label">
-              {estimatedCost != null
-                ? 'Estimated cost'
-                : agent?.variable_pricing
-                  ? 'Price varies by usage'
-                  : 'Cost per call'}
-            </span>
-            <span className="invoke-panel__price-val">
-              {price}
-              {estimatedCost != null && agent?.variable_pricing?.unit_label && (
-                <span className="invoke-panel__price-hint">
-                  {' '}for {estimatedCost.units} {agent.variable_pricing.unit_label}{estimatedCost.units !== 1 ? 's' : ''}
-                </span>
-              )}
-            </span>
-          </div>
-          <button
-            type="button"
-            className={`invoke-panel__private-toggle${privateTask ? ' invoke-panel__private-toggle--on' : ''}`}
-            onClick={() => setPrivateTask(p => !p)}
-            title={privateTask ? 'Private: output will not be saved to work history' : 'Public: output may be saved as a work example'}
-          >
-            {privateTask ? <Lock size={11} /> : <Unlock size={11} />}
-            {privateTask ? 'Private task' : 'Public task'}
-          </button>
-          <Button
-            type="submit"
-            variant="primary"
-            size="md"
-            loading={loading}
-            className="invoke-panel__submit"
-            icon={mode === 'async' ? <Radio size={14} /> : <Zap size={14} />}
-          >
-            {mode === 'async' ? `Create async job · ${price}` : `Run now · ${price}`}
-          </Button>
-        </div>
-      </form>
-    )
-  }
-
-  const isLastField = step === total - 1
-  const f = fields[step]
+  const price = estimatedCost != null ? `$${Number(estimatedCost.cost).toFixed(2)}` : basePrice
 
   return (
-    <form className="invoke-panel" onSubmit={handleSubmit}>
-      {/* Progress bar */}
-      <div className="invoke-panel__progress-track">
-        <div
-          className="invoke-panel__progress-fill"
-          style={{ width: `${progressPct}%` }}
-        />
-      </div>
+    <form className="aif" onSubmit={handleSubmit} noValidate>
+      {/* Fields */}
+      <div className="aif__fields">
+        {fields.length === 0 && (
+          <p className="aif__no-schema">
+            This agent has no defined input schema. Check its documentation.
+          </p>
+        )}
 
-      {/* Question pane - AnimatePresence for clean step transitions */}
-      <div className="invoke-panel__questions">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={step}
-            className="invoke-panel__q active"
-            variants={STEP_VARIANTS}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            transition={STEP_TRANSITION}
-          >
-            <span className="invoke-panel__q-num">
-              {String(step + 1).padStart(2, '0')} of {String(total).padStart(2, '0')}
-            </span>
-            <label className="invoke-panel__q-label" htmlFor={`tf-${f.name}`}>
+        {fields.map((f, i) => (
+          <div key={f.name} className={`aif__field${fieldErrors[f.name] ? ' aif__field--error' : ''}`}>
+            <label className="aif__label" htmlFor={`aif-${f.name}`}>
               {f.label ?? f.name}
-              {f.required && <span style={{ color: 'var(--accent)', marginLeft: 4 }}>*</span>}
+              {f.required
+                ? <span className="aif__required" title="Required">Required</span>
+                : <span className="aif__optional">Optional</span>}
             </label>
-            {f.hint && <p className="invoke-panel__q-hint">{f.hint}</p>}
 
-            {/* Input */}
+            {f.hint && <p className="aif__hint">{f.hint}</p>}
+
             {f.type === 'textarea' ? (
               <textarea
-                id={`tf-${f.name}`}
-                ref={inputRef}
-                className="invoke-panel__tf-textarea"
-                placeholder={f.placeholder || 'Type your answer here…'}
+                id={`aif-${f.name}`}
+                ref={i === 0 ? firstRef : null}
+                className="aif__textarea"
+                placeholder={f.placeholder || 'Enter value…'}
                 value={values[f.name]}
                 onChange={e => set(f.name, e.target.value)}
-                required={f.required}
                 maxLength={f.max_length}
-                onKeyDown={handleKeyDown}
+                rows={4}
               />
             ) : f.type === 'select' ? (
               <select
-                id={`tf-${f.name}`}
-                ref={inputRef}
-                className="invoke-panel__tf-select"
+                id={`aif-${f.name}`}
+                ref={i === 0 ? firstRef : null}
+                className="aif__select"
                 value={values[f.name]}
-                onChange={e => { set(f.name, e.target.value); setTimeout(goNext, 200) }}
-                required={f.required}
+                onChange={e => set(f.name, e.target.value)}
               >
-                <option value="">Select an option…</option>
+                {!(f.required) && <option value="">— choose —</option>}
                 {(f.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
               </select>
             ) : f.type === 'checkbox' ? (
-              <label className="invoke-panel__tf-checkbox">
+              <label className="aif__checkbox-row">
                 <input
-                  id={`tf-${f.name}`}
-                  ref={inputRef}
+                  id={`aif-${f.name}`}
+                  ref={i === 0 ? firstRef : null}
                   type="checkbox"
                   checked={Boolean(values[f.name])}
                   onChange={e => set(f.name, e.target.checked)}
                 />
-                <span>{f.label}</span>
+                <span>Enable</span>
               </label>
             ) : f.type === 'number' ? (
               <input
-                id={`tf-${f.name}`}
-                ref={inputRef}
-                className="invoke-panel__tf-input"
+                id={`aif-${f.name}`}
+                ref={i === 0 ? firstRef : null}
+                className="aif__input"
                 type="number"
                 placeholder={f.placeholder || String(f.default ?? '')}
                 value={values[f.name]}
                 onChange={e => set(f.name, e.target.value)}
-                required={f.required}
                 min={f.min}
                 max={f.max}
                 step={f.schema_type === 'integer' ? 1 : 'any'}
-                onKeyDown={handleKeyDown}
                 autoComplete="off"
               />
             ) : f.type === 'array' ? (
-              <textarea
-                id={`tf-${f.name}`}
-                ref={inputRef}
-                className="invoke-panel__tf-textarea invoke-panel__tf-textarea--short"
-                placeholder={f.placeholder || 'val1, val2, val3'}
+              <ArrayTagInput
+                id={`aif-${f.name}`}
+                firstRef={i === 0 ? firstRef : null}
                 value={values[f.name]}
-                onChange={e => set(f.name, e.target.value)}
-                required={f.required}
-                rows={2}
+                onChange={v => set(f.name, v)}
+                placeholder={f.placeholder}
               />
             ) : (
               <input
-                id={`tf-${f.name}`}
-                ref={inputRef}
-                className="invoke-panel__tf-input"
+                id={`aif-${f.name}`}
+                ref={i === 0 ? firstRef : null}
+                className="aif__input"
                 type="text"
-                placeholder={f.placeholder || 'Type your answer…'}
+                placeholder={f.placeholder || 'Enter value…'}
                 value={values[f.name]}
                 onChange={e => set(f.name, e.target.value)}
-                required={f.required}
                 maxLength={f.max_length}
-                onKeyDown={handleKeyDown}
                 autoComplete="off"
               />
             )}
 
-            {/* Action row */}
-            <div className="invoke-panel__q-row">
-              {f.type !== 'select' && !isLastField && (
-                <button type="button" className="invoke-panel__ok" onClick={goNext}>
-                  Next →
-                </button>
-              )}
-              {step > 0 && (
-                <button type="button" className="invoke-panel__back" onClick={goBack}>
-                  ← Back
-                </button>
-              )}
-            </div>
-          </motion.div>
-        </AnimatePresence>
+            {fieldErrors[f.name] && (
+              <p className="aif__field-error" role="alert">{fieldErrors[f.name]}</p>
+            )}
+          </div>
+        ))}
       </div>
 
-      {/* Footer: mode selector + price + submit */}
-      <div className="invoke-panel__footer">
+      {/* Footer */}
+      <div className="aif__footer">
         <Segmented options={MODE_OPTIONS} value={mode} onChange={onModeChange} />
-        <p className="invoke-panel__mode-help">
+        <p className="aif__mode-help">
           {mode === 'async'
             ? 'Async queues a job you can monitor in Jobs.'
             : 'Sync returns output immediately in this panel.'}
         </p>
-        {inputError && <p className="invoke-panel__error-text" role="alert">{inputError}</p>}
-        <div className="invoke-panel__price-bar">
-          <span className="invoke-panel__price-label">
-            {estimatedCost != null
-              ? 'Estimated cost'
-              : agent?.variable_pricing
-                ? 'Price varies by usage'
-                : 'Cost per call'}
+
+        {inputError && <p className="aif__error-banner" role="alert">{inputError}</p>}
+
+        <div className="aif__price-bar">
+          <span className="aif__price-label">
+            {estimatedCost != null ? 'Estimated cost'
+              : agent?.variable_pricing ? 'Price varies by usage'
+              : 'Cost per call'}
           </span>
-          <span className="invoke-panel__price-val">
+          <span className="aif__price-val">
             {price}
             {estimatedCost != null && agent?.variable_pricing?.unit_label && (
-              <span className="invoke-panel__price-hint">
-                {' '}for {estimatedCost.units} {agent.variable_pricing.unit_label}{estimatedCost.units !== 1 ? 's' : ''}
+              <span className="aif__price-hint">
+                {' '}for {estimatedCost.units} {agent.variable_pricing.unit_label}
+                {estimatedCost.units !== 1 ? 's' : ''}
               </span>
             )}
           </span>
         </div>
+
         <button
           type="button"
-          className={`invoke-panel__private-toggle${privateTask ? ' invoke-panel__private-toggle--on' : ''}`}
+          className={`aif__private-toggle${privateTask ? ' aif__private-toggle--on' : ''}`}
           onClick={() => setPrivateTask(p => !p)}
-          title={privateTask ? 'Private: output will not be saved to work history' : 'Public: output may be saved as a work example'}
+          title={privateTask
+            ? 'Private: output will not be saved to work history'
+            : 'Public: output may be saved as a work example'}
         >
           {privateTask ? <Lock size={11} /> : <Unlock size={11} />}
           {privateTask ? 'Private task' : 'Public task'}
         </button>
+
         <Button
           type="submit"
           variant="primary"
           size="md"
           loading={loading}
-          className="invoke-panel__submit"
+          className="aif__submit"
           icon={mode === 'async' ? <Radio size={14} /> : <Zap size={14} />}
         >
           {mode === 'async' ? `Create async job · ${price}` : `Run now · ${price}`}

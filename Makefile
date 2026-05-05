@@ -38,3 +38,15 @@ alerts:
 
 launch-check: evals
 	@bash -c 'if [ -n "$$AZTEA_API_KEY" ]; then python scripts/launch_alerts.py; else echo "(skip alerts — set AZTEA_API_KEY to run them)"; fi'
+
+## Run integration tests against PostgreSQL 16 (requires Docker)
+test-postgres:
+	docker compose -f docker-compose.postgres.yml up \
+		--build \
+		--abort-on-container-exit \
+		--exit-code-from tests
+	docker compose -f docker-compose.postgres.yml down -v
+
+## Tear down the Postgres test stack and remove volumes
+test-postgres-clean:
+	docker compose -f docker-compose.postgres.yml down -v --remove-orphans

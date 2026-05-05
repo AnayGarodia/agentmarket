@@ -565,6 +565,10 @@ def _record_job_event(
         },
     )
     _deliver_job_event_hooks(event)
+    # Push to user-level SSE subscribers so the dashboard updates without polling.
+    jobs.publish_user_job_event(job["caller_owner_id"], event)
+    if job.get("agent_owner_id") != job.get("caller_owner_id"):
+        jobs.publish_user_job_event(job["agent_owner_id"], event)
     if event.get("event_type") in {
         "job.completed",
         "job.failed",
