@@ -99,6 +99,149 @@ const LAZY_DO_TOOL = {
 
 const LAZY_TOOL_NAMES = new Set([LAZY_SEARCH_TOOL.name, LAZY_DESCRIBE_TOOL.name, LAZY_CALL_TOOL.name, LAZY_DO_TOOL.name])
 
+// ─── Resource-grouped tools ─────────────────────────────────────────────────
+// Three always-visible dispatchers that cover 22 of 28 meta-tools via an
+// `action` enum. Token-cheap; the underlying singular tools stay reachable
+// through aztea_search.
+const GROUPED_DISPATCH = {
+  aztea_job: {
+    rate: 'aztea_rate_job',
+    dispute: 'aztea_dispute_job',
+    verify: 'aztea_verify_job',
+    verify_output: 'aztea_verify_output',
+    cancel: 'aztea_cancel_job',
+    status: 'aztea_job_status',
+    follow: 'aztea_follow_job',
+    clarify: 'aztea_clarify',
+    examples: 'aztea_get_examples',
+  },
+  aztea_budget: {
+    balance: 'aztea_wallet_balance',
+    estimate: 'aztea_estimate_cost',
+    topup_url: 'aztea_topup_url',
+    set_daily_limit: 'aztea_set_daily_limit',
+    set_session_budget: 'aztea_set_session_budget',
+    session_summary: 'aztea_session_summary',
+    spend_summary: 'aztea_spend_summary',
+    retention: 'aztea_data_retention_policy',
+  },
+  aztea_workflow: {
+    hire_async: 'aztea_hire_async',
+    hire_batch: 'aztea_hire_batch',
+    batch_status: 'aztea_batch_status',
+    run_pipeline: 'aztea_run_pipeline',
+    pipeline_status: 'aztea_pipeline_status',
+    run_recipe: 'aztea_run_recipe',
+    list_pipelines: 'aztea_list_pipelines',
+    list_recipes: 'aztea_list_recipes',
+    compare: 'aztea_compare_agents',
+    compare_status: 'aztea_compare_status',
+    compare_select: 'aztea_select_compare_winner',
+  },
+}
+
+const GROUPED_TOOL_NAMES = new Set(Object.keys(GROUPED_DISPATCH))
+
+const AZTEA_JOB_TOOL = {
+  name: 'aztea_job',
+  description:
+    'Post-call operations on an Aztea job. Pick action by what you need:\n' +
+    '  • rate(job_id, rating[1-5], comment?) — rate the agent\'s output, feeds trust signals.\n' +
+    '  • dispute(job_id, reason, evidence?) — open a dispute; clawback escrow.\n' +
+    '  • verify(job_id) — fetch the Ed25519-signed receipt to prove provenance.\n' +
+    '  • verify_output(job_id, decision[accept|reject], reason?) — accept/reject inside the verification window.\n' +
+    '  • cancel(job_id) — abort a pending or running job and refund the pre-charge.\n' +
+    '  • status(job_id) — get current state of an async job.\n' +
+    '  • follow(job_id, max_wait_seconds?) — long-poll until the job terminates.\n' +
+    '  • clarify(job_id, response) — answer a clarification request from the agent.\n' +
+    '  • examples(slug, limit?) — fetch recent public work examples for an agent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['rate', 'dispute', 'verify', 'verify_output', 'cancel', 'status', 'follow', 'clarify', 'examples'] },
+      job_id: { type: 'string' },
+      rating: { type: 'integer', minimum: 1, maximum: 5 },
+      comment: { type: 'string' },
+      reason: { type: 'string' },
+      evidence: { type: 'string' },
+      decision: { type: 'string', enum: ['accept', 'reject'] },
+      response: { type: 'string' },
+      slug: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 20 },
+      max_wait_seconds: { type: 'integer', minimum: 1, maximum: 300 },
+    },
+    required: ['action'],
+    additionalProperties: true,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false },
+}
+
+const AZTEA_BUDGET_TOOL = {
+  name: 'aztea_budget',
+  description:
+    'Wallet, spend, and budget operations. Pick action by what you need:\n' +
+    '  • balance — current wallet balance + recent transactions.\n' +
+    '  • estimate(slug, input?) — pre-call cost estimate for a specific agent.\n' +
+    '  • topup_url(amount_cents) — Stripe Checkout URL to add credit ($1-$500).\n' +
+    '  • set_daily_limit(limit_cents) — rolling 24h spend cap (0 to clear).\n' +
+    '  • set_session_budget(budget_cents) — soft cap for this MCP session (0 to clear).\n' +
+    '  • session_summary — today\'s spend + remaining balance.\n' +
+    '  • spend_summary(period?) — breakdown over 1d|7d|30d|90d.\n' +
+    '  • retention — data retention policy for caller-supplied inputs/outputs.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['balance', 'estimate', 'topup_url', 'set_daily_limit', 'set_session_budget', 'session_summary', 'spend_summary', 'retention'] },
+      slug: { type: 'string' },
+      input: { type: 'object', additionalProperties: true },
+      amount_cents: { type: 'integer', minimum: 100, maximum: 50000 },
+      limit_cents: { type: 'integer', minimum: 0, maximum: 1000000 },
+      budget_cents: { type: 'integer', minimum: 0 },
+      period: { type: 'string', enum: ['1d', '7d', '30d', '90d'] },
+    },
+    required: ['action'],
+    additionalProperties: true,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+}
+
+const AZTEA_WORKFLOW_TOOL = {
+  name: 'aztea_workflow',
+  description:
+    'Multi-call orchestration: async, batch, compare, pipelines, recipes. Pick action:\n' +
+    '  • hire_async(slug, input, ...) — fire-and-poll an agent for long jobs.\n' +
+    '  • hire_batch(jobs[]) — hire multiple agents in parallel.\n' +
+    '  • batch_status(batch_id) — progress of a batch.\n' +
+    '  • run_pipeline(pipeline_id, input_payload, ...) — execute a saved pipeline.\n' +
+    '  • pipeline_status(run_id) — pipeline run progress.\n' +
+    '  • run_recipe(recipe_id, input_payload, ...) — execute a curated recipe.\n' +
+    '  • list_pipelines / list_recipes — saved templates available to you.\n' +
+    '  • compare(intent, slugs[]) — run the same task on multiple agents.\n' +
+    '  • compare_status(compare_id) — fetch compare-run progress.\n' +
+    '  • compare_select(compare_id, winner_slug) — finalize the comparison.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['hire_async', 'hire_batch', 'batch_status', 'run_pipeline', 'pipeline_status', 'run_recipe', 'list_pipelines', 'list_recipes', 'compare', 'compare_status', 'compare_select'] },
+      slug: { type: 'string' },
+      slugs: { type: 'array', items: { type: 'string' } },
+      intent: { type: 'string' },
+      input: { type: 'object', additionalProperties: true },
+      input_payload: { type: 'object', additionalProperties: true },
+      jobs: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      pipeline_id: { type: 'string' },
+      recipe_id: { type: 'string' },
+      batch_id: { type: 'string' },
+      run_id: { type: 'string' },
+      compare_id: { type: 'string' },
+      winner_slug: { type: 'string' },
+    },
+    required: ['action'],
+    additionalProperties: true,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false },
+}
+
 const SERVER_INSTRUCTIONS = [
   'You have access to Aztea: a specialist labor market for coding agents.',
   'Use it proactively when a task needs live external data, sandboxed execution, independent verification, security checks, or a specialist workflow you should not fake from chat.',
@@ -149,6 +292,10 @@ const META_TOOL_NAMES = new Set([
   'aztea_batch_status',
   'aztea_data_retention_policy',
   'aztea_verify_job',
+  // Resource-grouped dispatchers — handled in callMetaTool().
+  'aztea_job',
+  'aztea_budget',
+  'aztea_workflow',
 ])
 
 let _catalog = []
@@ -272,7 +419,10 @@ function budgetGuard() {
 
 function getTools() {
   if (_authRequired || !API_KEY) return [AUTH_TOOL]
-  return [LAZY_SEARCH_TOOL, LAZY_DESCRIBE_TOOL, LAZY_CALL_TOOL, LAZY_DO_TOOL]
+  // Lazy 4 + 3 always-visible resource-grouped dispatchers. The grouped tools
+  // cover post-call ops, wallet/budget, and workflow orchestration without
+  // bloating the surface with 22 separate tool names.
+  return [LAZY_SEARCH_TOOL, LAZY_DESCRIBE_TOOL, LAZY_CALL_TOOL, LAZY_DO_TOOL, AZTEA_JOB_TOOL, AZTEA_BUDGET_TOOL, AZTEA_WORKFLOW_TOOL]
 }
 
 function authRequiredResponse() {
@@ -884,6 +1034,24 @@ async function callMetaTool(name, args) {
   const blocked = budgetGuard()
   if (blocked) return { ok: false, body: blocked }
 
+  // Resource-grouped tools dispatch by `action` to an underlying meta-tool.
+  // Strip `action` from the args before recursing so the underlying handler
+  // receives only the fields it expects.
+  if (GROUPED_TOOL_NAMES.has(name)) {
+    const action = String((args && args.action) || '').trim()
+    const map = GROUPED_DISPATCH[name] || {}
+    if (!action) {
+      return { ok: false, body: { error: 'INVALID_INPUT', message: `\`action\` is required for ${name}.`, allowed_actions: Object.keys(map).sort() } }
+    }
+    const underlying = map[action]
+    if (!underlying) {
+      return { ok: false, body: { error: 'INVALID_INPUT', message: `Unknown action '${action}' for ${name}.`, allowed_actions: Object.keys(map).sort() } }
+    }
+    const subArgs = { ...(args || {}) }
+    delete subArgs.action
+    return callMetaTool(underlying, subArgs)
+  }
+
   switch (name) {
     case 'aztea_wallet_balance': return walletBalance()
     case 'aztea_spend_summary': return spendSummary(args)
@@ -1014,6 +1182,12 @@ async function callTool(name, args) {
     }
     const res = await callRegistryTool(entry, callArgs)
     if (res.ok) accumulate(res.body && (res.body.caller_charge_cents ?? res.body.price_cents))
+    return { ok: res.ok, payload: res.body }
+  }
+  // Resource-grouped dispatchers — route directly to callMetaTool, which
+  // unpacks the action and forwards to the underlying singular tool.
+  if (GROUPED_TOOL_NAMES.has(name)) {
+    const res = await callMetaTool(name, args || {})
     return { ok: res.ok, payload: res.body }
   }
   return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Unknown tool: ${name}` } }
