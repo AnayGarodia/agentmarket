@@ -45,6 +45,10 @@ def _npx_available() -> bool:
     return shutil.which("npx") is not None and shutil.which("node") is not None
 
 
+def _looks_like_go(code: str) -> bool:
+    return bool(re.search(r"^\s*package\s+\w+", code, re.MULTILINE)) or "func main()" in code
+
+
 def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
     with tempfile.NamedTemporaryFile(
         suffix=".py", mode="w", delete=False, encoding="utf-8"
@@ -269,6 +273,11 @@ def run(payload: dict) -> dict:
     language = str(payload.get("language") or "auto").strip().lower()
     if language == "auto":
         language = _detect_language(code, filename)
+    elif language == "python" and _looks_like_go(code):
+        return _err(
+            "linter_agent.language_mismatch",
+            "Input looks like Go, but language='python'. Use language='auto' or a matching language.",
+        )
 
     checks_raw = payload.get("checks")
     if isinstance(checks_raw, list) and checks_raw:

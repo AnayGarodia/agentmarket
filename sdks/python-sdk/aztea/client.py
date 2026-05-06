@@ -652,16 +652,20 @@ class AzteaClient:
 
     def compare(
         self,
-        agent_ids: list[str],
+        agent_ids: list[str] | None,
         input_payload: JSONObject,
         *,
+        slugs: list[str] | None = None,
         max_cost_usd: float | None = None,
     ) -> JSONObject:
         """Run the same task across multiple agents in parallel for side-by-side comparison."""
-        body: JSONObject = {
-            "agent_ids": cast(JSONValue, list(agent_ids)),
-            "input_payload": input_payload,
-        }
+        if not agent_ids and not slugs:
+            raise AzteaError("compare requires agent_ids or slugs.")
+        body: JSONObject = {"input_payload": input_payload}
+        if agent_ids:
+            body["agent_ids"] = cast(JSONValue, list(agent_ids))
+        if slugs:
+            body["slugs"] = cast(JSONValue, list(slugs))
         if max_cost_usd is not None:
             body["max_cost_usd"] = float(max_cost_usd)
         # The server route is /jobs/compare (POST); the older SDK URL

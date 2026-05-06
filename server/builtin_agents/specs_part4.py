@@ -471,7 +471,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "kind": "aztea_built",
             "category": "Code Execution",
             "is_featured": False,
-            "internal_only": True,
+            "internal_only": False,
             "cacheable": True,
             "input_schema": _output_schema_object(
                 {
@@ -556,7 +556,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "kind": "aztea_built",
             "category": "Developer Tools",
             "is_featured": False,
-            "internal_only": True,
+            "internal_only": False,
             "cacheable": True,
             "input_schema": _output_schema_object(
                 {
@@ -666,7 +666,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "kind": "aztea_built",
             "category": "Security",
             "is_featured": False,
-            "internal_only": True,
+            "internal_only": False,
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {

@@ -114,13 +114,14 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         TYPE_CHECKER_AGENT_ID,
         DB_SANDBOX_AGENT_ID,
         LIVE_ENDPOINT_TESTER_AGENT_ID,
-        # BROWSER_AGENT_ID and VISUAL_REGRESSION_AGENT_ID hidden from the curated
-        # catalog: Playwright/chromium is not provisioned on the production worker,
-        # so any navigation/screenshot path 502s. Re-add after the deploy runs
-        # `playwright install chromium`. Tracked in QA P0-2.
+        BROWSER_AGENT_ID,
+        VISUAL_REGRESSION_AGENT_ID,
         MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
         SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
         AI_RED_TEAMER_AGENT_ID,
+        IMAGE_GENERATOR_AGENT_ID,
+        FINANCIAL_AGENT_ID,
+        WIKI_AGENT_ID,
         SECRET_SCANNER_AGENT_ID,
         JSON_SCHEMA_VALIDATOR_AGENT_ID,
         REGEX_TESTER_AGENT_ID,
@@ -128,11 +129,6 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         GIT_DIFF_ANALYZER_AGENT_ID,
     }
 )
-# IMAGE_GENERATOR_AGENT_ID and VIDEO_STORYBOARD_AGENT_ID are intentionally
-# excluded from the public catalog: they require provider API keys, have
-# abuse-surface concerns, and ship with explicit hidden-from-registry tests
-# (test_hooks_builtin_mcp.py::test_image_generator_builtin_is_hidden_*).
-# When we re-enable them we'll need a separate gate (e.g. media:enable scope).
 CURATED_BUILTIN_AGENT_IDS = frozenset(
     set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID}
 )

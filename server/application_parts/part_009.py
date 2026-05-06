@@ -20,12 +20,14 @@ def _batch_fee_split(job: dict) -> dict:
         platform_fee_pct=platform_fee_pct,
         fee_bearer_policy=fee_bearer_policy,
     )
+    failed = str(job.get("status") or "").strip().lower() == "failed"
     return {
         "fee_bearer_policy": fee_bearer_policy,
         "platform_fee_pct": platform_fee_pct,
         "caller_charge_cents": caller_charge_cents,
-        "agent_payout_cents": int(distribution["agent_payout_cents"]),
-        "platform_fee_cents": int(distribution["platform_fee_cents"]),
+        "agent_payout_cents": 0 if failed else int(distribution["agent_payout_cents"]),
+        "would_pay_agent_cents": int(distribution["agent_payout_cents"]) if failed else None,
+        "platform_fee_cents": 0 if failed else int(distribution["platform_fee_cents"]),
     }
 
 

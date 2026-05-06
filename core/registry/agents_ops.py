@@ -1149,6 +1149,11 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
         "audit",
     }
     review_terms = {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
+    browser_terms = {"browser", "screenshot", "screenshots", "playwright", "render", "homepage"}
+    image_terms = {"image", "generate", "generation", "dall", "replicate", "picture", "render"}
+    finance_terms = {"edgar", "10-k", "10q", "10-q", "sec", "filing", "revenue"}
+    red_team_terms = {"red", "redteam", "red-teamer", "adversarial", "jailbreak", "prompt"}
+    sbom_terms = {"sbom", "license", "licenses", "open", "source"}
 
     if security_terms & set(terms):
         if {"cve", "cves"} & set(terms) and any(
@@ -1193,9 +1198,29 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
             token in combined
             for token in ("linter", "ruff", "eslint", "type checker", "mypy")
         ):
-            bonus -= 0.05
+                bonus -= 0.05
 
-    return max(-0.25, min(0.40, bonus))
+    if browser_terms & set(terms):
+        if any(token in combined for token in ("browser", "playwright", "screenshot", "headless")):
+            bonus += 0.35
+        elif "secret" in combined or "code review" in combined:
+            bonus -= 0.20
+    if image_terms & set(terms):
+        if any(token in combined for token in ("image", "generation", "replicate", "gpt-image")):
+            bonus += 0.35
+        elif any(token in combined for token in ("arxiv", "code review", "secret")):
+            bonus -= 0.20
+    if finance_terms & set(terms):
+        if any(token in combined for token in ("edgar", "sec", "10-k", "financial")):
+            bonus += 0.35
+    if red_team_terms & set(terms):
+        if any(token in combined for token in ("red team", "adversarial", "jailbreak")):
+            bonus += 0.35
+    if sbom_terms & set(terms):
+        if any(token in combined for token in ("dependency", "license", "audit", "package")):
+            bonus += 0.25
+
+    return max(-0.35, min(0.70, bonus))
 
 
 def _matched_phrase(query: str, haystack: str) -> str | None:

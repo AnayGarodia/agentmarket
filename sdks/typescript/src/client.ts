@@ -68,7 +68,8 @@ export interface SearchOptions {
 
 export interface HireManySpec {
   agentId: string;
-  inputPayload: JsonObject;
+  inputPayload?: JsonObject;
+  input?: JsonObject;
   maxAttempts?: number;
   disputeWindowHours?: number;
   callbackUrl?: string;
@@ -81,6 +82,7 @@ export interface HireManyOptions {
   pollIntervalMs?: number;
   intent?: string;
   maxTotalCents?: number;
+  dryRun?: boolean;
 }
 
 interface RequestOptions {
@@ -442,9 +444,13 @@ export class AgentmarketClient {
     return this.request<JsonObject>("/registry/agents/auto-hire", { method: "POST", body });
   }
 
-  async compare(agentIds: string[], inputPayload: JsonObject, options: { maxCostUsd?: number } = {}): Promise<JsonObject> {
+  async compare(
+    agentIdsOrSlugs: string[],
+    inputPayload: JsonObject,
+    options: { maxCostUsd?: number; idsAreSlugs?: boolean } = {},
+  ): Promise<JsonObject> {
     const body: JsonObject = {
-      agent_ids: agentIds as unknown as JsonValue[],
+      [options.idsAreSlugs ? "slugs" : "agent_ids"]: agentIdsOrSlugs as unknown as JsonValue[],
       input_payload: inputPayload,
     };
     if (options.maxCostUsd !== undefined) body.max_cost_usd = options.maxCostUsd;
@@ -491,7 +497,7 @@ export class AgentmarketClient {
     const body: JsonObject = {
       jobs: specs.map((spec) => ({
         agent_id: spec.agentId,
-        input_payload: spec.inputPayload,
+        input_payload: spec.inputPayload ?? spec.input ?? {},
         max_attempts: spec.maxAttempts ?? 3,
         dispute_window_hours: spec.disputeWindowHours,
         callback_url: spec.callbackUrl,
@@ -503,6 +509,9 @@ export class AgentmarketClient {
     }
     if (options.maxTotalCents !== undefined) {
       body.max_total_cents = options.maxTotalCents;
+    }
+    if (options.dryRun !== undefined) {
+      body.dry_run = options.dryRun;
     }
     const created = await this.request<JsonObject>("/jobs/batch", { method: "POST", body });
     if (!options.waitForCompletion) {
@@ -528,17 +537,19 @@ export class AgentmarketClient {
 
   async hireBatch(
     specs: HireManySpec[],
-    options: Pick<HireManyOptions, "intent" | "maxTotalCents"> = {},
+    options: Pick<HireManyOptions, "intent" | "maxTotalCents" | "dryRun"> = {},
   ): Promise<JsonObject> {
     return this.hireMany(specs, {
       intent: options.intent,
       maxTotalCents: options.maxTotalCents,
+      dryRun: options.dryRun,
       waitForCompletion: false,
     }) as Promise<JsonObject>;
   }
 
-  async getBatch(batchId: string): Promise<JsonObject> {
-    return this.request<JsonObject>(`/jobs/batch/${encodeURIComponent(batchId)}`);
+  async getBatch(batchId: string, options: { include?: "full" | "minimal" | "compact" } = {}): Promise<JsonObject> {
+    const suffix = options.include ? `?include=${encodeURIComponent(options.include)}` : "";
+    return this.request<JsonObject>(`/jobs/batch/${encodeURIComponent(batchId)}${suffix}`);
   }
 
   async search(query: string, options: SearchOptions = {}): Promise<JsonObject> {

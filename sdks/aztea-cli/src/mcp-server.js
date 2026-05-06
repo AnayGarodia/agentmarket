@@ -11,6 +11,7 @@
 
 const https = require('https')
 const http = require('http')
+const crypto = require('crypto')
 
 const BASE_URL = (process.env.AZTEA_BASE_URL || 'https://aztea.ai').replace(/\/$/, '')
 const API_KEY = process.env.AZTEA_API_KEY || ''
@@ -18,7 +19,7 @@ const CLIENT_ID = (process.env.AZTEA_CLIENT_ID || 'claude-code').trim() || 'clau
 const REFRESH_MS = parseInt(process.env.AZTEA_MCP_REFRESH_SECONDS || '60', 10) * 1000
 const TIMEOUT_MS = parseFloat(process.env.AZTEA_MCP_TIMEOUT_SECONDS || '30') * 1000
 const AZTEA_VERSION = '1.0'
-const USER_AGENT = 'aztea-mcp/0.17.8'
+const USER_AGENT = 'aztea-mcp/0.17.14'
 
 const AUTH_TOOL = {
   name: 'aztea_setup',
@@ -109,6 +110,7 @@ const GROUPED_DISPATCH = {
     dispute: 'aztea_dispute_job',
     verify: 'aztea_verify_job',
     verify_output: 'aztea_verify_output',
+    full_output: 'aztea_job_full_output',
     cancel: 'aztea_cancel_job',
     status: 'aztea_job_status',
     follow: 'aztea_follow_job',
@@ -150,6 +152,7 @@ const AZTEA_JOB_TOOL = {
     '  • dispute(job_id, reason, evidence?) — open a dispute; clawback escrow.\n' +
     '  • verify(job_id) — fetch the Ed25519-signed receipt to prove provenance.\n' +
     '  • verify_output(job_id, decision[accept|reject], reason?) — accept/reject inside the verification window.\n' +
+    '  • full_output(job_id) — fetch untruncated output when status shows full_output_path.\n' +
     '  • cancel(job_id) — abort a pending or running job and refund the pre-charge.\n' +
     '  • status(job_id) — get current state of an async job.\n' +
     '  • follow(job_id, max_wait_seconds?) — long-poll until the job terminates.\n' +
@@ -158,7 +161,7 @@ const AZTEA_JOB_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['rate', 'dispute', 'verify', 'verify_output', 'cancel', 'status', 'follow', 'clarify', 'examples'] },
+      action: { type: 'string', enum: ['rate', 'dispute', 'verify', 'verify_output', 'full_output', 'cancel', 'status', 'follow', 'clarify', 'examples'] },
       job_id: { type: 'string' },
       rating: { type: 'integer', minimum: 1, maximum: 5 },
       comment: { type: 'string' },
@@ -683,10 +686,16 @@ async function jobStatus(args) {
   return { ok: true, body: result }
 }
 
+async function jobFullOutput(args) {
+  const jobId = String(args.job_id || '').trim()
+  if (!jobId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_id is required.' } }
+  return parseApiResponse(await getJson(`/jobs/${jobId}/full`))
+}
+
 async function followJob(args) {
   const jobId = String(args.job_id || '').trim()
   if (!jobId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_id is required.' } }
-  const timeoutSecs = Math.min(Number(args.timeout_seconds || 180), 300)
+  const timeoutSecs = Math.min(Number(args.timeout_seconds || args.max_wait_seconds || 180), 300)
   const deadline = Date.now() + timeoutSecs * 1000
   const POLL_MS = 4000
   const TERMINAL = new Set(['complete', 'failed', 'cancelled'])
@@ -705,7 +714,7 @@ async function followJob(args) {
 
 async function clarify(args) {
   const jobId = String(args.job_id || '').trim()
-  const message = String(args.message || '').trim()
+  const message = String(args.message || args.response || '').trim()
   if (!jobId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_id is required.' } }
   if (!message) return { ok: false, body: { error: 'INVALID_INPUT', message: 'message is required.' } }
   let requestMessageId = args.request_message_id
@@ -858,19 +867,33 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
+}
+
 async function compareAgents(args) {
-  const rawIds = Array.isArray(args.agent_ids) ? args.agent_ids.map(x => String(x || '').trim()).filter(Boolean) : null
-  if (!rawIds) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_ids must be an array.' } }
+  let rawIds = Array.isArray(args.agent_ids) ? args.agent_ids.map(x => String(x || '').trim()).filter(Boolean) : null
+  if (!rawIds && Array.isArray(args.slugs)) {
+    const resolved = await Promise.all(args.slugs.map(slug => resolveAgentId(String(slug || '').trim())))
+    for (let i = 0; i < resolved.length; i++) {
+      if (!resolved[i].ok) return { ok: false, body: { ...resolved[i].body, agent_index: i } }
+    }
+    rawIds = resolved.map(item => item.id)
+  }
+  if (!rawIds) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_ids or slugs must be an array.' } }
   if (rawIds.length < 2 || rawIds.length > 3) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_ids must contain 2 or 3 values.' } }
-  if (!args.input_payload || typeof args.input_payload !== 'object' || Array.isArray(args.input_payload)) {
-    return { ok: false, body: { error: 'INVALID_INPUT', message: 'input_payload must be an object.' } }
+  const input = args.input_payload == null ? (args.input == null ? {} : args.input) : args.input_payload
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { ok: false, body: { error: 'INVALID_INPUT', message: 'input/input_payload must be an object.' } }
   }
   const resolvedIds = await Promise.all(rawIds.map(resolveAgentId))
   for (let i = 0; i < resolvedIds.length; i++) {
     if (!resolvedIds[i].ok) return { ok: false, body: { ...resolvedIds[i].body, agent_index: i } }
   }
   const agentIds = resolvedIds.map(r => r.id)
-  const body = { agent_ids: agentIds, input_payload: args.input_payload }
+  const body = { agent_ids: agentIds, input_payload: input }
   if (args.max_attempts != null) body.max_attempts = Number(args.max_attempts)
   if (args.private_task != null) body.private_task = Boolean(args.private_task)
   const created = parseApiResponse(await postJson('/jobs/compare', body))
@@ -899,9 +922,14 @@ async function compareAgents(args) {
 
 async function selectCompareWinner(args) {
   const compareId = String(args.compare_id || '').trim()
-  const winnerAgentId = String(args.winner_agent_id || '').trim()
+  let winnerAgentId = String(args.winner_agent_id || '').trim()
   if (!compareId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'compare_id is required.' } }
-  if (!winnerAgentId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'winner_agent_id is required.' } }
+  if (!winnerAgentId && args.winner_slug) {
+    const resolved = await resolveAgentId(String(args.winner_slug || '').trim())
+    if (!resolved.ok) return resolved
+    winnerAgentId = resolved.id
+  }
+  if (!winnerAgentId) return { ok: false, body: { error: 'INVALID_INPUT', message: 'winner_agent_id or winner_slug is required.' } }
   const res = parseApiResponse(await postJson(`/jobs/compare/${compareId}/select`, { winner_agent_id: winnerAgentId }))
   if (res.ok && !res.body.note) res.body.note = 'Compare session finalized. Only the winner was paid.'
   return res
@@ -1054,16 +1082,37 @@ async function verifyJobSignature(args) {
       },
     }
   }
+  const agentDid = String(res.body.agent_did || res.body.did || '').trim()
+  let verified = false
+  let verificationError = null
+  try {
+    const agentId = agentDid.includes(':agents:') ? agentDid.split(':agents:').pop() : String(res.body.agent_id || '').trim()
+    const [didDoc, job] = await Promise.all([
+      getJson(`/agents/${encodeURIComponent(agentId)}/did.json`),
+      getJson(`/jobs/${encodeURIComponent(jobId)}`),
+    ])
+    const method = (didDoc.verificationMethod || []).find(m => m && m.publicKeyJwk && m.publicKeyJwk.crv === 'Ed25519')
+    if (!method) throw new Error('no Ed25519 publicKeyJwk on DID document')
+    const publicKey = crypto.createPublicKey({ key: method.publicKeyJwk, format: 'jwk' })
+    const signed = Buffer.from(canonicalJson(job.output_payload), 'utf8')
+    verified = crypto.verify(null, signed, publicKey, Buffer.from(String(res.body.signature || ''), 'base64'))
+  } catch (exc) {
+    verificationError = String(exc && exc.message ? exc.message : exc)
+  }
   return {
     ok: true,
     body: {
       job_id: jobId,
       signed: true,
-      agent_did: res.body.agent_did,
+      verified,
+      verification_error: verified ? null : verificationError,
+      agent_did: agentDid,
       output_hash: res.body.output_hash,
       signed_at: res.body.signed_at,
       signature: res.body.signature,
-      note: 'Verify locally: `aztea jobs verify <job_id>` (Python CLI) or `client.verify_job(job_id)` (Python SDK). The browser UI verifies automatically on JobDetailPage.',
+      note: verified
+        ? 'Signature verified locally against the agent DID document.'
+        : 'Signature was fetched but local verification did not complete in this MCP runtime.',
     },
   }
 }
@@ -1116,6 +1165,7 @@ async function callMetaTool(name, args) {
     case 'aztea_list_pipelines': return listPipelines()
     case 'aztea_hire_async': return hireAsync(args)
     case 'aztea_job_status': return jobStatus(args)
+    case 'aztea_job_full_output': return jobFullOutput(args)
     case 'aztea_clarify': return clarify(args)
     case 'aztea_rate_job': return rateJob(args)
     case 'aztea_dispute_job': return disputeJob(args)

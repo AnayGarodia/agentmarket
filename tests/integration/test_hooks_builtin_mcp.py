@@ -637,8 +637,13 @@ def test_registry_lists_new_builtin_agents(client):
         "CVE Lookup Agent",
         "DB Sandbox",
         "Live Endpoint Tester",
+        "Browser Agent",
+        "Visual Regression",
+        "Multi-Language Executor",
+        "Semantic Codebase Search",
+        "AI Red Teamer",
+        "Image Generator Agent",
     }.issubset(names)
-    assert "Image Generator Agent" not in names
 
 
 def test_registry_hides_deprecated_builtin_agents(client):
@@ -657,11 +662,6 @@ def test_registry_hides_deprecated_builtin_agents(client):
     assert "Healthcare Expert Agent" not in names
     assert "System Design Reviewer Agent" not in names
     assert "Incident Response Commander Agent" not in names
-    assert "Browser Agent" not in names
-    assert "Multi-Language Executor" not in names
-    assert "Semantic Codebase Search" not in names
-    assert "AI Red Teamer" not in names
-    assert "Visual Regression" not in names
 
 
 def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(client):
@@ -839,7 +839,7 @@ def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client
     assert sent_protocol["preferred_output_formats"] == ["application/json"]
 
 
-def test_image_generator_builtin_is_hidden_from_public_registry_calls(client, monkeypatch):
+def test_image_generator_builtin_is_public_registry_callable(client, monkeypatch):
     caller = _register_user()
     _fund_user_wallet(caller, 200)
     monkeypatch.setattr(
@@ -875,7 +875,10 @@ def test_image_generator_builtin_is_hidden_from_public_registry_calls(client, mo
             ],
         },
     )
-    assert response.status_code == 404, response.text
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["output"]["artifacts"][0]["name"] == "generated.png"
+    assert body["output"]["provider"] == "openai"
 
 
 def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
@@ -994,7 +997,7 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
 
 
-def test_mcp_invoke_does_not_expose_hidden_image_generator_tool(client, monkeypatch):
+def test_mcp_invoke_exposes_image_generator_tool(client, monkeypatch):
     caller = _register_user()
     _fund_user_wallet(caller, 100)
     monkeypatch.setattr(
@@ -1021,7 +1024,10 @@ def test_mcp_invoke_does_not_expose_hidden_image_generator_tool(client, monkeypa
             "api_key": caller["raw_api_key"],
         },
     )
-    assert response.status_code == 404, response.text
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["structuredContent"]["artifacts"][0]["name"] == "generated.png"
+    assert body["content"][0]["type"] == "text"
 
 
 def test_python_executor_builtin_runs_code_and_returns_output(client, monkeypatch):

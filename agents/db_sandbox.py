@@ -73,12 +73,14 @@ def _normalize_queries(payload: dict[str, Any]) -> list[dict[str, Any]]:
             ]
         normalized: list[dict[str, Any]] = []
         for index, item in enumerate(queries[:_MAX_STATEMENTS]):
+            if isinstance(item, str):
+                item = {"sql": item}
             if not isinstance(item, dict):
                 return [
                     {
                         "error": _err(
                             "db_sandbox.invalid_query",
-                            f"queries[{index}] must be an object.",
+                            f"queries[{index}] must be a SQL string or an object.",
                         )
                     }
                 ]
@@ -240,15 +242,50 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                             "db_sandbox.timeout",
                             f"Query exceeded {timeout_seconds:.0f}s execution limit.",
                         )
-                    return _err("db_sandbox.sql_error", message)
+                    results.append(
+                        {
+                            "sql": sql,
+                            "columns": [],
+                            "rows": [],
+                            "row_count": 0,
+                            "truncated": False,
+                            "rows_affected": None,
+                            "query_plan": [],
+                            "error": {
+                                "code": "db_sandbox.sql_error",
+                                "message": message,
+                            },
+                            "execution_time_ms": int(
+                                (time.monotonic() - statement_started) * 1000
+                            ),
+                        }
+                    )
                 except sqlite3.DatabaseError as exc:
-                    return _err("db_sandbox.database_error", str(exc))
+                    results.append(
+                        {
+                            "sql": sql,
+                            "columns": [],
+                            "rows": [],
+                            "row_count": 0,
+                            "truncated": False,
+                            "rows_affected": None,
+                            "query_plan": [],
+                            "error": {
+                                "code": "db_sandbox.database_error",
+                                "message": str(exc),
+                            },
+                            "execution_time_ms": int(
+                                (time.monotonic() - statement_started) * 1000
+                            ),
+                        }
+                    )
 
             size_bytes = db_path.stat().st_size if db_path.exists() else 0
             return {
                 "engine": "sqlite",
                 "results": results,
                 "statements_executed": len(results),
+                "statement_error_count": sum(1 for item in results if item.get("error")),
                 "db_size_bytes": size_bytes,
                 "execution_time_ms": int((time.monotonic() - start) * 1000),
             }

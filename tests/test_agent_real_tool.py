@@ -16,6 +16,7 @@ from agents import live_endpoint_tester
 from agents import multi_file_executor
 from agents import python_executor
 from agents import shell_executor
+from agents import secret_scanner
 from agents import semantic_codebase_search
 from agents import type_checker
 from agents import video_storyboard
@@ -150,6 +151,16 @@ def test_dependency_auditor_ignores_invalid_npm_latest_dist_tag(monkeypatch):
     latest, license_ = dependency_auditor._fetch_npm_latest("lodash")
     assert latest == "4.17.21"
     assert license_ == "MIT"
+
+
+def test_dependency_auditor_rejects_freeform_garbage_manifest():
+    result = dependency_auditor.run({"manifest": "this is not a manifest at all"})
+    assert result["error"]["code"] == "dependency_auditor.invalid_manifest"
+
+
+def test_cve_lookup_rejects_mutually_exclusive_id_fields():
+    result = cve_lookup.run({"cve_id": "CVE-2024-1234", "cve_ids": ["CVE-2024-5678"]})
+    assert result["error"]["code"] == "cve_lookup.mutually_exclusive_ids"
 
 
 def test_type_checker_parses_mypy_json(monkeypatch):
@@ -314,6 +325,13 @@ def test_linter_agent_returns_structured_error_for_missing_code():
     assert result["error"]["code"] == "linter_agent.missing_code"
 
 
+def test_linter_agent_detects_obvious_go_python_mismatch():
+    result = linter_agent.run(
+        {"language": "python", "code": 'package main\nimport "fmt"\nfunc main(){fmt.Println("hi")}'}
+    )
+    assert result["error"]["code"] == "linter_agent.language_mismatch"
+
+
 def test_db_sandbox_executes_sql_and_returns_plan():
     result = db_sandbox.run(
         {
@@ -324,6 +342,25 @@ def test_db_sandbox_executes_sql_and_returns_plan():
     assert result["engine"] == "sqlite"
     assert result["results"][0]["rows"] == [{"name": "a"}, {"name": "b"}]
     assert result["results"][0]["query_plan"]
+
+
+def test_db_sandbox_accepts_string_queries_and_keeps_partial_errors():
+    result = db_sandbox.run(
+        {
+            "schema_sql": "CREATE TABLE t(id INTEGER); INSERT INTO t VALUES (1);",
+            "queries": ["SELECT count(*) AS n FROM t", "DROP TABLE t", "SELECT * FROM t"],
+        }
+    )
+    assert result["statements_executed"] == 3
+    assert result["results"][0]["rows"][0]["n"] == 1
+    assert "error" not in result["results"][1]
+    assert result["results"][2]["error"]["code"] == "db_sandbox.sql_error"
+    assert result["statement_error_count"] == 1
+
+
+def test_secret_scanner_negative_entropy_disables_entropy_check():
+    result = secret_scanner.run({"content": "plain text only", "min_entropy": -1})
+    assert result["total_findings"] == 0
 
 
 def test_live_endpoint_tester_uses_mocked_upstream(monkeypatch):
@@ -681,9 +718,11 @@ def test_browser_agent_rejects_invalid_action():
     assert result["error"]["code"] == "browser_agent.invalid_action"
 
 
-def test_multi_file_executor_returns_structured_error_for_invalid_files():
+def test_multi_file_executor_accepts_mapping_files_shape():
     result = multi_file_executor.run({"files": {"main.py": "print('hi')"}})
-    assert result["error"]["code"] == "multi_file_executor.invalid_input"
+    assert result["exit_code"] == 0
+    assert result["files_written"] == 1
+    assert "hi" in result["stdout"]
 
 
 def test_web_researcher_blocks_redirects_to_private_targets(monkeypatch):

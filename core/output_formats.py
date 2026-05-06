@@ -106,8 +106,8 @@ def _render_markdown(output: Any, meta: dict[str, Any]) -> str:
         sections.append(_md_type_check(output))
         rendered = True
 
-    # Dependency auditor: {vulnerabilities | findings, package_count?, ...}
-    if isinstance(output.get("vulnerabilities"), list):
+    # Dependency auditor: {vulnerabilities | findings | packages, ...}
+    if isinstance(output.get("vulnerabilities"), list) or isinstance(output.get("packages"), list):
         sections.append(_md_dep_audit(output))
         rendered = True
 
@@ -240,6 +240,13 @@ def _md_type_check(output: dict[str, Any]) -> str:
 
 def _md_dep_audit(output: dict[str, Any]) -> str:
     vulns = output.get("vulnerabilities") or []
+    if not vulns and isinstance(output.get("packages"), list):
+        for pkg in output.get("packages") or []:
+            if not isinstance(pkg, dict):
+                continue
+            for cve in pkg.get("cves") or []:
+                if isinstance(cve, dict):
+                    vulns.append({**cve, "package": pkg.get("name"), "fixed_in": cve.get("fixed_in")})
     lines: list[str] = ["## Dependency Audit"]
     summary = str(output.get("summary") or "").strip()
     if summary:

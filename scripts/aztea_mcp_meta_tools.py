@@ -969,6 +969,7 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         "dispute": "aztea_dispute_job",
         "verify": "aztea_verify_job",
         "verify_output": "aztea_verify_output",
+        "full_output": "aztea_job_full_output",
         "cancel": "aztea_cancel_job",
         "status": "aztea_job_status",
         "follow": "aztea_follow_job",
@@ -1012,6 +1013,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
             "  • dispute(job_id, reason, evidence?) — open a dispute; clawback escrow.\n"
             "  • verify(job_id) — fetch the Ed25519-signed receipt to prove provenance.\n"
             "  • verify_output(job_id, accept|reject, reason?) — accept/reject inside the verification window.\n"
+            "  • full_output(job_id) — fetch the untruncated output payload when status shows full_output_path.\n"
             "  • cancel(job_id) — abort a pending or running job and refund the pre-charge.\n"
             "  • status(job_id) — get current state of an async job.\n"
             "  • follow(job_id, max_wait_seconds?) — long-poll until the job terminates.\n"
@@ -1028,6 +1030,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                         "dispute",
                         "verify",
                         "verify_output",
+                        "full_output",
                         "cancel",
                         "status",
                         "follow",
@@ -1225,6 +1228,7 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_list_pipelines": _annotations(read_only=True, idempotent=True),
     "aztea_hire_async": _annotations(read_only=False, idempotent=False),
     "aztea_job_status": _annotations(read_only=True, idempotent=False),
+    "aztea_job_full_output": _annotations(read_only=True, idempotent=False),
     "aztea_batch_status": _annotations(read_only=True, idempotent=False),
     "aztea_cancel_job": _annotations(
         read_only=False, destructive=True, idempotent=True, open_world=False
@@ -1438,6 +1442,8 @@ def call_meta_tool(
             return ok, result
         if tool_name == "aztea_job_status":
             return _job_status(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_job_full_output":
+            return _job_full_output(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_batch_status":
             return _batch_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_cancel_job":
@@ -1996,6 +2002,15 @@ def _job_status(
     return True, result
 
 
+def _job_full_output(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
+    job_id = str(args.get("job_id") or "").strip()
+    if not job_id:
+        return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
+    return _get(session, f"{base}/jobs/{job_id}/full", hdrs, timeout)
+
+
 def _batch_status(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
@@ -2280,7 +2295,10 @@ def _follow_job(
     job_id = str(args.get("job_id") or "").strip()
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
-    timeout_secs = min(int(args.get("timeout_seconds") or 180), 300)
+    timeout_secs = min(
+        int(args.get("timeout_seconds") or args.get("max_wait_seconds") or 180),
+        300,
+    )
     poll_interval = 4  # seconds between polls
     deadline = _time.monotonic() + timeout_secs
     _TERMINAL = {"complete", "failed", "cancelled"}
@@ -2306,7 +2324,7 @@ def _clarify(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
-    message = str(args.get("message") or "").strip()
+    message = str(args.get("message") or args.get("response") or "").strip()
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
     if not message:
@@ -2644,12 +2662,12 @@ def _compare_agents(
         }
     body: dict[str, Any] = {
         "agent_ids": agent_ids,
-        "input_payload": args.get("input_payload") or {},
+        "input_payload": _input_arg(args) or {},
     }
     if not isinstance(body["input_payload"], dict):
         return False, {
             "error": "INVALID_INPUT",
-            "message": "input_payload must be an object.",
+            "message": "input/input_payload must be an object.",
         }
     if args.get("max_attempts") is not None:
         body["max_attempts"] = int(args["max_attempts"])

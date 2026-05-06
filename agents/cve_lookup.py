@@ -530,6 +530,11 @@ def run(payload: dict) -> dict:
     cve_ids_list = payload.get("cve_ids")
 
     if cve_id_single is not None or cve_ids_list is not None:
+        if cve_id_single is not None and cve_ids_list is not None:
+            return _err(
+                "cve_lookup.mutually_exclusive_ids",
+                "Pass either cve_id or cve_ids, not both.",
+            )
         single_mode = False
 
         if cve_ids_list is not None and len(cve_ids_list) > 0:

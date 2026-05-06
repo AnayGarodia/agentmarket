@@ -102,6 +102,11 @@ def run(payload: dict) -> dict:
     All files and the venv are deleted after each call.
     """
     files = payload.get("files")
+    if isinstance(files, dict):
+        files = [
+            {"path": str(path), "content": str(content)}
+            for path, content in files.items()
+        ]
     if not files or not isinstance(files, list):
         return _err(
             "multi_file_executor.invalid_input",

@@ -158,6 +158,18 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
                         )
         if not diagnostics and result.returncode != 0:
             diagnostics = _parse_mypy_text_diagnostics(raw)
+        tool_crashed = "INTERNAL ERROR" in raw or "Traceback (most recent call last)" in raw
+        if tool_crashed and not diagnostics:
+            diagnostics = [
+                {
+                    "file": "main.py",
+                    "line": None,
+                    "col": None,
+                    "code": "mypy-internal-error",
+                    "message": "mypy crashed while checking this input.",
+                    "severity": "error",
+                }
+            ]
 
         try:
             version_result = subprocess.run(
@@ -175,12 +187,14 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
 
         return {
             "language": "python",
-            "ok": result.returncode == 0,
-            "passed": result.returncode == 0,
+            "ok": result.returncode == 0 and not tool_crashed,
+            "passed": result.returncode == 0 and not tool_crashed,
+            "tool_crashed": tool_crashed,
             "error_count": len(diagnostics),
             "diagnostics": diagnostics,
             "errors": diagnostics,
-            "raw_output": raw[:5000],
+            "raw_output": raw[:5000] if not tool_crashed else "",
+            "raw_output_omitted_reason": "underlying tool crashed" if tool_crashed else None,
             "tool_version": tool_version,
         }
 

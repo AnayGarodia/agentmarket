@@ -342,6 +342,8 @@ def _process_pending_builtin_job(job: dict) -> bool:
 def _process_pending_builtin_jobs(
     limit_per_agent: int = _BUILTIN_JOB_WORKER_BATCH_SIZE,
 ) -> dict[str, int]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     batch_limit = min(max(1, int(limit_per_agent)), 500)
     scanned = 0
     processed = 0
@@ -349,6 +351,7 @@ def _process_pending_builtin_jobs(
     target_agent_ids = list(_BUILTIN_AGENT_IDS) + [
         aid for aid in skill_agent_ids if aid not in _BUILTIN_AGENT_IDS
     ]
+    pending_jobs: list[dict] = []
     for agent_id in target_agent_ids:
         pending = jobs.list_jobs_for_agent(
             agent_id,
@@ -356,9 +359,18 @@ def _process_pending_builtin_jobs(
             limit=batch_limit,
         )
         scanned += len(pending)
-        for job in pending:
-            if _process_pending_builtin_job(job):
-                processed += 1
+        pending_jobs.extend(pending)
+    if not pending_jobs:
+        return {"scanned": scanned, "processed": processed}
+    max_workers = min(max(1, _BUILTIN_JOB_WORKER_PARALLELISM), len(pending_jobs))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_process_pending_builtin_job, job) for job in pending_jobs]
+        for future in as_completed(futures):
+            try:
+                if future.result():
+                    processed += 1
+            except Exception:
+                _LOG.exception("Built-in parallel worker task failed.")
     return {"scanned": scanned, "processed": processed}
 
 

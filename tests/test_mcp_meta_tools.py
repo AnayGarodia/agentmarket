@@ -318,6 +318,39 @@ def test_compare_agents_polls_until_complete(monkeypatch):
     assert result["total_charged_cents"] == 22
 
 
+def test_compare_agents_accepts_slugs_and_input_alias(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_resolve(_session, _base, _hdrs, _timeout, args):
+        return f"agent-{args['slug']}", None
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        captured["url"] = url
+        captured["body"] = body
+        return True, {"compare_id": "cmp_123", "status": "pending"}
+
+    def _fake_get(_session, url, _hdrs, _timeout, **_kwargs):
+        captured["status_url"] = url
+        return True, {"compare_id": "cmp_123", "status": "complete"}
+
+    monkeypatch.setattr(meta_tools, "_resolve_agent_id", _fake_resolve)
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    monkeypatch.setattr(meta_tools, "_get", _fake_get)
+    ok, result = meta_tools._compare_agents(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"slugs": ["lint_a", "lint_b"], "input": {"task": "compare"}},
+    )
+    assert ok is True
+    assert result["compare_id"] == "cmp_123"
+    assert captured["url"] == "https://aztea.test/jobs/compare"
+    assert captured["status_url"] == "https://aztea.test/jobs/compare/cmp_123"
+    assert captured["body"]["agent_ids"] == ["agent-lint_a", "agent-lint_b"]
+    assert captured["body"]["input_payload"] == {"task": "compare"}
+
+
 def test_select_compare_winner_posts_selection(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -951,6 +984,51 @@ def test_batch_status_uses_compact_include_param(monkeypatch):
     )
     assert ok is True
     assert captured["params"] == {"include": "minimal"}
+
+
+def test_job_full_output_fetches_untruncated_payload(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_get(_session, url, _hdrs, _timeout, **_kwargs):
+        captured["url"] = url
+        return True, {"job_id": "job_1", "output_payload": {"large": True}}
+
+    monkeypatch.setattr(meta_tools, "_get", _fake_get)
+    ok, result = meta_tools._job_full_output(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"job_id": "job_1"},
+    )
+    assert ok is True
+    assert captured["url"] == "https://aztea.test/jobs/job_1/full"
+    assert result["output_payload"]["large"] is True
+
+
+def test_clarify_accepts_response_alias(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        captured["url"] = url
+        captured["body"] = body
+        return True, {"message_id": 10}
+
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._clarify(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={
+            "job_id": "job_1",
+            "response": "Please review security only.",
+            "request_message_id": 7,
+        },
+    )
+    assert ok is True
+    assert result["message_id"] == 10
+    assert captured["body"]["payload"]["answer"] == "Please review security only."
 
 
 def test_budget_estimate_requires_slug_or_agent_id_with_helpful_error():

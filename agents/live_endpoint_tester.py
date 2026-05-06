@@ -145,14 +145,14 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         except requests.exceptions.Timeout:
             return {
                 "ok": False,
-                "status_code": 0,
+                "status_code": "timeout",
                 "latency_ms": timeout_seconds * 1000,
                 "error": "timeout",
             }
         except requests.RequestException as exc:
             return {
                 "ok": False,
-                "status_code": 0,
+                "status_code": "request_error",
                 "latency_ms": (time.monotonic() - started) * 1000,
                 "error": type(exc).__name__,
             }

@@ -52,6 +52,10 @@ _COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl"}
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
+def _err(code: str, message: str) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message}}
+
+
 def _detect_ecosystem(manifest: str) -> str:
     return "npm" if manifest.strip().startswith("{") else "pypi"
 
@@ -62,7 +66,12 @@ def _parse_pypi_manifest(manifest: str) -> list[tuple[str, str]]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        m = re.match(r"^([A-Za-z0-9_\-\.]+)\s*([>=<!~^]+\s*[\d\.\*]+)?", line)
+        # Match whole requirement-ish lines only. A free-form sentence like
+        # "this is not a manifest" must not become package "this".
+        m = re.fullmatch(
+            r"([A-Za-z0-9_\-\.]+)(?:\[[A-Za-z0-9_,\-\.]+\])?\s*([>=<!~]=?\s*[\w\.\*]+(?:\s*,\s*[>=<!~]=?\s*[\w\.\*]+)*)?",
+            line,
+        )
         if m:
             name = m.group(1).strip()
             ver_spec = (m.group(2) or "").strip()
@@ -79,6 +88,8 @@ def _parse_npm_manifest(manifest: str) -> list[tuple[str, str]]:
     try:
         data = json.loads(manifest)
     except json.JSONDecodeError:
+        return []
+    if not isinstance(data, dict):
         return []
     packages = []
     for key in ("dependencies", "devDependencies", "peerDependencies"):
@@ -313,6 +324,11 @@ def run(payload: dict) -> dict:
         raw_packages = _parse_npm_manifest(manifest)
 
     raw_packages = raw_packages[:_MAX_PACKAGES]
+    if not raw_packages:
+        return _err(
+            "dependency_auditor.invalid_manifest",
+            "No dependencies found. Pass a valid package.json, requirements.txt, or pyproject-style dependency list.",
+        )
 
     # Fetch the latest published version + license for both ecosystems whenever
     # outdated or license checks are enabled. The original code only fetched

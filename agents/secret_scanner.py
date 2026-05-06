@@ -341,7 +341,7 @@ def run(payload: dict) -> dict:
             "secret_scanner.invalid_min_entropy", "min_entropy must be a number"
         )
     if min_entropy < 0:
-        return _err("secret_scanner.invalid_min_entropy", "min_entropy must be >= 0")
+        min_entropy = 0.0
 
     findings: list[dict[str, Any]] = []
     seen_offsets: set[tuple[int, int]] = set()

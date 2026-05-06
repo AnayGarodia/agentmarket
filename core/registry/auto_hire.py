@@ -371,6 +371,29 @@ def _score_candidate(
         score += 5
         reasons.append("recommended")
 
+    combined = " ".join([c.slug.lower(), c.name.lower(), c.description.lower(), " ".join(c.tags).lower()])
+    if {"run", "execute", "python"} & tokens and "python" in combined and "executor" in combined:
+        score += 45
+        reasons.append("python execution intent")
+    if {"lint", "linter", "ruff", "eslint"} & tokens and "linter" in combined:
+        score += 45
+        reasons.append("lint intent")
+    if {"browser", "screenshot", "playwright", "homepage"} & tokens and any(
+        token in combined for token in ("browser", "playwright", "screenshot")
+    ):
+        score += 45
+        reasons.append("browser/screenshot intent")
+    if {"image", "generate", "generation", "dall", "replicate"} & tokens and any(
+        token in combined for token in ("image", "generation", "replicate", "gpt-image")
+    ):
+        score += 45
+        reasons.append("image generation intent")
+    if {"edgar", "10-k", "sec", "revenue"} & tokens and any(
+        token in combined for token in ("edgar", "sec", "financial")
+    ):
+        score += 45
+        reasons.append("financial filing intent")
+
     # Curated routing vocabulary — strongest natural-language signal.
     # match_keywords push the agent toward intents it should serve; block_keywords
     # push it away from intents it should NOT serve (e.g. json_schema_validator

@@ -79,9 +79,9 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     "min_entropy": {
                         "type": "number",
                         "title": "Min Shannon entropy",
-                        "description": "Threshold for high-entropy heuristic. Set 0 to disable. Default 4.5.",
+                        "description": "Threshold for high-entropy heuristic. Set 0 or a negative value to disable. Default 4.5.",
                         "default": 4.5,
-                        "minimum": 0,
+                        "minimum": -1,
                     },
                     "max_findings": {
                         "type": "integer",
