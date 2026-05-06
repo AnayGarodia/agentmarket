@@ -602,6 +602,13 @@ def jobs_batch_create(
     if len(body.jobs) > 50:
         raise HTTPException(status_code=400, detail="Batch size limited to 50 jobs.")
 
+    # Defense-in-depth: accept ?dry_run=true as a query param so older
+    # MCP/SDK clients that don't yet forward the body field can still ask
+    # for an estimate without burning escrow.
+    qp_dry_run = str(request.query_params.get("dry_run") or "").strip().lower()
+    if qp_dry_run in {"1", "true", "yes"}:
+        body.dry_run = True
+
     caller_owner_id = _caller_owner_id(request)
     request_client_id = _request_client_id(request)
     batch_id = str(uuid.uuid4())
@@ -1512,6 +1519,13 @@ def jobs_complete(
 
             private_pem = agent.get("signing_private_key")
             agent_did_value = agent.get("did")
+            if not private_pem or not agent_did_value:
+                # Same lazy-provision guarantee as the sync path so async
+                # completions never silently drop signatures when the lifespan
+                # backfill missed an agent.
+                private_pem, _public_pem, agent_did_value = (
+                    registry.ensure_agent_signing_keys(agent.get("agent_id") or "")
+                )
             if (
                 private_pem
                 and agent_did_value

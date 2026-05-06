@@ -852,6 +852,56 @@ def registry_agent_caller_key_create(
 
 
 @app.post(
+    "/ops/identity/backfill",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Ops"],
+    summary=(
+        "Provision Ed25519 signing keys for any built-in agent that is "
+        "missing one so completed jobs produce verifiable receipts."
+    ),
+)
+@limiter.limit("10/minute")
+def ops_identity_backfill(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    # Only act on agents that actually exist in this DB. Sunset/deprecated
+    # builtin IDs may be in _BUILTIN_AGENT_IDS but not registered, and would
+    # otherwise count as spurious "failures".
+    candidate_ids = sorted(_BUILTIN_AGENT_IDS)
+    builtin_ids: list[str] = []
+    for aid in candidate_ids:
+        if registry.get_agent(aid, include_unapproved=True) is not None:
+            builtin_ids.append(aid)
+    provisioned: list[str] = []
+    failed: list[str] = []
+    for agent_id in builtin_ids:
+        private_pem, public_pem, did_value = registry.ensure_agent_signing_keys(
+            agent_id
+        )
+        if not private_pem or not public_pem or not did_value:
+            failed.append(agent_id)
+            continue
+        provisioned.append(agent_id)
+    return JSONResponse(
+        content={
+            "provisioned_count": len(provisioned),
+            "failed_count": len(failed),
+            "total_builtin_agents": len(builtin_ids),
+            "skipped_unregistered": len(candidate_ids) - len(builtin_ids),
+            "failed": failed,
+            "note": (
+                "Idempotent: agents that already had keys were left unchanged. "
+                "Run this once after a deploy if /agents/{id}/did.json reports "
+                "missing identity."
+            ),
+        }
+    )
+
+
+@app.post(
     "/admin/agents/{agent_id}/suspend",
     response_model=core_models.AgentResponse,
     responses=_error_responses(400, 401, 403, 404, 429, 500),
@@ -1263,6 +1313,14 @@ def registry_call(
 
                 private_pem = agent.get("signing_private_key")
                 agent_did_value = agent.get("did")
+                # Lazy-provision keys when the lifespan backfill missed this
+                # agent (e.g. older deploys, or new builtins added between
+                # restarts). Without this, a missing key permanently breaks
+                # receipts for the affected agent.
+                if not private_pem or not agent_did_value:
+                    private_pem, _public_pem, agent_did_value = (
+                        registry.ensure_agent_signing_keys(agent["agent_id"])
+                    )
                 if private_pem and agent_did_value:
                     sig_b64 = _crypto.sign_payload(private_pem, output)
                     sig_alg = str(agent.get("signing_alg") or "ed25519")

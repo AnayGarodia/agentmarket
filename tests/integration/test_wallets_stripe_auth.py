@@ -1017,3 +1017,148 @@ def test_sync_call_response_includes_pricing_units_block(client, monkeypatch):
     assert "platform_fee_pct" in units
     assert units["fee_bearer_policy"] == "caller"
     assert units["unit"]
+
+
+def test_jobs_batch_dry_run_via_query_param_does_not_charge(client):
+    """Defense-in-depth: older clients that forward `?dry_run=true` as a
+    query param must get the same no-charge estimate as the body field."""
+    worker = _register_user()
+    caller = _register_user()
+    wallet = _fund_user_wallet(caller, 200)
+    balance_before = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Batch QP Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["batch-qp-dry-run"],
+    )
+
+    resp = client.post(
+        "/jobs/batch?dry_run=true",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "jobs": [
+                {"agent_id": agent_id, "input_payload": {"task": "a"}},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["mode"] == "parallel_marketplace_hire_estimate"
+    assert body["charge_status"] == "not_charged"
+    assert body["batch_id"] is None
+
+    balance_after = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+    assert balance_after == balance_before
+
+
+def test_sync_builtin_lazy_provisions_signing_keys_when_missing(client, monkeypatch):
+    """If an agent record is missing signing keys at sign time, the sync
+    path must lazy-provision them so receipts still verify. Simulates the
+    prod regression where the lifespan backfill silently failed."""
+    import json as _json
+    import base64 as _b64
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.hazmat.primitives import serialization
+
+    # Wipe the linter agent's signing keys to mimic the bad prod state.
+    with registry._conn() as conn:
+        conn.execute(
+            "UPDATE agents SET signing_public_key = NULL, signing_private_key = NULL, did = NULL "
+            "WHERE agent_id = %s",
+            (server._LINTER_AGENT_ID,),
+        )
+
+    monkeypatch.setattr(
+        server.agent_linter_agent,
+        "run",
+        lambda payload: {"language": "python", "tool": "ruff", "issues": [], "clean": True},
+    )
+
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+
+    sync_call = client.post(
+        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"language": "python", "code": "print(1)\n"},
+    )
+    assert sync_call.status_code == 200, sync_call.text
+    job_id = sync_call.json()["job_id"]
+
+    sig = client.get(
+        f"/jobs/{job_id}/signature",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert sig.status_code == 200, sig.text
+    sig_body = sig.json()
+    assert sig_body["signature"], "Lazy-provisioned key must produce a signature"
+    assert sig_body["agent_did"]
+
+    # The agent row should now have a key (provisioned during the call).
+    agent_row = registry.get_agent(server._LINTER_AGENT_ID, include_unapproved=True)
+    assert agent_row["signing_private_key"]
+    assert agent_row["signing_public_key"]
+    public_key = serialization.load_pem_public_key(
+        agent_row["signing_public_key"].encode("utf-8")
+    )
+    assert isinstance(public_key, Ed25519PublicKey)
+
+    # End-to-end verification proves the receipt is now usable.
+    job_payload = client.get(
+        f"/jobs/{job_id}", headers=_auth_headers(caller["raw_api_key"])
+    ).json()
+    signed_bytes = _json.dumps(
+        job_payload["output_payload"],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    sig_pad = "=" * (-len(sig_body["signature"]) % 4)
+    try:
+        signature_bytes = _b64.urlsafe_b64decode(sig_body["signature"] + sig_pad)
+    except Exception:
+        signature_bytes = _b64.b64decode(sig_body["signature"] + sig_pad)
+    public_key.verify(signature_bytes, signed_bytes)
+
+
+def test_ops_identity_backfill_admin_provisions_missing_keys(client):
+    """POST /ops/identity/backfill must require admin and idempotently
+    provision keys for every built-in agent."""
+    user = _register_user()
+    admin_resp = client.post(
+        "/auth/keys",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"name": "admin-backfill", "scopes": ["admin"]},
+    )
+    assert admin_resp.status_code == 201
+    admin_key = admin_resp.json()["raw_key"]
+
+    # Wipe one agent's keys to ensure the endpoint actually does work.
+    with registry._conn() as conn:
+        conn.execute(
+            "UPDATE agents SET signing_public_key = NULL, signing_private_key = NULL, did = NULL "
+            "WHERE agent_id = %s",
+            (server._LINTER_AGENT_ID,),
+        )
+
+    caller_only = client.post(
+        "/auth/keys",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"name": "caller-only-bk", "scopes": ["caller"], "per_job_cap_cents": 500},
+    ).json()["raw_key"]
+
+    blocked = client.post("/ops/identity/backfill", headers=_auth_headers(caller_only))
+    assert blocked.status_code == 403
+
+    resp = client.post("/ops/identity/backfill", headers=_auth_headers(admin_key))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_builtin_agents"] >= 1
+    assert body["failed_count"] == 0
+
+    agent_row = registry.get_agent(server._LINTER_AGENT_ID, include_unapproved=True)
+    assert agent_row["signing_private_key"]
+    assert agent_row["did"]
