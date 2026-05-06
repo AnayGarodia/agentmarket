@@ -103,6 +103,7 @@ flags = job["flags"]
 sample = job["sample"]
 operation = job["operation"]
 replacement = job["replacement"]
+backend = job.get("backend", "re")
 def serialize(m):
     return {
         "start": m.start(),
@@ -112,7 +113,13 @@ def serialize(m):
         "named_groups": dict(m.groupdict(default=None)),
     }
 try:
-    compiled = re.compile(pattern, flags)
+    # stdlib `re` doesn't support \p{} unicode properties; the third-party
+    # `regex` package does — the parent process selects the backend.
+    if backend == "regex":
+        import regex as _engine
+    else:
+        _engine = re
+    compiled = _engine.compile(pattern, flags)
     if operation == "findall":
         out = {"matches": [serialize(m) for m in compiled.finditer(sample)]}
     elif operation == "match":
@@ -126,8 +133,8 @@ try:
         out = {"matches": [], "substitution": new_text, "match_count_override": n}
     else:
         out = {"error": f"unsupported operation {operation!r}"}
-except re.error as exc:
-    out = {"error": f"re.error: {exc}"}
+except Exception as exc:
+    out = {"error": f"{type(exc).__name__}: {exc}"}
 sys.stdout.write(json.dumps(out))
 """
 
@@ -139,6 +146,7 @@ def _run_one_sample(
     operation: str,
     replacement: str,
     timeout_ms: int,
+    backend: str = "re",
 ) -> dict[str, Any]:
     """Execute one regex operation in an isolated subprocess.
 
@@ -153,6 +161,7 @@ def _run_one_sample(
             "sample": sample,
             "operation": operation,
             "replacement": replacement,
+            "backend": backend,
         }
     )
     start = time.monotonic()
@@ -280,26 +289,70 @@ def run(payload: dict) -> dict:
 
     # Try compiling once up front so we report compile errors clearly without
     # spinning a subprocess.
+    backend = "re"
     try:
         re.compile(pattern, flags)
         compiled_ok = True
         compile_error = None
     except re.error as exc:
-        return {
-            "pattern": pattern,
-            "compiled": False,
-            "compile_error": f"{exc}",
-            "operation": operation,
-            "results": [],
-            "catastrophic_risk": False,
-            "summary": f"Pattern failed to compile: {exc}",
-        }
+        # stdlib `re` doesn't support \p{} unicode properties; fall back to
+        # the third-party `regex` package when the failure looks like a
+        # unicode-property pattern.
+        msg = str(exc)
+        looks_unicode_prop = (
+            "\\p" in pattern or "\\P" in pattern or "\\p" in msg or "\\P" in msg
+        )
+        if looks_unicode_prop:
+            try:
+                import regex as _regex_mod  # lazy: not a hard dependency
+            except ImportError:
+                return {
+                    "pattern": pattern,
+                    "compiled": False,
+                    "compile_error": (
+                        "Pattern uses \\p{} unicode properties; install the "
+                        "'regex' Python package or use stdlib equivalents like "
+                        "\\w / [^\\W\\d_]."
+                    ),
+                    "operation": operation,
+                    "results": [],
+                    "catastrophic_risk": False,
+                    "regex_backend": "re",
+                    "summary": "Pattern uses unicode properties unsupported by stdlib re.",
+                }
+            try:
+                _regex_mod.compile(pattern, flags)
+                backend = "regex"
+                compiled_ok = True
+                compile_error = None
+            except Exception as exc2:
+                return {
+                    "pattern": pattern,
+                    "compiled": False,
+                    "compile_error": f"{exc2}",
+                    "operation": operation,
+                    "results": [],
+                    "catastrophic_risk": False,
+                    "regex_backend": "regex",
+                    "summary": f"Pattern failed to compile under 'regex': {exc2}",
+                }
+        else:
+            return {
+                "pattern": pattern,
+                "compiled": False,
+                "compile_error": f"{exc}",
+                "operation": operation,
+                "results": [],
+                "catastrophic_risk": False,
+                "regex_backend": "re",
+                "summary": f"Pattern failed to compile: {exc}",
+            }
 
     results: list[dict[str, Any]] = []
     catastrophic = False
     for idx, sample in enumerate(samples):
         outcome = _run_one_sample(
-            pattern, flags, sample, operation, replacement, timeout_ms
+            pattern, flags, sample, operation, replacement, timeout_ms, backend
         )
         if outcome.get("timed_out"):
             catastrophic = True
@@ -316,6 +369,7 @@ def run(payload: dict) -> dict:
                 "timed_out": bool(outcome.get("timed_out")),
                 "substitution": outcome.get("substitution"),
                 "error": outcome.get("error"),
+                "regex_backend": backend,
             }
         )
 
@@ -334,5 +388,6 @@ def run(payload: dict) -> dict:
         "operation": operation,
         "results": results,
         "catastrophic_risk": catastrophic,
+        "regex_backend": backend,
         "summary": summary,
     }

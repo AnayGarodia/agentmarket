@@ -446,6 +446,10 @@ def _job_response(
             if job.get("job_id"):
                 result["full_output_available"] = True
                 result["full_output_path"] = f"/jobs/{job['job_id']}/full"
+                result["full_output_hint"] = (
+                    "Call aztea_job(action='full_output', job_id=..., offset=0, "
+                    "limit=20000) to fetch chunks."
+                )
     return result
 
 

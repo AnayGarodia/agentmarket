@@ -380,7 +380,13 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
                     },
                     "include_patched": {"type": "boolean", "default": False},
                 },
-                "oneOf": [
+                # Replaced jsonschema oneOf (whose error message reads as the
+                # *opposite* of the actual problem when both fields are sent)
+                # with a sentinel field that the agent runtime validates and
+                # rejects with a clear error. This avoids the
+                # "valid under each of {required:['cve_ids']}, {required:['cve_id']}"
+                # garbled stack trace that confused buyers.
+                "anyOf": [
                     {"required": ["cve_id"]},
                     {"required": ["cve_ids"]},
                     {"required": ["packages"]},

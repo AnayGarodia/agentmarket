@@ -52,8 +52,11 @@ _COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl"}
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
+def _err(code: str, message: str, details: dict | None = None) -> dict[str, Any]:
+    err: dict[str, Any] = {"code": code, "message": message}
+    if details:
+        err["details"] = details
+    return {"error": err}
 
 
 def _detect_ecosystem(manifest: str) -> str:
@@ -309,6 +312,23 @@ def run(payload: dict) -> dict:
         )
 
     ecosystem = str(payload.get("ecosystem") or "auto").strip().lower()
+    _SUPPORTED_ECOSYSTEMS = {"npm", "pypi", "auto"}
+    if ecosystem not in _SUPPORTED_ECOSYSTEMS:
+        return _err(
+            "dependency_auditor.unsupported_ecosystem",
+            (
+                f"Ecosystem {ecosystem!r} is not supported by dependency_auditor. "
+                "Supported: npm (package.json), pypi (requirements.txt / "
+                "pyproject.toml). For maven use OWASP Dependency-Check, for "
+                "cargo use `cargo audit`, for go modules use `govulncheck`. "
+                "Run those via shell_executor."
+            ),
+            details={
+                "supported": sorted(_SUPPORTED_ECOSYSTEMS),
+                "received": ecosystem,
+                "next_step": "aztea_call(slug='shell_executor', ...) with the ecosystem-native auditor",
+            },
+        )
     if ecosystem == "auto":
         ecosystem = _detect_ecosystem(manifest)
 

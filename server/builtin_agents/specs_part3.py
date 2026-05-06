@@ -185,9 +185,19 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
                     "language": {
                         "type": "string",
                         "title": "Language",
-                        "description": "Programming language. 'auto' detects from code patterns.",
+                        # Schema accepts any string so unsupported languages
+                        # (ruby, go, rust, etc.) reach the runtime, which
+                        # emits a structured refund envelope pointing the
+                        # caller at multi_language_executor. This beats a
+                        # generic schema-level rejection that doesn't
+                        # explain WHERE to go next.
+                        "description": (
+                            "Programming language. Supported: python, javascript, "
+                            "typescript, auto. Other languages return a clear "
+                            "'unsupported_language' error pointing to "
+                            "multi_language_executor."
+                        ),
                         "default": "auto",
-                        "enum": ["python", "javascript", "typescript", "auto"],
                     },
                     "filename": {
                         "type": "string",
@@ -371,7 +381,9 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
                     },
                     "language": {
                         "type": "string",
-                        "enum": ["python", "typescript"],
+                        # Accept any string; runtime returns an unsupported_language
+                        # error envelope (refunds caller) for non-python/typescript.
+                        "description": "Supported: python, typescript. Other values return a clear unsupported_language error.",
                         "default": "python",
                     },
                     "stubs": {

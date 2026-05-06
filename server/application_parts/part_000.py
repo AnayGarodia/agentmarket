@@ -352,9 +352,10 @@ _DEFAULT_DISPUTE_WINDOW_HOURS = 72
 _DEFAULT_DISPUTE_FILING_DEPOSIT_BPS = 500
 _DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS = 5
 _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 60  # auto-resolve pending disputes every 60s
-_DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = 2
-_DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 20
-_DEFAULT_BUILTIN_JOB_WORKER_PARALLELISM = 8
+_DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = 1
+_DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 200
+_DEFAULT_BUILTIN_JOB_WORKER_PARALLELISM = 32
+_DEFAULT_BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL = 400
 _DEFAULT_TOPUP_DAILY_LIMIT_CENTS = 100_000
 _DEFAULT_PAYMENTS_RECONCILIATION_INTERVAL_SECONDS = 3600
 _DEFAULT_PAYMENTS_RECONCILIATION_MAX_MISMATCHES = 100
@@ -637,12 +638,30 @@ _BUILTIN_JOB_WORKER_PARALLELISM = _env_int(
     "BUILTIN_JOB_WORKER_PARALLELISM",
     _DEFAULT_BUILTIN_JOB_WORKER_PARALLELISM,
     minimum=1,
-    maximum=32,
+    maximum=128,
+)
+_BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL = _env_int(
+    "BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL",
+    _DEFAULT_BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL,
+    minimum=1,
+    maximum=5000,
 )
 _BUILTIN_JOB_WORKER_ENABLED = _env_bool(
     "BUILTIN_JOB_WORKER_ENABLED",
     default=_builtin_worker_interval > 0,
 )
+# Event used to wake the builtin worker immediately when new pending jobs are
+# submitted (e.g. from hire_batch). Avoids the 1-2s polling delay on small
+# batches and keeps queued work moving when the pool has free slots.
+_BUILTIN_WORKER_WAKE_EVENT: threading.Event = threading.Event()
+
+
+def _wake_builtin_worker() -> None:
+    """Signal the builtin worker loop to skip its next sleep window."""
+    try:
+        _BUILTIN_WORKER_WAKE_EVENT.set()
+    except Exception:
+        pass
 _TOPUP_DAILY_LIMIT_CENTS = _env_int(
     "TOPUP_DAILY_LIMIT_CENTS",
     _DEFAULT_TOPUP_DAILY_LIMIT_CENTS,

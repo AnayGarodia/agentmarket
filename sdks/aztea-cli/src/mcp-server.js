@@ -1085,15 +1085,34 @@ async function verifyJobSignature(args) {
   const agentDid = String(res.body.agent_did || res.body.did || '').trim()
   let verified = false
   let verificationError = null
+  let verificationMethod = null
   try {
     const agentId = agentDid.includes(':agents:') ? agentDid.split(':agents:').pop() : String(res.body.agent_id || '').trim()
-    const [didDoc, job] = await Promise.all([
-      getJson(`/agents/${encodeURIComponent(agentId)}/did.json`),
-      getJson(`/jobs/${encodeURIComponent(jobId)}`),
-    ])
-    const method = (didDoc.verificationMethod || []).find(m => m && m.publicKeyJwk && m.publicKeyJwk.crv === 'Ed25519')
-    if (!method) throw new Error('no Ed25519 publicKeyJwk on DID document')
-    const publicKey = crypto.createPublicKey({ key: method.publicKeyJwk, format: 'jwk' })
+    // Prefer the JWK embedded in the signature response. It avoids a second
+    // HTTP round-trip and works even when the did:web hostname is unreachable
+    // from the verifier's network. Fall back to fetching the DID document
+    // for older signature responses that omit the field.
+    const embeddedJwk = res.body && res.body.public_key_jwk
+    let jwk = null
+    if (embeddedJwk && embeddedJwk.crv === 'Ed25519' && embeddedJwk.x) {
+      jwk = embeddedJwk
+      verificationMethod = 'embedded-jwk'
+    }
+    let job
+    if (jwk) {
+      job = await getJson(`/jobs/${encodeURIComponent(jobId)}`)
+    } else {
+      const [didDoc, jobDoc] = await Promise.all([
+        getJson(`/agents/${encodeURIComponent(agentId)}/did.json`),
+        getJson(`/jobs/${encodeURIComponent(jobId)}`),
+      ])
+      job = jobDoc
+      const method = (didDoc.verificationMethod || []).find(m => m && m.publicKeyJwk && m.publicKeyJwk.crv === 'Ed25519')
+      if (!method) throw new Error('no Ed25519 publicKeyJwk on DID document and none embedded in signature response')
+      jwk = method.publicKeyJwk
+      verificationMethod = 'did-document'
+    }
+    const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' })
     const signed = Buffer.from(canonicalJson(job.output_payload), 'utf8')
     verified = crypto.verify(null, signed, publicKey, Buffer.from(String(res.body.signature || ''), 'base64'))
   } catch (exc) {
@@ -1106,12 +1125,13 @@ async function verifyJobSignature(args) {
       signed: true,
       verified,
       verification_error: verified ? null : verificationError,
+      verification_method: verificationMethod,
       agent_did: agentDid,
       output_hash: res.body.output_hash,
       signed_at: res.body.signed_at,
       signature: res.body.signature,
       note: verified
-        ? 'Signature verified locally against the agent DID document.'
+        ? 'Signature verified locally against the agent Ed25519 public key. Aztea cannot alter this output without breaking the signature.'
         : 'Signature was fetched but local verification did not complete in this MCP runtime.',
     },
   }

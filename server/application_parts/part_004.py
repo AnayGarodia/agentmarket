@@ -344,40 +344,96 @@ def _process_pending_builtin_jobs(
 ) -> dict[str, int]:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    # Pull a single combined batch across all built-in + hosted-skill agents.
+    # Previously this issued one DB query per agent (~21+ serial queries) and
+    # capped per-agent which throttled total throughput when the queue was
+    # dominated by a single agent. We now fetch up to MAX_BATCH_TOTAL pending
+    # jobs in one shot, then fan them out across the worker pool. The
+    # per-agent limit is preserved as a safety hint to avoid one runaway agent
+    # hogging the entire batch.
     batch_limit = min(max(1, int(limit_per_agent)), 500)
+    max_total = max(batch_limit, int(_BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL))
     scanned = 0
     processed = 0
+
     skill_agent_ids = set(_hosted_skills.list_pending_skill_agent_ids())
-    target_agent_ids = list(_BUILTIN_AGENT_IDS) + [
-        aid for aid in skill_agent_ids if aid not in _BUILTIN_AGENT_IDS
-    ]
+    eligible_agent_ids = set(_BUILTIN_AGENT_IDS) | skill_agent_ids
+
+    # Single combined query: pending jobs across all eligible agents, oldest first.
     pending_jobs: list[dict] = []
-    for agent_id in target_agent_ids:
-        pending = jobs.list_jobs_for_agent(
-            agent_id,
-            status="pending",
-            limit=batch_limit,
-        )
-        scanned += len(pending)
-        pending_jobs.extend(pending)
+    seen_ids: set[str] = set()
+    per_agent_count: dict[str, int] = {}
+    try:
+        all_pending = jobs.list_pending_jobs(limit=max_total)
+    except AttributeError:
+        # Fallback for older code paths: per-agent fetch.
+        all_pending = []
+        for agent_id in eligible_agent_ids:
+            all_pending.extend(
+                jobs.list_jobs_for_agent(
+                    agent_id, status="pending", limit=batch_limit
+                )
+            )
+    for job in all_pending:
+        agent_id = str(job.get("agent_id") or "")
+        if agent_id not in eligible_agent_ids:
+            continue
+        if per_agent_count.get(agent_id, 0) >= batch_limit:
+            continue
+        job_id = str(job.get("job_id") or "")
+        if job_id in seen_ids:
+            continue
+        seen_ids.add(job_id)
+        per_agent_count[agent_id] = per_agent_count.get(agent_id, 0) + 1
+        pending_jobs.append(job)
+        if len(pending_jobs) >= max_total:
+            break
+    scanned = len(pending_jobs)
+
     if not pending_jobs:
-        return {"scanned": scanned, "processed": processed}
+        return {"scanned": 0, "processed": 0, "queue_depth": 0}
+
     max_workers = min(max(1, _BUILTIN_JOB_WORKER_PARALLELISM), len(pending_jobs))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(_process_pending_builtin_job, job) for job in pending_jobs]
+    with ThreadPoolExecutor(
+        max_workers=max_workers, thread_name_prefix="aztea-builtin"
+    ) as pool:
+        futures = [
+            pool.submit(_process_pending_builtin_job, job) for job in pending_jobs
+        ]
         for future in as_completed(futures):
             try:
                 if future.result():
                     processed += 1
             except Exception:
                 _LOG.exception("Built-in parallel worker task failed.")
-    return {"scanned": scanned, "processed": processed}
+
+    # Snapshot the remaining queue depth so callers (batch_status, parallel
+    # hire trace) can show how many jobs still wait.
+    try:
+        remaining = jobs.count_pending_jobs(agent_ids=list(eligible_agent_ids))
+    except Exception:
+        remaining = None
+    return {
+        "scanned": scanned,
+        "processed": processed,
+        "queue_depth": remaining if remaining is not None else max(0, scanned - processed),
+        "max_workers": max_workers,
+        "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
+    }
 
 
 def _builtin_worker_loop(stop_event: threading.Event) -> None:
     worker_db_path = jobs.DB_PATH
     _set_builtin_worker_state(running=True, started_at=_utc_now_iso())
-    while not stop_event.wait(_BUILTIN_JOB_WORKER_INTERVAL_SECONDS):
+    interval = max(0.05, float(_BUILTIN_JOB_WORKER_INTERVAL_SECONDS))
+    while not stop_event.is_set():
+        # Wait up to `interval` seconds, but wake immediately when a new
+        # batch is submitted (hire_batch / hire_async fire the wake event).
+        woken = _BUILTIN_WORKER_WAKE_EVENT.wait(timeout=interval)
+        if woken:
+            _BUILTIN_WORKER_WAKE_EVENT.clear()
+        if stop_event.is_set():
+            break
         started = _utc_now_iso()
         try:
             if jobs.DB_PATH != worker_db_path:
@@ -395,6 +451,11 @@ def _builtin_worker_loop(stop_event: threading.Event) -> None:
                 last_summary=summary,
                 last_error=None,
             )
+            # If we drained a full batch, immediately try again — there may
+            # be more queued behind it. This keeps long fan-outs flowing
+            # without waiting another `interval` seconds.
+            if summary.get("processed", 0) >= _BUILTIN_JOB_WORKER_PARALLELISM:
+                _BUILTIN_WORKER_WAKE_EVENT.set()
         except Exception as exc:
             _LOG.exception("Built-in worker loop failed.")
             _set_builtin_worker_state(

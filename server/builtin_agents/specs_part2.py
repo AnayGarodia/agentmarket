@@ -715,9 +715,16 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                     "ecosystem": {
                         "type": "string",
                         "title": "Ecosystem",
-                        "description": "Package ecosystem. 'auto' detects from manifest format.",
+                        # Schema accepts any string so unsupported ecosystems
+                        # (maven, cargo, gradle, gomod, ...) reach the runtime
+                        # which returns a structured error pointing the
+                        # caller at the right tool (refunds automatically).
+                        "description": (
+                            "Package ecosystem. Supported: npm, pypi, auto. "
+                            "Other ecosystems (maven, cargo, gradle, gomod) "
+                            "return a clear unsupported_ecosystem error."
+                        ),
                         "default": "auto",
-                        "enum": ["npm", "pypi", "auto"],
                     },
                     "checks": {
                         "type": "array",

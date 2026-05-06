@@ -886,6 +886,7 @@ class RegistryBridge:
             "generated_at": None,
         }
         self._auth_required: bool = not bool(api_key)
+        self._auth_fail_count: int = 0
         self._signup_url: str = f"{self.base_url.rstrip('/')}/signup"
 
     def _headers(self) -> dict[str, str]:
@@ -911,8 +912,12 @@ class RegistryBridge:
             return self._manifest
 
         if response.status_code in (401, 403):
+            # Tolerate 1-2 transient auth failures before flipping to auth-required
+            # mode; a single hiccup mid-session shouldn't blank the tool catalog.
+            self._auth_fail_count = getattr(self, "_auth_fail_count", 0) + 1
             _LOG.warning(
-                "Aztea API key invalid or missing (HTTP %s). Switch to auth mode.",
+                "Aztea API key auth failure %d (HTTP %s).",
+                self._auth_fail_count,
                 response.status_code,
             )
             try:
@@ -923,9 +928,12 @@ class RegistryBridge:
                         self._signup_url = detail["signup_url"]
             except Exception:
                 pass
-            with self._lock:
-                self._auth_required = True
+            if self._auth_fail_count >= 3:
+                with self._lock:
+                    self._auth_required = True
             return self._manifest
+        # Successful refresh resets the auth-fail counter.
+        self._auth_fail_count = 0
 
         response.raise_for_status()
         payload = response.json()
@@ -933,8 +941,45 @@ class RegistryBridge:
         agents = raw_agents if isinstance(raw_agents, list) else []
         entries = mcp_manifest.build_mcp_tool_entries(agents)
         manifest = mcp_manifest.build_mcp_manifest(agents)
+
+        # Non-destructive refresh: if the new manifest is suspiciously empty
+        # or much smaller than what we already had, keep the previous one.
+        # This prevents a transient registry blip from disappearing tools
+        # mid-session (cause of the TOOL_NOT_FOUND race observed during
+        # eval). A real shrinkage of >50% is implausible at the platform
+        # scale we run today; treat it as a sign of a partial response.
         with self._lock:
-            self._entries = entries
+            previous_count = len(self._entries)
+            new_count = len(entries)
+            if new_count == 0 and previous_count > 0:
+                _LOG.warning(
+                    "Registry refresh returned 0 entries; keeping stale manifest "
+                    "(%d entries) to avoid TOOL_NOT_FOUND for known tools.",
+                    previous_count,
+                )
+                return self._manifest
+            if previous_count >= 8 and new_count < (previous_count // 2):
+                _LOG.warning(
+                    "Registry refresh shrunk from %d → %d entries; treating as "
+                    "transient failure and keeping previous manifest.",
+                    previous_count,
+                    new_count,
+                )
+                return self._manifest
+            # Merge: union of new + previously-known. Newer wins on collisions
+            # so updated schemas/prices propagate, but tools that were already
+            # registered don't disappear from the surface even if a partial
+            # refresh response excluded them.
+            merged: dict[str, dict[str, Any]] = {}
+            for prev_entry in self._entries:
+                slug = prev_entry.get("slug") or prev_entry.get("tool_name")
+                if slug:
+                    merged[slug] = prev_entry
+            for new_entry in entries:
+                slug = new_entry.get("slug") or new_entry.get("tool_name")
+                if slug:
+                    merged[slug] = new_entry
+            self._entries = list(merged.values())
             self._manifest = manifest
             self._catalog_cache = None  # invalidate on every refresh
             self._auth_required = False
@@ -1639,6 +1684,26 @@ class RegistryBridge:
                         _session_accrue(
                             self._session_state, round(float(price_usd) * 100)
                         )
+                # Strip the verbose next_actions block on repeat calls to the
+                # same agent within a session — it's useful once but adds
+                # ~200 bytes to every subsequent response. The full block stays
+                # on first-call-per-agent so new buyers still see the rate /
+                # dispute / verify hint surface.
+                seen = self._session_state.setdefault(
+                    "_next_actions_seen", set()
+                )
+                slug_seen = resolved_tool_name in seen
+                if slug_seen and "next_actions" in parsed_body:
+                    job_id = parsed_body.get("job_id")
+                    parsed_body["next_actions"] = {
+                        "hint": (
+                            "Use aztea_job(action=rate|dispute|verify, job_id=...) "
+                            "for post-call operations. Full action block was "
+                            "shown on first call to this agent."
+                        ),
+                        "job_id": job_id,
+                    }
+                seen.add(resolved_tool_name)
                 return True, parsed_body
             return True, {"result": parsed_body}
 

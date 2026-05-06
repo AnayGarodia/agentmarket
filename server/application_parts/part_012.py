@@ -534,7 +534,10 @@ def registry_auto_hire(
                 "delegation": {
                     "status": "would_hire",
                     "intent": body.intent,
-                    "specialist": chosen.public_dict(),
+                    # `specialist` removed; agent identity is already at the
+                    # top-level `agent` key. Was duplicated which made
+                    # responses ~30% larger and confused buyers about which
+                    # field to consume.
                     "spend_cap_usd": float(body.max_cost_usd),
                 },
                 "payload": payload,
@@ -569,7 +572,10 @@ def registry_auto_hire(
                 "delegation": {
                     "status": "failed",
                     "intent": body.intent,
-                    "specialist": chosen.public_dict(),
+                    # `specialist` removed; agent identity is already at the
+                    # top-level `agent` key. Was duplicated which made
+                    # responses ~30% larger and confused buyers about which
+                    # field to consume.
                     "spend_cap_usd": float(body.max_cost_usd),
                 },
                 "settlement": {

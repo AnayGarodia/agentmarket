@@ -261,8 +261,11 @@ def _parse_llm_json(text_out: str, fallback: dict) -> dict:
         return fallback
 
 
-def _err(code: str, message: str) -> dict:
-    return {"error": {"code": code, "message": message}}
+def _err(code: str, message: str, details: dict | None = None) -> dict:
+    err: dict = {"code": code, "message": message}
+    if details:
+        err["details"] = details
+    return {"error": err}
 
 
 def run(payload: dict) -> dict:
@@ -361,7 +364,25 @@ def run(payload: dict) -> dict:
     if not multi_mode:
         r = fetch_results[0]
         if r["status"] == "error":
-            return _err("web_researcher.fetch_failed", r["error"])
+            # SPA / JS-rendered pages: surface a clear pointer to the
+            # browser_agent fallback so the caller knows which specialist
+            # CAN read this content. We don't auto-retry from inside this
+            # agent because (a) browser_agent isn't always provisioned and
+            # (b) charging the caller twice for one intent is worse than
+            # making the routing decision explicit.
+            err_msg = r["error"]
+            details: dict = {}
+            if "js_rendered" in str(err_msg).lower() or "spa" in str(err_msg).lower():
+                details["fallback_recommended"] = "browser_agent"
+                details["fallback_intent"] = (
+                    "aztea_call(slug='browser_agent', arguments={'url': '...', 'action': 'scrape'}) "
+                    "renders the page with headless Chromium, then returns the rendered HTML/text."
+                )
+                details["why_not_auto_retry"] = (
+                    "Auto-retry would charge twice for one intent. "
+                    "Caller picks the explicit retry to keep cost transparent."
+                )
+            return _err("web_researcher.fetch_failed", err_msg, details=details)
 
         text = r["content"]
         links = r.get("links", [])

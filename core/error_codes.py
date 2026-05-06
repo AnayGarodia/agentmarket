@@ -57,6 +57,8 @@ JOB_HEARTBEAT_FAILED = "job.heartbeat_failed"
 JOB_COMPLETE_FAILED = "job.complete_failed"
 JOB_FAIL_FAILED = "job.fail_failed"
 JOB_INVALID_STATE = "job.invalid_state"
+JOB_BATCH_PARTIAL_FAILURE = "job.batch.partial_failure"
+JOB_NOT_FOUND_404 = "job.not_found"  # alias used for explicit 404 returns
 
 # Auth / account limits
 AUTH_KEY_LIMIT = "auth.key_limit_reached"

@@ -120,6 +120,33 @@ def _batch_parallel_trace(
             counts[status] += 1
     total_charged_cents = sum(int(item.get("charge_cents") or 0) for item in trace_jobs)
     terminal_count = counts["complete"] + counts["failed"]
+
+    # Surface worker-pool depth so callers can diagnose stuck batches:
+    # "12 concurrent slots, 8 queued ahead of you".
+    worker_pool: dict | None = None
+    if counts["pending"] > 0 or counts["running"] > 0:
+        try:
+            queue_total = jobs.count_pending_jobs()
+        except Exception:
+            queue_total = None
+        worker_state_summary = (
+            _BUILTIN_WORKER_STATE.get("last_summary") or {}
+            if isinstance(_BUILTIN_WORKER_STATE, dict)
+            else {}
+        )
+        worker_pool = {
+            "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
+            "interval_seconds": _BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
+            "platform_queue_depth": queue_total,
+            "this_batch_pending": counts["pending"],
+            "this_batch_running": counts["running"],
+            "last_worker_summary": worker_state_summary,
+            "hint": (
+                "Jobs run on a shared worker pool. If platform_queue_depth is "
+                "much larger than this_batch_pending, other batches are ahead "
+                "of yours."
+            ),
+        }
     return {
         "batch_id": batch_id,
         "phase": phase,
@@ -136,6 +163,7 @@ def _batch_parallel_trace(
         ),
         "counts": counts,
         "jobs": trace_jobs,
+        "worker_pool": worker_pool,
         "marketplace_summary": {
             "rail": "jobs.batch",
             "escrow": "per_job",
@@ -894,38 +922,90 @@ def jobs_batch_create(
             )
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
             created_jobs.append(_job_response(job, caller))
-    except HTTPException:
+    except HTTPException as exc:
+        # Refund every charge taken so far AND surface a structured error so
+        # the caller has an actionable recovery handle (batch_id, refunded
+        # count, which job_index failed). Without this, MCP clients see only a
+        # bare 502 with empty body and cannot tell whether earlier jobs were
+        # charged or refunded.
+        refunded_count = 0
+        refunded_cents = 0
         for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
             try:
                 payments.post_call_refund(
                     wallet_id, charge_tx_id, price_cents, agent_id
                 )
-            except Exception as exc:
+                refunded_count += 1
+                refunded_cents += int(price_cents or 0)
+            except Exception as ref_exc:
                 _LOG.exception(
                     "Batch refund failed after handled error (wallet=%s charge_tx_id=%s agent=%s): %s",
                     wallet_id,
                     charge_tx_id,
                     agent_id,
-                    exc,
+                    ref_exc,
                 )
-        raise
-    except Exception:
+        # Re-wrap the inner HTTPException with batch metadata so the caller
+        # always sees batch_id and refund tally.
+        original_detail = exc.detail
+        wrapped = error_codes.make_error(
+            error_codes.JOB_BATCH_PARTIAL_FAILURE
+            if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
+            else "job.batch.partial_failure",
+            "Batch creation failed before all jobs were created.",
+            {
+                "batch_id": batch_id,
+                "submitted_count": len(resolved),
+                "created_count": len(created_jobs),
+                "failed_at_index": len(created_jobs),
+                "refunded_count": refunded_count,
+                "refunded_cents": refunded_cents,
+                "created_job_ids": [
+                    j.get("job_id") for j in created_jobs if isinstance(j, dict)
+                ],
+                "inner_error": original_detail,
+            },
+        )
+        raise HTTPException(status_code=exc.status_code, detail=wrapped) from exc
+    except Exception as exc:
+        refunded_count = 0
+        refunded_cents = 0
         for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
             try:
                 payments.post_call_refund(
                     wallet_id, charge_tx_id, price_cents, agent_id
                 )
-            except Exception as exc:
+                refunded_count += 1
+                refunded_cents += int(price_cents or 0)
+            except Exception as ref_exc:
                 _LOG.exception(
                     "Batch refund failed after unhandled error (wallet=%s charge_tx_id=%s agent=%s): %s",
                     wallet_id,
                     charge_tx_id,
                     agent_id,
-                    exc,
+                    ref_exc,
                 )
         raise HTTPException(
-            status_code=500, detail="Batch creation failed; all charges refunded."
-        )
+            status_code=500,
+            detail=error_codes.make_error(
+                error_codes.JOB_BATCH_PARTIAL_FAILURE
+                if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
+                else "job.batch.partial_failure",
+                "Batch creation failed; all charges refunded.",
+                {
+                    "batch_id": batch_id,
+                    "submitted_count": len(resolved),
+                    "created_count": len(created_jobs),
+                    "failed_at_index": len(created_jobs),
+                    "refunded_count": refunded_count,
+                    "refunded_cents": refunded_cents,
+                    "created_job_ids": [
+                        j.get("job_id") for j in created_jobs if isinstance(j, dict)
+                    ],
+                    "inner_error": str(exc)[:500],
+                },
+            ),
+        ) from exc
 
     trace = _batch_parallel_trace(
         batch_id=batch_id,
@@ -939,6 +1019,12 @@ def jobs_batch_create(
         intent=body.intent,
         max_total_cents=body.max_total_cents,
     )
+    # Wake the builtin worker pool so queued jobs start draining immediately
+    # instead of waiting up to BUILTIN_JOB_WORKER_INTERVAL_SECONDS.
+    try:
+        _wake_builtin_worker()
+    except Exception:
+        pass
     return JSONResponse(
         content={
             "batch_id": batch_id,
@@ -1023,6 +1109,17 @@ def jobs_batch_status(
     response_jobs = (
         trace["jobs"] if compact else [_job_response(job, caller) for job in batch_jobs]
     )
+    # Compact mode strips the duplicated job list inside parallel_hire_trace
+    # so polling responses don't ship the same data twice. Keeps counts +
+    # marketplace_summary + worker_pool diagnostics; drops `jobs` from the
+    # nested trace because they are already in the top-level `jobs` field.
+    if compact:
+        trace_compact = {k: v for k, v in trace.items() if k != "jobs"}
+        trace_compact["jobs_omitted_for_compact_mode"] = True
+        trace_compact["use_full_mode"] = "?include=full"
+        trace_to_return = trace_compact
+    else:
+        trace_to_return = trace
     return JSONResponse(
         content={
             "batch_id": batch_id,
@@ -1051,10 +1148,12 @@ def jobs_batch_status(
                 "settlement": "settled_or_refunded_per_job",
                 "receipt": "signed_per_completed_job",
             },
-            "parallel_hire_trace": trace,
+            "parallel_hire_trace": trace_to_return,
+            "include_mode": include_mode,
             "next_step": (
                 "Summarize completed specialist outputs, call aztea_job(action='verify', job_id=...) "
-                "for completed receipts when provenance matters, and keep polling while jobs are pending."
+                "for completed receipts when provenance matters, and keep polling while jobs are pending. "
+                "Pass ?include=compact for smaller polling responses."
             ),
         }
     )
@@ -1138,6 +1237,8 @@ def jobs_get(
 def jobs_get_full_output(
     request: Request,
     job_id: str,
+    offset: int = 0,
+    limit: int | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "caller")
@@ -1145,11 +1246,33 @@ def jobs_get_full_output(
     # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
     if job is None or not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Job not found or not authorized.")
+    # Chunked pagination: serialize the full output_payload to stable JSON so the
+    # client can reassemble across calls and json.loads() the final concatenation.
+    # MAX_CHUNK_CHARS caps any single response so it always fits inside MCP's
+    # token budget — callers paginate via offset/next_offset until has_more=False.
+    MAX_CHUNK_CHARS = 50000
+    if offset < 0:
+        offset = 0
+    if limit is not None and limit < 0:
+        limit = 0
+    serialized = _stable_json_text(job.get("output_payload"))
+    total_size = len(serialized)
+    effective_limit = MAX_CHUNK_CHARS if limit is None else min(limit, MAX_CHUNK_CHARS)
+    end = min(total_size, offset + effective_limit)
+    chunk = serialized[offset:end]
+    has_more = end < total_size
     return JSONResponse(
         content={
             "job_id": job_id,
             "status": job.get("status"),
-            "output_payload": job.get("output_payload"),
+            "format": "json_serialized",
+            "encoding": "utf-8",
+            "total_size": total_size,
+            "offset": offset,
+            "next_offset": end if has_more else None,
+            "has_more": has_more,
+            "chunk": chunk,
+            "chunk_size": len(chunk),
         }
     )
 
@@ -1223,12 +1346,23 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
     verify_url = f"{base}/agents/{agent_id}/did.json" if base and agent_id else None
     output_payload = job.get("output_payload")
     output_hash = None
+    public_key_jwk: dict | None = None
+    # Embed the agent's Ed25519 public key as JWK so MCP / SDK verifiers can
+    # validate the signature without a second HTTP round-trip to the DID
+    # document (and without depending on the did:web hostname being publicly
+    # reachable from the verifier's network). The DID document remains the
+    # canonical source — this is a convenience copy.
     try:
         from core import crypto as _crypto
 
         output_hash = hashlib.sha256(_crypto.canonical_json(output_payload)).hexdigest()
+        if agent_id:
+            agent_row = registry.get_agent(agent_id, include_unapproved=True)
+            public_pem = agent_row.get("signing_public_key") if agent_row else None
+            if public_pem:
+                public_key_jwk = _crypto.public_key_to_jwk(public_pem)
     except Exception:
-        _LOG.exception("Failed to hash signed output for job %s", job_id)
+        _LOG.exception("Failed to render signed output metadata for job %s", job_id)
     return JSONResponse(
         content={
             "job_id": job_id,
@@ -1239,6 +1373,7 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
             "signature": signature,
             "signed_at": job.get("output_signed_at"),
             "output_hash": output_hash,
+            "public_key_jwk": public_key_jwk,
             "verify_url": verify_url,
         }
     )

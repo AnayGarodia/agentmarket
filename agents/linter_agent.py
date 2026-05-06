@@ -17,8 +17,11 @@ import tempfile
 _MAX_CODE_CHARS = 30_000
 
 
-def _err(code: str, message: str) -> dict:
-    return {"error": {"code": code, "message": message}}
+def _err(code: str, message: str, details: dict | None = None) -> dict:
+    err: dict = {"code": code, "message": message}
+    if details:
+        err["details"] = details
+    return {"error": err}
 
 
 def _detect_language(code: str, filename: str) -> str:
@@ -271,6 +274,26 @@ def run(payload: dict) -> dict:
 
     filename = str(payload.get("filename") or "").strip()
     language = str(payload.get("language") or "auto").strip().lower()
+    # Reject unsupported languages with a tailored, refund-friendly error
+    # before running tool detection. The schema layer no longer enforces an
+    # enum so we own the guidance message here.
+    _SUPPORTED_LINTER_LANGS = {"python", "javascript", "typescript", "auto"}
+    if language not in _SUPPORTED_LINTER_LANGS:
+        return _err(
+            "linter_agent.unsupported_language",
+            (
+                f"Language {language!r} is not supported by linter_agent. "
+                "Supported: python, javascript, typescript, auto. For other "
+                "languages (go, rust, ruby, java, etc.) hire "
+                "multi_language_executor or shell_executor with the "
+                "language's own linter binary."
+            ),
+            details={
+                "supported": sorted(_SUPPORTED_LINTER_LANGS),
+                "received": language,
+                "next_step": "aztea_search('lint <language>') or aztea_call(slug='multi_language_executor', ...)",
+            },
+        )
     if language == "auto":
         language = _detect_language(code, filename)
     elif language == "python" and _looks_like_go(code):

@@ -468,8 +468,10 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     "diff": {
                         "type": "string",
                         "title": "Unified git diff",
-                        "description": "Output of `git diff` (with `diff --git ...` headers). Max 500,000 chars.",
+                        "description": "Unified git diff. Must start with 'diff --git '. Minimum 20 chars.",
+                        "minLength": 20,
                         "maxLength": 500000,
+                        "pattern": "^diff --git ",
                     },
                     "extra_risk_paths": {
                         "type": "array",

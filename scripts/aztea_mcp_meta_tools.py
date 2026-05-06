@@ -255,6 +255,33 @@ _TOOLS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "aztea_list_agents",
+        "description": (
+            "List every public Aztea agent in one shot — slug, name, short "
+            "description, category, price, trust score. Use this when a "
+            "single aztea_search query won't surface what you need (e.g. "
+            "browsing the marketplace, building a tool index, picking "
+            "agents for a batch). Optionally filter by category."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Optional category filter, e.g. 'Security', 'Developer Tools', 'Research'.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 100,
+                    "description": "Max agents to return.",
+                },
+            },
+            "required": [],
+        },
+    },
     # 1.3 Async jobs + clarification
     {
         "name": "aztea_hire_async",
@@ -967,6 +994,7 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
     "aztea_job": {
         "rate": "aztea_rate_job",
         "dispute": "aztea_dispute_job",
+        "dispute_status": "aztea_dispute_status",
         "verify": "aztea_verify_job",
         "verify_output": "aztea_verify_output",
         "full_output": "aztea_job_full_output",
@@ -995,9 +1023,11 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         "run_recipe": "aztea_run_recipe",
         "list_pipelines": "aztea_list_pipelines",
         "list_recipes": "aztea_list_recipes",
+        "list_agents": "aztea_list_agents",
         "compare": "aztea_compare_agents",
         "compare_status": "aztea_compare_status",
         "compare_select": "aztea_select_compare_winner",
+        "session_audit": "aztea_session_audit",
     },
 }
 
@@ -1013,7 +1043,9 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
             "  • dispute(job_id, reason, evidence?) — open a dispute; clawback escrow.\n"
             "  • verify(job_id) — fetch the Ed25519-signed receipt to prove provenance.\n"
             "  • verify_output(job_id, accept|reject, reason?) — accept/reject inside the verification window.\n"
-            "  • full_output(job_id) — fetch the untruncated output payload when status shows full_output_path.\n"
+            "  • full_output(job_id, offset?=0, limit?=50000) — fetch the untruncated output in chunks. "
+            "Returns {chunk, total_size, offset, next_offset, has_more}; pass next_offset back as offset until has_more=False, "
+            "then json.loads(concatenated chunks) to reconstruct output_payload. limit is capped at 50000 chars.\n"
             "  • cancel(job_id) — abort a pending or running job and refund the pre-charge.\n"
             "  • status(job_id) — get current state of an async job.\n"
             "  • follow(job_id, max_wait_seconds?) — long-poll until the job terminates.\n"
@@ -1239,6 +1271,9 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_clarify": _annotations(read_only=False, idempotent=False),
     "aztea_rate_job": _annotations(read_only=False, idempotent=False),
     "aztea_dispute_job": _annotations(read_only=False, idempotent=False),
+    "aztea_dispute_status": _annotations(read_only=True, idempotent=True),
+    "aztea_list_agents": _annotations(read_only=True, idempotent=True),
+    "aztea_session_audit": _annotations(read_only=True, idempotent=True),
     "aztea_verify_output": _annotations(read_only=False, idempotent=False),
     "aztea_discover": _annotations(read_only=True, idempotent=True),
     "aztea_get_examples": _annotations(read_only=True, idempotent=True),
@@ -1434,6 +1469,10 @@ def call_meta_tool(
             return _list_recipes(session, base, hdrs, timeout)
         if tool_name == "aztea_list_pipelines":
             return _list_pipelines(session, base, hdrs, timeout)
+        if tool_name == "aztea_list_agents":
+            return _list_agents(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_session_audit":
+            return _session_audit(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_hire_async":
             ok, result = _hire_async(session, base, hdrs, timeout, arguments)
             if ok:
@@ -1463,6 +1502,8 @@ def call_meta_tool(
             return _rate_job(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_dispute_job":
             return _dispute_job(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_dispute_status":
+            return _dispute_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_verify_output":
             return _verify_output(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_discover":
@@ -1900,6 +1941,126 @@ def _list_recipes(
     return ok, result
 
 
+def _list_agents(
+    session: requests.Session,
+    base: str,
+    hdrs: dict,
+    timeout: float,
+    args: dict,
+) -> tuple[bool, dict]:
+    """One-shot enumeration of public agents (replaces 8+ search calls)."""
+    category_filter = str(args.get("category") or "").strip().lower()
+    try:
+        limit = max(1, min(200, int(args.get("limit") or 100)))
+    except (TypeError, ValueError):
+        limit = 100
+    ok, result = _get(
+        session,
+        f"{base}/registry/agents",
+        hdrs,
+        timeout,
+        params={"include_reputation": "true"},
+    )
+    if not ok:
+        return ok, result
+    raw = result.get("agents") or []
+    rows = []
+    for agent in raw:
+        if not isinstance(agent, dict):
+            continue
+        cat = str(agent.get("category") or "").strip()
+        if category_filter and cat.lower() != category_filter:
+            continue
+        rows.append(
+            {
+                "slug": agent.get("slug") or agent.get("agent_slug"),
+                "agent_id": agent.get("agent_id"),
+                "name": agent.get("name"),
+                "category": cat or None,
+                "description": (str(agent.get("description") or "")[:240]),
+                "price_per_call_usd": agent.get("price_per_call_usd"),
+                "trust_score": agent.get("trust_score"),
+                "success_rate": agent.get("success_rate"),
+                "tags": agent.get("tags") or [],
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return True, {
+        "count": len(rows),
+        "category_filter": category_filter or None,
+        "agents": rows,
+        "note": (
+            "All public Aztea agents in one shot. Filter further with category. "
+            "Pick a slug and call aztea_describe(slug=...) for the full schema."
+        ),
+    }
+
+
+def _session_audit(
+    session: requests.Session,
+    base: str,
+    hdrs: dict,
+    timeout: float,
+    args: dict,
+) -> tuple[bool, dict]:
+    """Aggregate spend/refund/receipt audit for a window of caller activity.
+
+    Composed from existing endpoints (wallet transactions + signed receipts)
+    so no new server endpoint is required for the v1.
+    """
+    period = str(args.get("period") or "1d").strip().lower()
+    if period not in {"1d", "7d", "30d", "90d"}:
+        period = "1d"
+    ok, spend = _get(
+        session,
+        f"{base}/wallet/spend-summary",
+        hdrs,
+        timeout,
+        params={"period": period},
+    )
+    if not ok:
+        return ok, spend
+    # Pull recent jobs for receipt-status visibility.
+    ok2, recent = _get(
+        session,
+        f"{base}/jobs",
+        hdrs,
+        timeout,
+        params={"limit": 50, "status": "complete"},
+    )
+    receipts = []
+    if ok2 and isinstance(recent, dict):
+        for job in (recent.get("jobs") or [])[:50]:
+            if not isinstance(job, dict):
+                continue
+            receipts.append(
+                {
+                    "job_id": job.get("job_id"),
+                    "agent_id": job.get("agent_id"),
+                    "agent_name": job.get("agent_name"),
+                    "charge_cents": job.get("caller_charge_cents")
+                    or job.get("price_cents"),
+                    "settled_at": job.get("settled_at"),
+                    "signature_endpoint": (
+                        f"/jobs/{job.get('job_id')}/signature"
+                        if job.get("output_signature")
+                        else None
+                    ),
+                }
+            )
+    return True, {
+        "period": period,
+        "spend": spend,
+        "recent_signed_receipts": receipts,
+        "audit_signature_method": "per-job Ed25519 (call aztea_job(action=verify, job_id=...) to verify each)",
+        "next_step": (
+            "For an authoritative audit log, verify each receipt individually. "
+            "v2 will return a session-level signed manifest."
+        ),
+    }
+
+
 def _list_pipelines(
     session: requests.Session, base: str, hdrs: dict, timeout: float
 ) -> tuple[bool, dict]:
@@ -2008,6 +2169,30 @@ def _job_full_output(
     job_id = str(args.get("job_id") or "").strip()
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
+    # Chunked pagination: pass through offset/limit so callers can page through
+    # outputs that exceed MCP's per-response token budget. Backend caps per-chunk
+    # size; callers loop until has_more=False then json.loads the concatenation.
+    params: dict[str, Any] = {}
+    raw_offset = args.get("offset")
+    if raw_offset is not None:
+        try:
+            params["offset"] = max(0, int(raw_offset))
+        except (TypeError, ValueError):
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": "offset must be a non-negative integer.",
+            }
+    raw_limit = args.get("limit")
+    if raw_limit is not None:
+        try:
+            params["limit"] = max(0, int(raw_limit))
+        except (TypeError, ValueError):
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": "limit must be a non-negative integer.",
+            }
+    if params:
+        return _get(session, f"{base}/jobs/{job_id}/full", hdrs, timeout, params=params)
     return _get(session, f"{base}/jobs/{job_id}/full", hdrs, timeout)
 
 
@@ -2016,17 +2201,24 @@ def _batch_status(
 ) -> tuple[bool, dict]:
     batch_id = str(args.get("batch_id") or "").strip()
     if batch_id:
+        # Caller can opt into 'full' for first poll, then 'minimal' for
+        # subsequent polls. Default minimal (drops duplicated job list inside
+        # parallel_hire_trace) which keeps payloads small enough for MCP
+        # token budgets even on 30-job batches.
+        include = str(args.get("include") or "minimal").strip().lower()
+        if include not in {"minimal", "compact", "full"}:
+            include = "minimal"
         ok, result = _get(
             session,
             f"{base}/jobs/batch/{batch_id}",
             hdrs,
             timeout,
-            params={"include": "minimal"},
+            params={"include": include},
         )
         if ok:
             result.setdefault(
                 "note",
-                "Parallel marketplace hire status returned. Use parallel_hire_trace to explain which specialists were hired, what settled, and which receipts are available.",
+                "Parallel marketplace hire status returned. Use parallel_hire_trace to explain which specialists were hired, what settled, and which receipts are available. Pass include='full' to retrieve full per-job outputs once.",
             )
         return ok, result
 
@@ -2123,6 +2315,32 @@ def _data_retention_policy(
     examples_blocked = (
         bool(agent.get("examples_sensitive")) or category.lower() == "security"
     )
+    # Compose a category-aware retention policy. Security-category agents (or
+    # any with examples_sensitive=True) get the strict default since they
+    # routinely ingest credentials, PII-adjacent text, or proprietary code;
+    # the non-decision posture of "policy not specified" was the wrong
+    # default for these. General-purpose agents fall back to a clear
+    # platform-wide statement.
+    if examples_blocked:
+        retention_policy = (
+            "Strict mode (Security or examples_sensitive=true). "
+            "Caller inputs are not replayed in public work examples. "
+            "Receipts contain only output hashes, not full input/output bodies. "
+            "Pass private_task=true to additionally suppress per-call example storage."
+        )
+    elif bool(agent.get("outputs_not_stored")):
+        retention_policy = (
+            "Outputs are not retained beyond the settlement window. "
+            "Inputs may be retained for dispute eligibility (default 72h) and "
+            "are then purged. Pass private_task=true to opt out of work-example "
+            "publication entirely."
+        )
+    else:
+        retention_policy = (
+            "Default mode. Job records are retained for settlement, signed "
+            "receipts, dispute resolution, and audit logs. Redacted work "
+            "examples may be published unless private_task=true is set per call."
+        )
     privacy = {
         "agent_id": agent_id,
         "name": agent.get("name"),
@@ -2134,6 +2352,7 @@ def _data_retention_policy(
         "publishes_work_examples": not examples_blocked,
         "examples_sensitive": bool(agent.get("examples_sensitive")),
         "stores_inputs_for_examples": (not examples_blocked),
+        "data_retention_policy": retention_policy,
         "summary": (
             "This agent does not publish work examples — caller inputs are not replayed publicly."
             if examples_blocked
@@ -2184,14 +2403,6 @@ def _verify_job_signature(
             "verified": False,
             "verification_error": f"could not parse agent_id from did {agent_did!r}",
         }
-    ok_did, did_doc = _get(session, f"{base}/agents/{agent_id}/did.json", hdrs, timeout)
-    if not ok_did:
-        return False, {
-            "verified": False,
-            "verification_error": "DID document unavailable",
-            "agent_did": agent_did,
-            **(did_doc or {}),
-        }
     ok_job, job_payload = _get(session, f"{base}/jobs/{job_id}", hdrs, timeout)
     if not ok_job:
         return False, {
@@ -2213,24 +2424,49 @@ def _verify_job_signature(
             "agent_did": agent_did,
             "output_hash": output_hash,
             "signature_payload": signature_payload,
-            "did_doc": did_doc,
         }
+    # Prefer the JWK embedded in the signature response: it removes a second
+    # HTTP round-trip and works even when the did:web hostname is not
+    # reachable from the MCP verifier's network. Fall back to the DID
+    # document for older signature responses that omit the field.
     public_key_b64: str | None = None
-    for method in did_doc.get("verificationMethod") or []:
-        if not isinstance(method, dict):
-            continue
-        jwk = method.get("publicKeyJwk")
-        if isinstance(jwk, dict) and jwk.get("crv") == "Ed25519" and jwk.get("x"):
-            public_key_b64 = str(jwk.get("x"))
-            break
-        raw = method.get("publicKeyBase64") or method.get("publicKeyMultibase")
-        if isinstance(raw, str) and raw:
-            public_key_b64 = raw.lstrip("z")
-            break
+    verification_method = "embedded-jwk"
+    embedded_jwk = signature_payload.get("public_key_jwk")
+    if (
+        isinstance(embedded_jwk, dict)
+        and embedded_jwk.get("crv") == "Ed25519"
+        and embedded_jwk.get("x")
+    ):
+        public_key_b64 = str(embedded_jwk.get("x"))
+    did_doc: dict | None = None
+    if not public_key_b64:
+        verification_method = "did-document"
+        ok_did, did_doc_payload = _get(
+            session, f"{base}/agents/{agent_id}/did.json", hdrs, timeout
+        )
+        if not ok_did:
+            return False, {
+                "verified": False,
+                "verification_error": "no embedded public_key_jwk and DID document unavailable",
+                "agent_did": agent_did,
+                **(did_doc_payload or {}),
+            }
+        did_doc = did_doc_payload
+        for method in did_doc.get("verificationMethod") or []:
+            if not isinstance(method, dict):
+                continue
+            jwk = method.get("publicKeyJwk")
+            if isinstance(jwk, dict) and jwk.get("crv") == "Ed25519" and jwk.get("x"):
+                public_key_b64 = str(jwk.get("x"))
+                break
+            raw = method.get("publicKeyBase64") or method.get("publicKeyMultibase")
+            if isinstance(raw, str) and raw:
+                public_key_b64 = raw.lstrip("z")
+                break
     if not public_key_b64:
         return True, {
             "verified": False,
-            "verification_error": "no Ed25519 verification method on DID doc",
+            "verification_error": "no Ed25519 publicKeyJwk on DID document and none embedded in signature response",
             "agent_did": agent_did,
             "did_doc": did_doc,
         }
@@ -2258,13 +2494,18 @@ def _verify_job_signature(
             "verification_error": f"signature verification failed: {exc}",
             "agent_did": agent_did,
             "output_hash": output_hash,
+            "verification_method": verification_method,
         }
     return True, {
         "verified": True,
         "agent_did": agent_did,
         "output_hash": output_hash,
         "signed_at": signature_payload.get("signed_at"),
-        "note": "Signature verified locally against the agent's published DID document. Aztea cannot alter this output without breaking the signature.",
+        "verification_method": verification_method,
+        "note": (
+            "Signature verified locally against the agent's Ed25519 public key. "
+            "Aztea cannot alter this output without breaking the signature."
+        ),
     }
 
 
@@ -2395,9 +2636,44 @@ def _dispute_job(
     if ok:
         result.setdefault(
             "note",
-            "Dispute filed. An LLM judge will review the evidence and determine the outcome.",
+            "Dispute filed. An LLM judge will review the evidence and determine the outcome. "
+            "Poll with aztea_job(action='dispute_status', dispute_id=...) to track resolution.",
         )
     return ok, result
+
+
+def _dispute_status(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
+    """Poll a filed dispute's resolution path. Buyer-side recourse visibility."""
+    dispute_id = str(args.get("dispute_id") or "").strip()
+    if not dispute_id:
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "dispute_id is required (returned by aztea_job(action='dispute', ...)).",
+        }
+    ok, result = _get(session, f"{base}/disputes/{dispute_id}", hdrs, timeout)
+    if not ok:
+        return ok, result
+    status = str(result.get("status") or "").lower()
+    judgments = result.get("judgments") or []
+    eta_hint = None
+    if status == "pending":
+        eta_hint = (
+            "Pending. LLM judges run on a 60s interval; expect first verdict "
+            "within 1-2 minutes. If 2 judges agree, dispute resolves immediately."
+        )
+    elif status == "tied":
+        eta_hint = "Tied after 2 rounds. Will auto-resolve to caller in 48h per policy."
+    elif status == "resolved":
+        eta_hint = "Resolved. Outcome and split visible in this response."
+    result.setdefault(
+        "note",
+        f"Dispute status: {status}. Judges so far: {len(judgments)}.",
+    )
+    if eta_hint:
+        result["eta_hint"] = eta_hint
+    return True, result
 
 
 def _verify_output(

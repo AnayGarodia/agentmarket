@@ -319,6 +319,59 @@ def list_jobs_for_owner(
     return [_row_to_dict(r) for r in rows]
 
 
+def list_pending_jobs(limit: int = 200, agent_ids: list | None = None) -> list:
+    """All pending jobs across the platform, oldest first, capped at ``limit``.
+
+    Used by the builtin-job worker pool to drain the queue with a single DB
+    round-trip rather than N per-agent queries. Returns oldest-first so FIFO
+    fairness is preserved across agents.
+    """
+    limit = min(max(1, int(limit)), 5000)
+    params: list = ["pending"]
+    where = "status = %s"
+    if agent_ids:
+        ids = [str(a) for a in agent_ids if a]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where += f" AND agent_id IN ({placeholders})"
+            params.extend(ids)
+    params.append(limit)
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM jobs
+            WHERE {where}
+            ORDER BY created_at ASC, job_id ASC
+            LIMIT %s
+            """,
+            tuple(params),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def count_pending_jobs(agent_ids: list | None = None) -> int:
+    """Cheap COUNT(*) for queue depth display in batch_status traces."""
+    params: list = ["pending"]
+    where = "status = %s"
+    if agent_ids:
+        ids = [str(a) for a in agent_ids if a]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where += f" AND agent_id IN ({placeholders})"
+            params.extend(ids)
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM jobs WHERE {where}",
+            tuple(params),
+        ).fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row[0] if not isinstance(row, dict) else row.get("n") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def list_jobs_for_agent(
     agent_id: str,
     limit: int = 50,

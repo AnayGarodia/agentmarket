@@ -21,6 +21,45 @@ _TIMEOUT = 30
 _CODE_MAX = 100_000
 
 
+def _strip_tool_noise(text: str) -> str:
+    # npm prints update advisories ("npm notice ...") and warnings ("npm warn ...")
+    # to stdout/stderr regardless of tsc's actual output. These leak into raw_output
+    # and get hashed into receipts, causing spurious receipt churn across runs.
+    if not text:
+        return text
+    lines = text.splitlines()
+    cleaned: list[str] = []
+    prev_stripped = False
+    for line in lines:
+        if (
+            line.startswith("npm notice")
+            or re.match(r"^npm warn ", line)
+            or re.match(r"^npm warning ", line)
+        ):
+            prev_stripped = True
+            continue
+        if prev_stripped and line.strip() == "":
+            prev_stripped = False
+            continue
+        prev_stripped = False
+        cleaned.append(line)
+    # Drop a trailing blank that immediately followed the last stripped block.
+    while cleaned and cleaned[-1].strip() == "" and len(cleaned) < len(lines):
+        cleaned.pop()
+        break
+    return "\n".join(cleaned)
+
+
+_CRASH_MARKERS = ("INTERNAL ERROR", "Traceback (most recent call last):", "panic:")
+
+
+def _detect_tool_crash(raw: str) -> tuple[bool, str | None]:
+    for marker in _CRASH_MARKERS:
+        if marker in raw:
+            return True, f"Type checker crashed: detected '{marker}' in tool output."
+    return False, None
+
+
 def _tsc_cache_root() -> str:
     """Per-process npm cache root — isolates concurrent npx tsc invocations."""
     base = os.environ.get("AZTEA_TSC_NPM_CACHE")
@@ -29,8 +68,11 @@ def _tsc_cache_root() -> str:
     return os.path.join(tempfile.gettempdir(), f"aztea-tsc-cache-{os.getpid()}")
 
 
-def _err(code: str, message: str) -> dict:
-    return {"error": {"code": code, "message": message}}
+def _err(code: str, message: str, details: dict | None = None) -> dict:
+    err: dict = {"code": code, "message": message}
+    if details:
+        err["details"] = details
+    return {"error": err}
 
 
 def _normalize_diagnostic(item: dict, *, default_file: str) -> dict:
@@ -126,7 +168,7 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 "mypy is not installed on this executor. Install it with: pip install mypy",
             )
 
-        raw = result.stdout + result.stderr
+        raw = _strip_tool_noise(result.stdout + result.stderr)
         if "No module named mypy" in raw or "No module named 'mypy'" in raw:
             return _err(
                 "type_checker.tool_unavailable",
@@ -158,7 +200,7 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
                         )
         if not diagnostics and result.returncode != 0:
             diagnostics = _parse_mypy_text_diagnostics(raw)
-        tool_crashed = "INTERNAL ERROR" in raw or "Traceback (most recent call last)" in raw
+        tool_crashed, crash_message = _detect_tool_crash(raw)
         if tool_crashed and not diagnostics:
             diagnostics = [
                 {
@@ -185,7 +227,7 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
         version_match = re.search(r"mypy\s+([\d.]+)", version_blob)
         tool_version = f"mypy {version_match.group(1)}" if version_match else "mypy"
 
-        return {
+        response: dict = {
             "language": "python",
             "ok": result.returncode == 0 and not tool_crashed,
             "passed": result.returncode == 0 and not tool_crashed,
@@ -197,6 +239,9 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
             "raw_output_omitted_reason": "underlying tool crashed" if tool_crashed else None,
             "tool_version": tool_version,
         }
+        if tool_crashed and crash_message:
+            response["error_message"] = crash_message
+        return response
 
 
 def _parse_tsc_diagnostics(raw: str) -> list[dict]:
@@ -295,7 +340,7 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 "tsc is not installed. Install TypeScript globally: npm install -g typescript",
             )
 
-        raw = result.stdout + result.stderr
+        raw = _strip_tool_noise(result.stdout + result.stderr)
         # Detect worker-infrastructure failures (disk pressure, network, npm registry).
         # Returning passed:false with empty diagnostics here is a billing-trust violation —
         # the caller has no way to know the check didn't actually run. Surface as
@@ -338,17 +383,23 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
             _LOG.debug("Failed to detect tsc version; will report as 'tsc'", exc_info=True)
         tool_version = version_str or "tsc"
         diagnostics = _parse_tsc_diagnostics(raw)
+        tool_crashed, crash_message = _detect_tool_crash(raw)
 
-        return {
+        response: dict = {
             "language": "typescript",
-            "ok": result.returncode == 0,
-            "passed": result.returncode == 0,
+            "ok": result.returncode == 0 and not tool_crashed,
+            "passed": result.returncode == 0 and not tool_crashed,
+            "tool_crashed": tool_crashed,
             "error_count": len(diagnostics),
             "diagnostics": diagnostics,
             "errors": diagnostics,
-            "raw_output": raw[:5000],
+            "raw_output": raw[:5000] if not tool_crashed else "",
+            "raw_output_omitted_reason": "underlying tool crashed" if tool_crashed else None,
             "tool_version": tool_version,
         }
+        if tool_crashed and crash_message:
+            response["error_message"] = crash_message
+        return response
 
 
 def run(payload: dict) -> dict:
@@ -380,10 +431,26 @@ def run(payload: dict) -> dict:
         )
 
     language = str(payload.get("language") or "python").strip().lower()
-    if language not in {"python", "typescript"}:
+    _SUPPORTED_TYPECHECK_LANGS = {"python", "typescript"}
+    if language not in _SUPPORTED_TYPECHECK_LANGS:
+        # Tailored unsupported-language envelope. The platform refunds the
+        # caller automatically when the response shape is an error envelope,
+        # so we don't need explicit refund plumbing here. Pointer to
+        # multi_language_executor closes the loop for callers who arrived
+        # here trying to type-check Go/Rust/Ruby/etc.
         return _err(
-            "type_checker.invalid_language",
-            "'language' must be 'python' or 'typescript'.",
+            "type_checker.unsupported_language",
+            (
+                f"Language {language!r} is not supported by type_checker. "
+                "Supported: python (mypy), typescript (tsc). For Go use "
+                "`go vet`, for Rust `cargo check`, for Ruby `sorbet`. "
+                "Run those via shell_executor or multi_language_executor."
+            ),
+            details={
+                "supported": sorted(_SUPPORTED_TYPECHECK_LANGS),
+                "received": language,
+                "next_step": "aztea_call(slug='multi_language_executor', ...) or aztea_call(slug='shell_executor', ...)",
+            },
         )
 
     stubs = payload.get("stubs") or {}

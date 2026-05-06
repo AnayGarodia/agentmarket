@@ -665,6 +665,10 @@ def _shape_sync_output_for_response(
         extra["output_truncated"] = True
         extra["full_output_available"] = True
         extra["full_output_path"] = f"/jobs/{job_id}/full"
+        extra["full_output_hint"] = (
+            "Call aztea_job(action='full_output', job_id=..., offset=0, "
+            "limit=20000) to fetch chunks."
+        )
     return shaped, extra
 
 
@@ -2118,4 +2122,10 @@ def jobs_create(
             "tree_depth": tree_depth,
         },
     )
+    # Wake the builtin worker so async hires start immediately rather than
+    # waiting on the next polling cycle.
+    try:
+        _wake_builtin_worker()
+    except Exception:
+        pass
     return JSONResponse(content=_job_response(job, caller), status_code=201)

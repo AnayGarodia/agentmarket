@@ -170,21 +170,29 @@ class CodeReviewRequest(BaseModel):
 
 
 class WikiRequest(BaseModel):
+    # Accept "query" as an alias for "topic" so the wiki agent matches the
+    # field-name convention used by every other research agent on the
+    # platform (web_researcher_agent, arxiv_research_agent, financial_research
+    # all take "query"). Buyers were getting confused by the topic-only
+    # requirement and spending money on rejected calls.
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "example": {"topic": "Capital asset pricing model", "depth": "standard"}
-        }
+        },
     )
 
-    topic: str
+    topic: str = Field(..., alias="query")
     depth: str = "standard"
 
-    @field_validator("topic")
+    @field_validator("topic", mode="before")
     @classmethod
     def topic_not_empty(cls, v):
+        if not isinstance(v, str):
+            raise ValueError("topic (or query) must be a string.")
         s = v.strip()
         if not s:
-            raise ValueError("topic must not be empty.")
+            raise ValueError("topic (or query) must not be empty.")
         if len(s) > 300:
             raise ValueError("topic must be 300 characters or fewer.")
         return s
