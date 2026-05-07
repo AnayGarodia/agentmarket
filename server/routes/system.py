@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from core import jobs, registry
 from core import models as core_models
 from core.openapi_responses import pick_error_responses
+from server.builtin_agents import constants as _builtin_constants
 
 router = APIRouter()
 
@@ -86,7 +87,22 @@ def health() -> core_models.HealthResponse:
             all_ok = False
             checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
 
-    agent_count = len(registry.get_agents())
+    # Count only what aztea_search / list_agents will actually surface, so
+    # /health agrees with every other discovery surface. Pre-2026-05-07 this
+    # returned the raw row count (live + sunset + internal) which made the
+    # public-catalog count look 2-3x bigger than reality.
+    sunset_ids = set(_builtin_constants.SUNSET_DEPRECATED_AGENT_IDS)
+    curated_public = set(_builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS)
+    public_agents = [
+        agent
+        for agent in registry.get_agents(include_internal=False)
+        if str(agent.get("agent_id") or "") not in sunset_ids
+        and (
+            str(agent.get("status") or "").strip().lower() == "active"
+            or str(agent.get("agent_id") or "") in curated_public
+        )
+    ]
+    agent_count = len(public_agents)
     status = "ok" if all_ok else "degraded"
     response = core_models.HealthResponse(
         status=status,

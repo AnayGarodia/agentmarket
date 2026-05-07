@@ -964,6 +964,58 @@ def test_jobs_batch_submits_valid_jobs_when_siblings_are_invalid(client):
     assert body["jobs"][0]["agent_id"] == server._PYTHON_EXECUTOR_AGENT_ID
 
 
+def test_jobs_batch_all_invalid_returns_partial_shape_not_http_exception(client):
+    """When every job is rejected the response must keep the partial-success
+    shape (top-level count/submitted_count/invalid_jobs) so callers parse one
+    body for both partial and full failures. The 2026-05-07 eval saw the
+    422 path return invalid_jobs nested inside `detail` and concluded a
+    preflight had blocked the batch."""
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    response = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "jobs": [
+                {
+                    "agent_id": server._SECRET_SCANNER_AGENT_ID,
+                    "input_payload": {},
+                },
+                {
+                    "agent_id": server._PYTHON_EXECUTOR_AGENT_ID,
+                    "input_payload": {},
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["count"] == 0
+    assert body["submitted_count"] == 2
+    assert body["invalid_job_count"] == 2
+    assert isinstance(body["invalid_jobs"], list)
+    assert len(body["invalid_jobs"]) == 2
+    # Marketplace-transaction block must signal that no escrow opened.
+    assert body["marketplace_transaction"]["escrow"] == "not_opened"
+
+
+def test_jobs_dispute_returns_404_for_missing_job(client):
+    """All jobs.* MCP actions must agree on the not-found status code so that
+    the eval no longer sees `dispute=403, status=404, cancel=404` for the
+    same bogus job_id."""
+    caller = _register_user()
+    _fund_user_wallet(caller, 50)
+
+    response = client.post(
+        "/jobs/00000000-0000-0000-0000-000000000000/dispute",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"reason": "test against bogus id"},
+    )
+    assert response.status_code == 404, response.text
+
+
 def test_jobs_batch_status_compact_omits_duplicate_detail(client):
     worker = _register_user()
     caller = _register_user()

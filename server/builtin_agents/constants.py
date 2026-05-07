@@ -126,6 +126,10 @@ SUNSET_DEPRECATED_AGENT_IDS = frozenset(
         JSON_SCHEMA_VALIDATOR_AGENT_ID,
         REGEX_TESTER_AGENT_ID,
         GIT_DIFF_ANALYZER_AGENT_ID,
+        # Suspended in prod DB; treated as sunset so every surface
+        # (list_agents, /health, session_audit, search) agrees.
+        LIVE_ENDPOINT_TESTER_AGENT_ID,
+        SQL_EXPLAINER_AGENT_ID,
     }
 )
 
@@ -139,12 +143,10 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         DNS_INSPECTOR_AGENT_ID,
         DEPENDENCY_AUDITOR_AGENT_ID,
         DB_SANDBOX_AGENT_ID,
-        LIVE_ENDPOINT_TESTER_AGENT_ID,
         BROWSER_AGENT_ID,
         VISUAL_REGRESSION_AGENT_ID,
         MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
         SECRET_SCANNER_AGENT_ID,
-        SQL_EXPLAINER_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.

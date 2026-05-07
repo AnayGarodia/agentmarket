@@ -1556,14 +1556,6 @@ async function callTool(name, args) {
     }
     if (!_catalog.length) await refreshCatalog()
     const entry = _catalog.find(item => item.slug === slug)
-    if (!entry) return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Unknown tool '${slug}'.`, hint: 'Use aztea_search first.' } }
-    if (META_TOOL_NAMES.has(entry.slug)) {
-      const res = await callMetaTool(entry.slug, args.arguments)
-      return { ok: res.ok, payload: res.body }
-    }
-    if (!entry.agent_id) return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Tool '${slug}' has no agent_id.` } }
-    const blocked = budgetGuard()
-    if (blocked) return { ok: false, payload: blocked }
     // Forward `output_format` from the lazy aztea_call wrapper into the
     // registry call body so the renderer attaches `rendered_output`. Without
     // this merge the field is silently dropped.
@@ -1571,6 +1563,43 @@ async function callTool(name, args) {
     if (typeof args.output_format === 'string' && args.output_format.trim() && !('output_format' in callArgs)) {
       callArgs.output_format = args.output_format.trim()
     }
+    if (!entry) {
+      // Local catalog miss. The slug may belong to a sunset agent that's
+      // hidden from /mcp/tools/catalog yet still callable through
+      // /mcp/invoke (which resolves the broader CURATED_BUILTIN set,
+      // including sunset). Try that path before failing — keeps existing
+      // slug-based integrations working after the manifest hides them.
+      const blocked = budgetGuard()
+      if (blocked) return { ok: false, payload: blocked }
+      const invokeRes = await postJson('/mcp/invoke', {
+        tool_name: slug,
+        input: callArgs,
+        api_key: API_KEY,
+      })
+      if (invokeRes.status === 401 || invokeRes.status === 403) {
+        _authRequired = true
+        return { ok: false, payload: authRequiredResponse() }
+      }
+      const parsed = parseApiResponse(invokeRes)
+      if (!parsed.ok && invokeRes.status === 404) {
+        return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Unknown tool '${slug}'.`, hint: 'Use aztea_search first.' } }
+      }
+      // /mcp/invoke wraps agent output as structuredContent. Hoist the
+      // canonical fields up so this path returns the same shape clients
+      // already expect from the direct /registry/agents/{id}/call path.
+      if (parsed.ok && parsed.body && parsed.body.structuredContent && !parsed.body.output) {
+        parsed.body.output = parsed.body.structuredContent
+      }
+      if (parsed.ok) accumulate(parsed.body && (parsed.body.caller_charge_cents ?? parsed.body.price_cents))
+      return { ok: parsed.ok, payload: parsed.body }
+    }
+    if (META_TOOL_NAMES.has(entry.slug)) {
+      const res = await callMetaTool(entry.slug, args.arguments)
+      return { ok: res.ok, payload: res.body }
+    }
+    if (!entry.agent_id) return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Tool '${slug}' has no agent_id.` } }
+    const blocked = budgetGuard()
+    if (blocked) return { ok: false, payload: blocked }
     const res = await callRegistryTool(entry, callArgs)
     if (res.ok) accumulate(res.body && (res.body.caller_charge_cents ?? res.body.price_cents))
     return { ok: res.ok, payload: res.body }

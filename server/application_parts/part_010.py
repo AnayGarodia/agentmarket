@@ -753,11 +753,11 @@ def jobs_get_dispute(
 ) -> core_models.DisputeResponse:
     """Fetch the dispute for a job, if one exists."""
     job = jobs.get_job(job_id)
-    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
-    if job is None or (
-        caller["type"] != "master"
-        and caller["owner_id"]
-        not in (job.get("caller_owner_id"), job.get("agent_owner_id"))
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if caller["type"] != "master" and caller["owner_id"] not in (
+        job.get("caller_owner_id"),
+        job.get("agent_owner_id"),
     ):
         raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     dispute_row = disputes.get_dispute_by_job(job_id)
@@ -921,9 +921,13 @@ def jobs_dispute(
             status_code=403, detail="This endpoint requires caller or worker scope."
         )
     job = jobs.get_job(job_id)
-    # Return 403 for missing jobs to prevent job-ID enumeration; ownership is validated below.
     if job is None:
-        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    # Ownership check (caller filed the job OR is the agent owner) happens
+    # downstream in dispute creation. We split 404/403 here so the same
+    # job_id returns the same status across status/cancel/dispute — the
+    # prior /jobs/<bogus>/dispute → 403 while /jobs/<bogus>/status → 404
+    # was the inconsistency the 2026-05-07 power-user eval flagged.
     if job.get("status") != "complete" or not job.get("completed_at"):
         raise HTTPException(
             status_code=400, detail="Disputes can only be filed for completed jobs."

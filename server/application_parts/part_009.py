@@ -877,13 +877,38 @@ def jobs_batch_create(
         )
 
     if not resolved:
-        raise HTTPException(
+        # Same body shape as the partial-success response so callers can use
+        # one parser regardless of how many jobs survived. Status stays 422
+        # because no work was enqueued; the structured detail tells the
+        # client exactly which specs were rejected and why.
+        return JSONResponse(
             status_code=422,
-            detail=error_codes.make_error(
-                error_codes.INPUT_SCHEMA_VIOLATION,
-                "No valid jobs in batch; no charge was applied.",
-                {"invalid_jobs": invalid_jobs, "submitted_count": len(body.jobs)},
-            ),
+            content={
+                "batch_id": None,
+                "jobs": [],
+                "job_ids": [],
+                "count": 0,
+                "submitted_count": len(body.jobs),
+                "invalid_job_count": len(invalid_jobs),
+                "invalid_jobs": invalid_jobs,
+                "total_price_cents": 0,
+                "total_charged_cents": 0,
+                "mode": "parallel_marketplace_hire",
+                "intent": body.intent,
+                "max_total_cents": body.max_total_cents,
+                "marketplace_transaction": {
+                    "status": "rejected",
+                    "rail": "jobs.batch",
+                    "escrow": "not_opened",
+                    "settlement": "not_applicable",
+                    "receipt": "not_applicable",
+                },
+                "error": error_codes.make_error(
+                    error_codes.INPUT_SCHEMA_VIOLATION,
+                    "No valid jobs in batch; no charge was applied.",
+                    {"submitted_count": len(body.jobs)},
+                ),
+            },
         )
 
     if body.dry_run:

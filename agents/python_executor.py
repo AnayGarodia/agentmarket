@@ -312,6 +312,17 @@ def _capture_variables(namespace: dict[str, Any]) -> dict[str, Any]:
                 else f"<str length={len(value)} omitted>"
             )
             continue
+        # Explicit bytes/bytearray short-circuit. Without this, ``repr(value)``
+        # below has to build the full literal of a 40MB buffer before slicing,
+        # which spikes memory and (per the 2026-05-07 eval) leaked huge
+        # previews into the response when other code paths skipped the slice.
+        if isinstance(value, (bytes, bytearray)):
+            length = len(value)
+            if length > _MAX_CAPTURE_VALUE_CHARS:
+                captured[key] = f"<{type(value).__name__} length={length} omitted>"
+            else:
+                captured[key] = repr(value)
+            continue
         try:
             encoded = json.dumps(value)
             if len(encoded) > _MAX_CAPTURE_VALUE_CHARS:
@@ -370,24 +381,79 @@ def _is_safe(code: str) -> bool:
 
 
 def _literal_int(node: ast.AST) -> int | None:
+    """Constant-fold an AST expression to an int when safe.
+
+    Recognises literals, ``a ** b`` (bounded), ``a * b``, ``a + b``, ``a - b``,
+    ``a // b`` and unary minus over already-folded operands. Crucially this
+    means ``40 * 1024 * 1024`` resolves to 41943040 — without that the memory
+    bomb static-analyzer misses nearly every realistic 40MB payload.
+    """
     if isinstance(node, ast.Constant) and isinstance(node.value, int):
         return int(node.value)
-    if (
-        isinstance(node, ast.BinOp)
-        and isinstance(node.op, ast.Pow)
-        and (base := _literal_int(node.left)) is not None
-        and (exp := _literal_int(node.right)) is not None
-        and exp <= 12
-    ):
-        return int(base**exp)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        inner = _literal_int(node.operand)
+        return None if inner is None else -inner
+    if isinstance(node, ast.BinOp):
+        left = _literal_int(node.left)
+        right = _literal_int(node.right)
+        if left is None or right is None:
+            return None
+        if isinstance(node.op, ast.Pow) and right <= 12 and abs(left) <= 1024:
+            try:
+                return int(left**right)
+            except (OverflowError, ValueError):
+                return None
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.FloorDiv) and right != 0:
+            return left // right
     return None
 
 
 def _literal_size(node: ast.AST) -> int | None:
+    """Approximate byte size of a literal sequence/string the * operator
+    would replicate. We assume strs/bytes weigh 1 byte/char and that
+    list/tuple/set elements weigh 8 bytes (pointer) so we underestimate
+    rather than over-flag, but [0]*N still trips at large N."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str | bytes):
-        return len(node.value)
+        return max(1, len(node.value))
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return max(1, len(node.elts)) * 64
+        return max(1, len(node.elts)) * 8
+    return None
+
+
+# Functions that allocate a buffer of the integer size of their first argument.
+# Add new constructors here as we find them — every one of these used to slip
+# past the analyzer (the prior eval allocated 40MB via every entry below).
+_SIZED_ALLOCATORS: dict[tuple[str | None, str], int] = {
+    (None, "bytearray"): 1,
+    (None, "bytes"): 1,
+    ("os", "urandom"): 1,
+    ("secrets", "token_bytes"): 1,
+    ("secrets", "token_hex"): 2,  # hex doubles the byte count
+    ("secrets", "token_urlsafe"): 1,
+    ("random", "randbytes"): 1,
+    ("array", "array"): 8,  # rough pointer-sized estimate
+}
+
+
+def _resolve_call_target(func: ast.AST) -> tuple[str | None, str] | None:
+    """Return (module, name) for a call like ``os.urandom(...)``.
+
+    For ``bytearray(40*1024*1024)`` returns ``(None, "bytearray")``. For
+    ``os.urandom(N)`` returns ``("os", "urandom")``. Anything more
+    sophisticated (alias imports, attribute chains) falls through and
+    we conservatively don't flag it — runtime allocator pressure remains
+    the backstop.
+    """
+    if isinstance(func, ast.Name):
+        return (None, func.id)
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return (func.value.id, func.attr)
     return None
 
 
@@ -397,17 +463,30 @@ def _has_obvious_memory_bomb(code: str) -> bool:
     except SyntaxError:
         return False
     for node in ast.walk(tree):
-        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mult):
-            continue
-        left_size = _literal_size(node.left)
-        right_size = _literal_size(node.right)
-        left_count = _literal_int(node.left)
-        right_count = _literal_int(node.right)
-        if left_size is not None and right_count is not None:
-            if left_size * right_count > _STATIC_ALLOCATION_LIMIT_BYTES:
-                return True
-        if right_size is not None and left_count is not None:
-            if right_size * left_count > _STATIC_ALLOCATION_LIMIT_BYTES:
+        # Pattern 1: ``literal_seq * count`` or ``count * literal_seq``.
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            left_size = _literal_size(node.left)
+            right_size = _literal_size(node.right)
+            left_count = _literal_int(node.left)
+            right_count = _literal_int(node.right)
+            if left_size is not None and right_count is not None:
+                if left_size * right_count > _STATIC_ALLOCATION_LIMIT_BYTES:
+                    return True
+            if right_size is not None and left_count is not None:
+                if right_size * left_count > _STATIC_ALLOCATION_LIMIT_BYTES:
+                    return True
+        # Pattern 2: a sized-allocator call whose first arg is a large literal.
+        if isinstance(node, ast.Call) and node.args:
+            target = _resolve_call_target(node.func)
+            if target is None:
+                continue
+            multiplier = _SIZED_ALLOCATORS.get(target)
+            if multiplier is None:
+                continue
+            count = _literal_int(node.args[0])
+            if count is None:
+                continue
+            if count * multiplier > _STATIC_ALLOCATION_LIMIT_BYTES:
                 return True
     return False
 

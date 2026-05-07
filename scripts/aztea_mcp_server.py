@@ -1505,6 +1505,58 @@ class RegistryBridge:
                     return entry["agent_id"]
         return None
 
+    def _invoke_via_mcp_endpoint(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> tuple[bool, dict[str, Any]]:
+        """Last-resort path for slugs the local manifest cache no longer
+        carries (e.g. sunset agents). Server-side /mcp/invoke resolves
+        against the broader CURATED_BUILTIN set, so existing slug-based
+        integrations keep working even when discovery hides the slug."""
+        try:
+            response = self._session.post(
+                f"{self.base_url}/mcp/invoke",
+                json={
+                    "tool_name": tool_name,
+                    "input": arguments,
+                    "api_key": self.api_key,
+                },
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            return False, {"error": "UPSTREAM_UNREACHABLE", "message": str(exc)}
+        if response.status_code in (401, 403):
+            with self._lock:
+                self._auth_required = True
+            return self._auth_required_response()
+        content_type = str(response.headers.get("content-type") or "").lower()
+        if "application/json" in content_type:
+            try:
+                parsed = response.json()
+            except ValueError:
+                parsed = {"raw_body": response.text}
+        else:
+            parsed = {"raw_body": response.text}
+        parsed = _clean_error_text(parsed)
+        if response.status_code == 404:
+            # /mcp/invoke truly didn't recognise the slug. Surface the
+            # original TOOL_NOT_FOUND shape so callers can react.
+            return False, {
+                "error": "TOOL_NOT_FOUND",
+                "message": f"Unknown tool '{tool_name}'.",
+            }
+        if response.ok:
+            # /mcp/invoke wraps the agent output under structuredContent.
+            # Hoist the canonical fields up so this path returns the same
+            # shape clients already expect from the registry call path.
+            if (
+                isinstance(parsed, dict)
+                and "structuredContent" in parsed
+                and "output" not in parsed
+            ):
+                parsed["output"] = parsed.get("structuredContent")
+            return True, parsed if isinstance(parsed, dict) else {"output": parsed}
+        return False, parsed if isinstance(parsed, dict) else {"raw_body": parsed}
+
     def _auth_required_response(self) -> tuple[bool, dict[str, Any]]:
         return False, {
             "error": "AUTHENTICATION_REQUIRED",
@@ -1693,10 +1745,13 @@ class RegistryBridge:
 
         agent_id = self._agent_id_for_tool(resolved_tool_name)
         if not agent_id:
-            return False, {
-                "error": "TOOL_NOT_FOUND",
-                "message": f"Unknown tool '{tool_name}'.",
-            }
+            # Local cache miss — but the slug may belong to a sunset agent
+            # that's hidden from /registry/agents yet still callable through
+            # /mcp/invoke (which resolves the broader CURATED_BUILTIN set,
+            # including sunset). Fall through there before declaring the
+            # tool missing. This keeps existing slug-based integrations
+            # working after the 60s manifest refresh drops sunset slugs.
+            return self._invoke_via_mcp_endpoint(resolved_tool_name, arguments)
 
         budget_cents = self._session_state.get("budget_cents")
         if budget_cents is not None:

@@ -88,3 +88,43 @@ def test_python_executor_subprocess_uses_sanitized_env(monkeypatch):
     result = python_executor.run({"code": "print('ok')", "explain": False})
     assert result["exit_code"] == 0
     assert "OPENAI_API_KEY" not in captured
+
+
+def test_python_executor_static_blocks_memory_bombs():
+    """Regression test for the 2026-05-07 power-user eval. The original cap
+    only matched ``literal_seq * literal_int`` and missed every realistic
+    40 MB allocation pattern (bytearray, os.urandom, multi-level multiply)."""
+    blockers = [
+        "x = 'a' * (40*1024*1024)",
+        "x = b'A' * (40*1024*1024)",
+        "x = 'a' * 41943040",
+        "x = 'a' * (10**8)",
+        "x = bytearray(40*1024*1024)",
+        "x = bytes(40*1024*1024)",
+        "import os; os.urandom(40*1024*1024)",
+        "import secrets; secrets.token_bytes(40*1024*1024)",
+        "x = [0] * (40*1024*1024)",
+    ]
+    for code in blockers:
+        result = python_executor.run({"code": code, "timeout": 3, "explain": False})
+        assert "error" in result, code
+        assert result["error"]["code"] == "python_executor.memory_limit", code
+
+    passers = [
+        "x = 'a' * 1024",
+        "x = bytearray(1024)",
+        "import os; os.urandom(16)",
+    ]
+    for code in passers:
+        # ``os`` and ``os.urandom`` are still blocked by the broader sandbox
+        # (any os import is rejected); only assert the static cap doesn't
+        # fire on the small-allocation cases that don't touch os.
+        if "os." in code:
+            continue
+        result = python_executor.run({"code": code, "timeout": 3, "explain": False})
+        # Either the run completed normally OR it failed for an unrelated
+        # reason — but it MUST NOT be the static-cap rejection.
+        if "error" in result:
+            assert (
+                result["error"]["code"] != "python_executor.memory_limit"
+            ), f"static cap false-positive on {code!r}"
