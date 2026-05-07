@@ -292,6 +292,12 @@ def registry_search(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # Hide sunset/deprecated builtins from search results for non-admins.
+    # They stay callable by direct slug, just not discoverable.
+    if not include_unapproved:
+        sunset = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
+        ranked = [item for item in ranked if item["agent"].get("agent_id") not in sunset]
+
     search_stats = _compute_bulk_agent_stats(
         [item["agent"]["agent_id"] for item in ranked]
     )

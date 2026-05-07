@@ -1096,6 +1096,13 @@ def registry_list(
             _agents_list_cache = agents
             _agents_list_cache_at = now
     agents = _sorted_agents(agents, rank_by=rank_by)
+    # Hide sunset/deprecated builtins from the public catalog. They remain
+    # callable by direct slug or agent_id (so historical job_ids and signed
+    # receipts still resolve), but they no longer surface to discovery,
+    # search, or auto-hire. Admins still see everything for ops work.
+    if not include_unapproved:
+        sunset = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
+        agents = [a for a in agents if a.get("agent_id") not in sunset]
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
     return JSONResponse(
         content={
