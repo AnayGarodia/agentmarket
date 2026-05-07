@@ -120,6 +120,55 @@ def _agent_price_and_distribution(agent: dict, payload: dict) -> tuple[int, dict
     return price_cents, estimate, distribution
 
 
+def _is_unchargeable_degraded(agent: dict, output: dict) -> bool:
+    endpoint = str(agent.get("endpoint_url") or "").strip()
+    if endpoint not in {
+        "internal://code_review",
+        "internal://web_researcher",
+        "internal://financial",
+    }:
+        return False
+    if bool(output.get("degraded_chargeable")):
+        return False
+    return bool(output.get("degraded_mode")) and not bool(output.get("llm_used"))
+
+
+def _output_has_error(output: dict) -> bool:
+    error = output.get("error")
+    return isinstance(error, dict) or isinstance(error, str)
+
+
+def _pipeline_contradiction(step_results: dict[str, Any]) -> str | None:
+    risky_analysis = False
+    clean_review = False
+    for result in step_results.values():
+        if not isinstance(result, dict):
+            continue
+        risk_tags = result.get("risk_tags")
+        has_risk_tag = isinstance(risk_tags, list) and bool(risk_tags)
+        has_secret = bool(result.get("secret_pattern_added"))
+        removed_error_handling = bool(result.get("error_handling_removed"))
+        if has_risk_tag or has_secret or removed_error_handling:
+            risky_analysis = True
+        issues = result.get("issues")
+        issue_count = result.get("issue_count")
+        if issue_count is None and isinstance(issues, list):
+            issue_count = len(issues)
+        score = result.get("score") or result.get("quality_score")
+        try:
+            numeric_score = float(score)
+        except (TypeError, ValueError):
+            numeric_score = 0.0
+        if issue_count == 0 and numeric_score >= 8:
+            clean_review = True
+    if risky_analysis and clean_review:
+        return (
+            "Pipeline contradiction: an earlier stage flagged security or "
+            "correctness risk, but a later review stage returned a clean result."
+        )
+    return None
+
+
 def _invoke_agent(
     *,
     agent: dict,
@@ -207,6 +256,10 @@ def _invoke_agent(
                     raise RuntimeError("Agent returned malformed JSON.") from exc
         if not isinstance(output, dict):
             output = {"output": output}
+        if _output_has_error(output):
+            raise RuntimeError("Agent returned an error envelope.")
+        if _is_unchargeable_degraded(agent, output):
+            raise RuntimeError("Agent returned unchargeable degraded fallback output.")
         jobs.update_job_status(
             job["job_id"], "complete", output_payload=output, completed=True
         )
@@ -294,6 +347,9 @@ def _execute_run(
             )
             step_results[node["id"]] = output
             db.update_run_step(run_id, node["id"], output)
+        contradiction = _pipeline_contradiction(step_results)
+        if contradiction:
+            raise ValueError(contradiction)
         terminal_nodes = validated["terminal_nodes"]
         if len(terminal_nodes) == 1:
             final_output = step_results.get(terminal_nodes[0])

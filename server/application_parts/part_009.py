@@ -687,52 +687,6 @@ def jobs_batch_create(
                 status_code=404, detail=f"Agent '{spec.agent_id}' not found."
             )
         _assert_agent_callable(spec.agent_id, agent)
-        price_cents = _usd_to_cents(agent["price_per_call_usd"])
-        if price_cents > 2000 and not _agent_has_verified_contract(agent):
-            raise HTTPException(
-                status_code=422,
-                detail=error_codes.make_error(
-                    error_codes.VERIFIED_CONTRACT_REQUIRED,
-                    "Jobs above $20 require a worker with a verified input/output contract.",
-                    {"agent_id": agent["agent_id"], "price_cents": price_cents},
-                ),
-            )
-        if key_per_job_cap_cents is not None and price_cents > key_per_job_cap_cents:
-            raise HTTPException(
-                status_code=402,
-                detail=error_codes.make_error(
-                    error_codes.SPEND_LIMIT_EXCEEDED,
-                    "API key per-job cap exceeded.",
-                    {
-                        "scope": "api_key_per_job",
-                        "key_id": str(caller.get("key_id") or "").strip() or None,
-                        "limit_cents": key_per_job_cap_cents,
-                        "attempted_cents": price_cents,
-                        "agent_id": agent["agent_id"],
-                    },
-                ),
-            )
-        fee_bearer_policy = payments.normalize_fee_bearer_policy(spec.fee_bearer_policy)
-        platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
-        success_distribution = payments.compute_success_distribution(
-            price_cents,
-            platform_fee_pct=platform_fee_pct_at_create,
-            fee_bearer_policy=fee_bearer_policy,
-        )
-        caller_charge_cents = int(success_distribution["caller_charge_cents"])
-        if spec.budget_cents is not None and price_cents > spec.budget_cents:
-            raise HTTPException(
-                status_code=400,
-                detail=error_codes.make_error(
-                    error_codes.BUDGET_EXCEEDED,
-                    f"Agent '{spec.agent_id}' price ({price_cents}¢) exceeds budget ({spec.budget_cents}¢).",
-                    {
-                        "agent_id": spec.agent_id,
-                        "price_cents": price_cents,
-                        "budget_cents": spec.budget_cents,
-                    },
-                ),
-            )
         try:
             normalized_spec_input_payload = _merge_protocol_input_envelope(
                 spec.input_payload,
@@ -760,6 +714,82 @@ def jobs_batch_create(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
+        builtin_agent_id = _resolve_builtin_agent_id(agent)
+        if builtin_agent_id is not None:
+            try:
+                _validate_builtin_agent_payload(
+                    builtin_agent_id, normalized_spec_input_payload
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=error_codes.make_error(
+                        error_codes.INVALID_INPUT,
+                        str(exc),
+                        {"agent_id": agent["agent_id"]},
+                    ),
+                )
+        agent_input_schema = agent.get("input_schema")
+        if isinstance(agent_input_schema, dict) and agent_input_schema:
+            try:
+                normalized_spec_input_payload = _validate_payload_against_schema(
+                    payload=normalized_spec_input_payload,
+                    schema=agent_input_schema,
+                    allow_string_coercion=_allow_schema_string_coercion(request),
+                )
+            except Exception as _schema_exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=error_codes.make_error(
+                        error_codes.INPUT_SCHEMA_VIOLATION,
+                        f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                        {
+                            "path": list(getattr(_schema_exc, "absolute_path", [])),
+                            "agent_id": agent["agent_id"],
+                        },
+                    ),
+                )
+        pricing_estimate = _estimate_variable_charge(
+            agent=agent,
+            payload=normalized_spec_input_payload,
+            budget_cents=spec.budget_cents,
+            per_job_cap_cents=key_per_job_cap_cents,
+        )
+        if pricing_estimate.get("cap_violated"):
+            violation = pricing_estimate["cap_violated"]
+            raise HTTPException(
+                status_code=402,
+                detail=error_codes.make_error(
+                    error_codes.SPEND_LIMIT_EXCEEDED,
+                    "Variable-price estimate exceeds a spend cap.",
+                    {
+                        "scope": violation["scope"],
+                        "limit_cents": violation["limit_cents"],
+                        "attempted_cents": violation["price_cents"],
+                        "agent_id": agent["agent_id"],
+                        "pricing_model": pricing_estimate["pricing_model"],
+                        "detail": pricing_estimate.get("detail"),
+                    },
+                ),
+            )
+        price_cents = int(pricing_estimate["price_cents"])
+        if price_cents > 2000 and not _agent_has_verified_contract(agent):
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.VERIFIED_CONTRACT_REQUIRED,
+                    "Jobs above $20 require a worker with a verified input/output contract.",
+                    {"agent_id": agent["agent_id"], "price_cents": price_cents},
+                ),
+            )
+        fee_bearer_policy = payments.normalize_fee_bearer_policy(spec.fee_bearer_policy)
+        platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+        success_distribution = payments.compute_success_distribution(
+            price_cents,
+            platform_fee_pct=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
+        )
+        caller_charge_cents = int(success_distribution["caller_charge_cents"])
         total_price_cents += caller_charge_cents
         resolved.append(
             {
@@ -769,6 +799,7 @@ def jobs_batch_create(
                 "platform_fee_pct_at_create": platform_fee_pct_at_create,
                 "fee_bearer_policy": fee_bearer_policy,
                 "success_distribution": success_distribution,
+                "pricing_estimate": pricing_estimate,
                 "client_id": _request_client_id(request, spec.client_id)
                 or request_client_id,
                 "spec": spec,
@@ -1007,6 +1038,9 @@ def jobs_batch_create(
             ),
         ) from exc
 
+    compact_submission = len(created_jobs) > 10 or str(
+        request.query_params.get("include") or ""
+    ).strip().lower() in {"compact", "minimal"}
     trace = _batch_parallel_trace(
         batch_id=batch_id,
         batch_jobs=[
@@ -1018,6 +1052,23 @@ def jobs_batch_create(
         phase="submitted",
         intent=body.intent,
         max_total_cents=body.max_total_cents,
+        include_detail=not compact_submission,
+    )
+    response_jobs = (
+        [
+            {
+                "job_id": job.get("job_id"),
+                "agent_id": job.get("agent_id"),
+                "status": job.get("status"),
+                "caller_charge_cents": int(
+                    job.get("caller_charge_cents") or job.get("price_cents") or 0
+                ),
+            }
+            for job in created_jobs
+            if isinstance(job, dict)
+        ]
+        if compact_submission
+        else created_jobs
     )
     # Wake the builtin worker pool so queued jobs start draining immediately
     # instead of waiting up to BUILTIN_JOB_WORKER_INTERVAL_SECONDS.
@@ -1028,7 +1079,7 @@ def jobs_batch_create(
     return JSONResponse(
         content={
             "batch_id": batch_id,
-            "jobs": created_jobs,
+            "jobs": response_jobs,
             "count": len(created_jobs),
             "total_price_cents": total_price_cents,
             "total_charged_cents": total_price_cents,
@@ -1048,6 +1099,7 @@ def jobs_batch_create(
                 "receipt": "signed_per_completed_job",
             },
             "parallel_hire_trace": trace,
+            "include_mode": "compact" if compact_submission else "full",
             "next_step": (
                 f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
                 f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
@@ -1076,6 +1128,39 @@ def jobs_batch_status(
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
     include_mode = str(request.query_params.get("include") or "full").strip().lower()
     compact = include_mode in {"minimal", "compact"}
+    if any(str(job.get("status") or "") in {"pending", "running"} for job in batch_jobs):
+        with _BUILTIN_WORKER_STATE_LOCK:
+            worker_state = dict(_BUILTIN_WORKER_STATE)
+        last_summary = worker_state.get("last_summary")
+        should_rescue = (
+            not worker_state.get("running")
+            or not isinstance(last_summary, dict)
+            or (
+                int((last_summary or {}).get("processed") or 0) == 0
+                and not (last_summary or {}).get("queue_depth")
+            )
+            or bool(worker_state.get("last_error"))
+        )
+        if should_rescue:
+            try:
+                rescue_summary = _process_pending_builtin_jobs(limit_per_agent=50)
+                _set_builtin_worker_state(
+                    last_run_at=_utc_now_iso(),
+                    last_summary={
+                        **rescue_summary,
+                        "source": "batch_status_rescue",
+                    },
+                    last_error=None,
+                )
+                batch_jobs = jobs.list_jobs_for_batch(batch_id, owner_id)
+            except Exception as exc:
+                _LOG.exception("Batch-status builtin worker rescue failed.")
+                _set_builtin_worker_state(last_error=str(exc))
+        else:
+            try:
+                _wake_builtin_worker()
+            except Exception:
+                pass
 
     n_pending = 0
     n_running = 0

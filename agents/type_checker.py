@@ -68,6 +68,23 @@ def _tsc_cache_root() -> str:
     return os.path.join(tempfile.gettempdir(), f"aztea-tsc-cache-{os.getpid()}")
 
 
+def _find_tsc_bin() -> str | None:
+    found = shutil.which("tsc")
+    if found:
+        return found
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [
+        os.path.join(repo_root, "node_modules", ".bin", "tsc"),
+        os.path.join(repo_root, "frontend", "node_modules", ".bin", "tsc"),
+        os.path.join(repo_root, "sdks", "typescript", "node_modules", ".bin", "tsc"),
+        os.path.join(repo_root, "sdks", "aztea-cli", "node_modules", ".bin", "tsc"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def _err(code: str, message: str, details: dict | None = None) -> dict:
     err: dict = {"code": code, "message": message}
     if details:
@@ -287,7 +304,7 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
             )
 
         # Prefer a global tsc; fall back to npx (auto-installs typescript on demand).
-        tsc_bin = shutil.which("tsc")
+        tsc_bin = _find_tsc_bin()
         if tsc_bin:
             cmd = [
                 tsc_bin,
@@ -370,15 +387,12 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 v = subprocess.run(
                     [tsc_bin, "--version"], capture_output=True, text=True, timeout=5
                 )
+                version_str = (v.stdout + v.stderr).strip()
             else:
-                v = subprocess.run(
-                    ["npx", "--yes", "--package", "typescript", "tsc", "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    env=npx_env,
-                )
-            version_str = (v.stdout + v.stderr).strip()
+                # Avoid a second npx invocation per call. The actual type check
+                # already proved the tool ran; an extra version lookup routinely
+                # adds 4-8s and breaks the launch latency budget.
+                version_str = "tsc (npx typescript)"
         except Exception:
             _LOG.debug("Failed to detect tsc version; will report as 'tsc'", exc_info=True)
         tool_version = version_str or "tsc"

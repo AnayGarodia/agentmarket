@@ -125,13 +125,11 @@ def auto_invoke_server_cap_usd() -> float:
 def auto_invoke_trust_floor() -> float:
     """Minimum trust score (0–100) to be eligible for auto-invoke.
 
-    Default 50 — the entire current catalog clusters at 52–65 because few
-    agents have accumulated enough completed jobs for reputation to mature.
-    With the floor at 70 the gate fired 100% of the time and aztea_do never
-    auto-invoked. We raise this back toward 70 once the curated catalog has
-    at least 10 calls of history per agent.
+    Default 30 — the curated catalog still has sparse ratings, so trust is a
+    weak blocking signal for clear low-cost matches. Confidence, stability,
+    success history, schema validation, and price caps remain active gates.
     """
-    return flag_float("AZTEA_AUTO_INVOKE_TRUST_FLOOR", default=50.0)
+    return flag_float("AZTEA_AUTO_INVOKE_TRUST_FLOOR", default=30.0)
 
 
 def auto_invoke_success_floor() -> float:

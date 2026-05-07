@@ -1041,6 +1041,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
             "Post-call operations on an Aztea job. Pick action by what you need:\n"
             "  • rate(job_id, rating[1-5], comment?) — rate the agent's output, feeds trust signals.\n"
             "  • dispute(job_id, reason, evidence?) — open a dispute; clawback escrow.\n"
+            "  • dispute_status(dispute_id) — fetch dispute status and judgment timeline.\n"
             "  • verify(job_id) — fetch the Ed25519-signed receipt to prove provenance.\n"
             "  • verify_output(job_id, accept|reject, reason?) — accept/reject inside the verification window.\n"
             "  • full_output(job_id, offset?=0, limit?=50000) — fetch the untruncated output in chunks. "
@@ -1060,6 +1061,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                     "enum": [
                         "rate",
                         "dispute",
+                        "dispute_status",
                         "verify",
                         "verify_output",
                         "full_output",
@@ -1072,6 +1074,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                     "description": "Which post-call operation to run.",
                 },
                 "job_id": {"type": "string", "description": "Job ID for job-targeted actions."},
+                "dispute_id": {"type": "string", "description": "dispute_status: dispute ID returned by dispute."},
                 "rating": {
                     "type": "integer",
                     "minimum": 1,
@@ -1202,9 +1205,11 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                         "run_recipe",
                         "list_pipelines",
                         "list_recipes",
+                        "list_agents",
                         "compare",
                         "compare_status",
                         "compare_select",
+                        "session_audit",
                     ],
                     "description": "Which workflow operation to run.",
                 },

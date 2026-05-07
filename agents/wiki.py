@@ -16,6 +16,7 @@ from core.llm import CompletionRequest, Message, run_with_fallback
 _WIKI_HEADERS = {"User-Agent": "aztea/1.0 (research-agent@aztea.dev)"}
 _WIKI_SUMMARY_API = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 _WIKI_SECTIONS_API = "https://en.wikipedia.org/w/api.php"
+_WIKI_OPENSEARCH_API = "https://en.wikipedia.org/w/api.php"
 
 _SYSTEM = """\
 You are a research librarian and fact-synthesis expert trained in encyclopedic analysis.
@@ -214,6 +215,28 @@ def _fetch_full_text(title: str) -> tuple[str, str]:
         return "", title
 
 
+def _resolve_fuzzy_title(topic: str) -> str | None:
+    params = {
+        "action": "opensearch",
+        "search": topic,
+        "limit": 1,
+        "namespace": 0,
+        "format": "json",
+    }
+    try:
+        response = requests.get(
+            _WIKI_OPENSEARCH_API, params=params, headers=_WIKI_HEADERS, timeout=8
+        )
+        response.raise_for_status()
+        payload = response.json()
+        titles = payload[1] if isinstance(payload, list) and len(payload) > 1 else []
+        if isinstance(titles, list) and titles:
+            return str(titles[0] or "").strip() or None
+    except Exception:
+        return None
+    return None
+
+
 def _normalize_llm_output(
     raw: Any, *, page_title: str, page_url: str, content: str
 ) -> dict[str, Any]:
@@ -332,6 +355,9 @@ def run(topic: str, depth: str = "standard") -> dict:
         wiki = r.json()
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
+            resolved_title = _resolve_fuzzy_title(topic)
+            if resolved_title and resolved_title.replace(" ", "_") != clean:
+                return run(resolved_title, depth=depth)
             raise ValueError(
                 f"Wikipedia article not found for: {topic!r}. Try a more specific name."
             ) from e

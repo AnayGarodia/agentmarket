@@ -6,6 +6,7 @@ from core import pipelines
 from server.builtin_agents.constants import (
     CODEREVIEW_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
+    GIT_DIFF_ANALYZER_AGENT_ID,
     LINTER_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
 )
@@ -14,6 +15,35 @@ PLATFORM_RECIPES_OWNER_ID = "platform:recipes"
 
 
 BUILTIN_RECIPES: list[dict] = [
+    {
+        "recipe_id": "git-diff-review",
+        "name": "git-diff-review",
+        "description": "Analyze a git diff, then review the same diff with the analyzer findings carried forward.",
+        "default_input_schema": {
+            "type": "object",
+            "properties": {"diff": {"type": "string"}},
+            "required": ["diff"],
+        },
+        "pipeline_definition": {
+            "nodes": [
+                {
+                    "id": "analyze",
+                    "agent_id": GIT_DIFF_ANALYZER_AGENT_ID,
+                    "input_map": {"diff": "$input.diff"},
+                },
+                {
+                    "id": "review",
+                    "agent_id": CODEREVIEW_AGENT_ID,
+                    "depends_on": ["analyze"],
+                    "input_map": {
+                        "diff": "$input.diff",
+                        "focus": "security",
+                        "context": "Prior git_diff_analyzer stage completed; do not return a clean review when the diff adds secrets, removes auth checks, or removes error handling.",
+                    },
+                },
+            ]
+        },
+    },
     {
         "recipe_id": "modernize-python",
         "name": "modernize-python",

@@ -509,6 +509,8 @@ def _run_cve_id_mode(cve_ids: list[str], single_mode: bool) -> dict:
         "results": results,
         "billing_units_actual": billing_units_actual,
     }
+    if billing_units_actual == 0 and results:
+        return _err("cve_lookup.not_found", "No matching CVE records were found.")
 
     # Backward-compatibility: mirror first successful result's fields at top level
     # when a single cve_id (not cve_ids) was provided.

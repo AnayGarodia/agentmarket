@@ -92,7 +92,8 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     },
                 },
                 required=["content"],
-            ),
+            )
+            | {"additionalProperties": False},
             "output_schema": _output_schema_object(
                 {
                     "filename": {"type": ["string", "null"]},

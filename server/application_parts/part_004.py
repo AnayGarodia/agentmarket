@@ -135,6 +135,62 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 
+_DEGRADED_UNCHARGEABLE_AGENT_IDS = {
+    _CODEREVIEW_AGENT_ID,
+    _WEB_RESEARCHER_AGENT_ID,
+    _FINANCIAL_AGENT_ID,
+}
+
+
+def _is_unchargeable_degraded_output(agent_id: str, output: Any) -> bool:
+    if agent_id not in _DEGRADED_UNCHARGEABLE_AGENT_IDS:
+        return False
+    if not isinstance(output, dict):
+        return False
+    if bool(output.get("degraded_chargeable")):
+        return False
+    return bool(output.get("degraded_mode")) and not bool(output.get("llm_used"))
+
+
+def _degraded_unchargeable_error(agent_id: str) -> dict[str, Any]:
+    return {
+        "error": {
+            "code": "agent.degraded_unavailable",
+            "message": (
+                "The agent could not reach its required synthesis provider and "
+                "only produced degraded fallback output; no charge was kept."
+            ),
+        },
+        "agent_id": agent_id,
+        "degraded_mode": True,
+        "llm_used": False,
+        "billing_units_actual": 0,
+    }
+
+
+def _sign_builtin_output(agent: dict | None, output: dict) -> dict[str, str | None]:
+    sig = {"signature": None, "alg": None, "did": None, "signed_at": None}
+    if not agent:
+        return sig
+    try:
+        from core import crypto as _crypto
+
+        private_pem = agent.get("signing_private_key")
+        agent_did_value = agent.get("did")
+        if not private_pem or not agent_did_value:
+            private_pem, _public_pem, agent_did_value = registry.ensure_agent_signing_keys(
+                agent["agent_id"]
+            )
+        if private_pem and agent_did_value:
+            sig["signature"] = _crypto.sign_payload(private_pem, output)
+            sig["alg"] = str(agent.get("signing_alg") or "ed25519")
+            sig["did"] = agent_did_value
+            sig["signed_at"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        _LOG.exception("Failed to sign builtin async output for agent %s", (agent or {}).get("agent_id"))
+    return sig
+
+
 def _process_pending_builtin_job(job: dict) -> bool:
     claimed = jobs.claim_job(
         job["job_id"],
@@ -194,6 +250,8 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 str(claimed["agent_id"]),
                 claimed.get("input_payload") or {},
             )
+        if _is_unchargeable_degraded_output(str(claimed["agent_id"]), output):
+            output = _degraded_unchargeable_error(str(claimed["agent_id"]))
         agent_failed, failure_code, failure_message = _is_agent_failure_envelope(output)
         if agent_failed:
             updated = jobs.update_job_status(
@@ -306,11 +364,16 @@ def _process_pending_builtin_job(job: dict) -> bool:
                     event_type="job.failed_quality",
                 )
             return True
+    signature = _sign_builtin_output(agent, output if isinstance(output, dict) else {})
     completed = jobs.update_job_status(
         claimed["job_id"],
         "complete",
         output_payload=output,
         completed=True,
+        output_signature=signature["signature"],
+        output_signature_alg=signature["alg"],
+        output_signed_by_did=signature["did"],
+        output_signed_at=signature["signed_at"],
     )
     if completed is not None:
         settled = _settle_successful_job(

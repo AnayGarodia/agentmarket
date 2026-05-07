@@ -382,12 +382,12 @@ cd frontend && npm install && npm run dev
 cd frontend && npm run build && npx vite preview --port 4173
 # If `vite preview` works but prod doesn't, the bug is in the Caddy → uvicorn → SPA-fallback path or a route definition shadowing the SPA.
 
-# Tests (453 passed + 1 skipped on main suite as of 2026-04-28;
+# Tests (723 passed + 2 skipped on main suite as of 2026-05-07;
 # run the SDK contract suite separately — it can segfault under Python 3.14 on macOS)
 pytest -q tests --ignore=tests/test_sdk_contract.py
 pytest -q tests/test_sdk_contract.py
 
-# Integration tests only (137 passed as of 2026-04-28)
+# Integration tests only (covered by the main suite as of 2026-05-07)
 pytest -q tests/integration
 
 # Line-budget enforcement (every Python source file < 1000 lines)
@@ -409,7 +409,7 @@ python scripts/aztea_mcp_server.py
 curl -H "Authorization: Bearer $API_KEY" -X POST http://localhost:8000/ops/payments/reconcile
 ```
 
-**Current test status:** `pytest tests --ignore=tests/test_sdk_contract.py` → **453 passed, 1 skipped**. `pytest tests/integration` → **137 passed**. The skipped test is intentional (feature flag–gated).
+**Current test status:** `uv run pytest tests --ignore=tests/test_sdk_contract.py -q` → **723 passed, 2 skipped** on 2026-05-07.
 
 ---
 

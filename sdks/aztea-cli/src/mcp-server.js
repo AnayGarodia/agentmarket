@@ -12,6 +12,7 @@
 const https = require('https')
 const http = require('http')
 const crypto = require('crypto')
+const { Buffer } = require('buffer')
 
 const BASE_URL = (process.env.AZTEA_BASE_URL || 'https://aztea.ai').replace(/\/$/, '')
 const API_KEY = process.env.AZTEA_API_KEY || ''
@@ -153,6 +154,7 @@ const AZTEA_JOB_TOOL = {
     'Post-call operations on an Aztea job. Pick action by what you need:\n' +
     '  • rate(job_id, rating[1-5], comment?) — rate the agent\'s output, feeds trust signals.\n' +
     '  • dispute(job_id, reason, evidence?) — open a dispute; clawback escrow.\n' +
+    '  • dispute_status(dispute_id) — fetch dispute status and judgment timeline.\n' +
     '  • verify(job_id) — fetch the Ed25519-signed receipt to prove provenance.\n' +
     '  • verify_output(job_id, decision[accept|reject], reason?) — accept/reject inside the verification window.\n' +
     '  • full_output(job_id) — fetch untruncated output when status shows full_output_path.\n' +
@@ -164,8 +166,9 @@ const AZTEA_JOB_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['rate', 'dispute', 'verify', 'verify_output', 'full_output', 'cancel', 'status', 'follow', 'clarify', 'examples'] },
+      action: { type: 'string', enum: ['rate', 'dispute', 'dispute_status', 'verify', 'verify_output', 'full_output', 'cancel', 'status', 'follow', 'clarify', 'examples'] },
       job_id: { type: 'string' },
+      dispute_id: { type: 'string' },
       rating: { type: 'integer', minimum: 1, maximum: 5 },
       comment: { type: 'string' },
       reason: { type: 'string' },
@@ -229,7 +232,7 @@ const AZTEA_WORKFLOW_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['hire_async', 'hire_batch', 'batch_status', 'run_pipeline', 'pipeline_status', 'run_recipe', 'list_pipelines', 'list_recipes', 'compare', 'compare_status', 'compare_select'] },
+      action: { type: 'string', enum: ['hire_async', 'hire_batch', 'batch_status', 'run_pipeline', 'pipeline_status', 'run_recipe', 'list_pipelines', 'list_recipes', 'list_agents', 'compare', 'compare_status', 'compare_select', 'session_audit'] },
       slug: { type: 'string' },
       slugs: { type: 'array', items: { type: 'string' } },
       intent: { type: 'string' },
@@ -492,7 +495,7 @@ async function refreshCatalog() {
     }
     const tools = Array.isArray(parsed.body.tools) ? parsed.body.tools : []
     const lookup = parsed.body.tool_lookup && typeof parsed.body.tool_lookup === 'object' ? parsed.body.tool_lookup : {}
-    _catalog = tools
+    const nextCatalog = tools
       .filter(tool => tool && tool.type === 'function' && tool.name)
       .map(tool => {
         const meta = lookup[tool.name] || {}
@@ -507,6 +510,15 @@ async function refreshCatalog() {
             : { type: 'object', properties: {}, required: [] },
         }
       })
+    if (nextCatalog.length === 0 && _catalog.length > 0) {
+      log('catalog refresh returned no tools; keeping previous catalog')
+      return
+    }
+    if (_catalog.length > 0 && nextCatalog.length < Math.max(3, Math.floor(_catalog.length * 0.7))) {
+      log(`catalog refresh returned ${nextCatalog.length}/${_catalog.length} tools; keeping previous catalog to avoid transient tool loss`)
+      return
+    }
+    _catalog = nextCatalog
     _authRequired = false
     if (!_initialRefreshDone) {
       _initialRefreshDone = true

@@ -1270,6 +1270,8 @@ def registry_call(
                 output,
                 requested_output_formats=requested_output_formats,
             )
+            if _is_unchargeable_degraded_output(str(builtin_agent_id), output):
+                output = _degraded_unchargeable_error(str(builtin_agent_id))
             # If the agent reported a structured *.tool_unavailable / .not_configured
             # error, treat the job as a failure: refund the caller, mark the job
             # failed, and surface a 502 so the SDK can react. This closes the

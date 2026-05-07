@@ -119,11 +119,31 @@ def _sentences(text: str) -> list[str]:
     return [part.strip() for part in raw if part.strip()]
 
 
+def _looks_like_xbrl_noise(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if len(text) > 2_000:
+        return True
+    return any(marker in text for marker in ("<xbrl", "</xbrl", "<?xml", "<ix:"))
+
+
+def _clean_sentence(value: Any) -> str:
+    text = re.sub(r"<[^>]+>", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if _looks_like_xbrl_noise(text):
+        return ""
+    return text[:500]
+
+
 def _select_sentences(
     sentences: list[str], keywords: tuple[str, ...], *, limit: int
 ) -> list[str]:
     matches: list[str] = []
     for sentence in sentences:
+        sentence = _clean_sentence(sentence)
+        if not sentence:
+            continue
         lowered = sentence.lower()
         if any(keyword in lowered for keyword in keywords):
             matches.append(sentence)
@@ -131,7 +151,7 @@ def _select_sentences(
 
 
 def _extract_business_summary(sentences: list[str]) -> str:
-    selected = _dedupe(sentences[:3], limit=2)
+    selected = _dedupe([_clean_sentence(sentence) for sentence in sentences[:8]], limit=2)
     summary = " ".join(selected).strip()
     if summary:
         return summary[:450]
@@ -226,25 +246,40 @@ def _normalize_brief_output(
     signal = str(payload.get("signal") or evidence["signal"]).strip().lower()
     if signal not in {"positive", "neutral", "negative"}:
         signal = evidence["signal"]
+    business_summary = str(
+        payload.get("business_summary") or evidence["business_summary"]
+    ).strip()[:500]
+    highlight_items = (
+        [str(item) for item in highlights]
+        if isinstance(highlights, list)
+        else evidence["financial_highlights"]
+    )
+    risk_items = (
+        [str(item) for item in risks]
+        if isinstance(risks, list)
+        else evidence["risk_snippets"]
+    )
+    if _looks_like_xbrl_noise(business_summary):
+        business_summary = evidence["business_summary"]
+    highlight_items = [
+        _clean_sentence(item) for item in highlight_items if not _looks_like_xbrl_noise(item)
+    ]
+    risk_items = [
+        _clean_sentence(item) for item in risk_items if not _looks_like_xbrl_noise(item)
+    ]
     return annotate_success(
         {
             "ticker": filing_data["ticker"],
             "company_name": filing_data["company_name"],
             "filing_type": filing_data["filing_type"],
             "filing_date": filing_data["filing_date"],
-            "business_summary": str(
-                payload.get("business_summary") or evidence["business_summary"]
-            ).strip()[:500],
+            "business_summary": business_summary,
             "recent_financial_highlights": _dedupe(
-                [str(item) for item in highlights]
-                if isinstance(highlights, list)
-                else evidence["financial_highlights"],
+                highlight_items or evidence["financial_highlights"],
                 limit=5,
             ),
             "key_risks": _dedupe(
-                [str(item) for item in risks]
-                if isinstance(risks, list)
-                else evidence["risk_snippets"],
+                risk_items or evidence["risk_snippets"],
                 limit=5,
             ),
             "signal": signal,

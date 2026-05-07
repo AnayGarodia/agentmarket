@@ -34,6 +34,79 @@ def test_fix1_auth_module_exposes_verify_agent_api_key_not_verify_agent_key():
     )
 
 
+def test_auto_invoke_default_trust_floor_matches_sparse_catalog_reality(monkeypatch):
+    from core import feature_flags
+
+    monkeypatch.delenv("AZTEA_AUTO_INVOKE_TRUST_FLOOR", raising=False)
+    assert feature_flags.auto_invoke_trust_floor() == 30.0
+
+
+def test_variable_pricing_overlay_covers_cve_and_endpoint_batches():
+    from server import pricing_helpers
+    from server.builtin_agents.constants import CVELOOKUP_AGENT_ID, LIVE_ENDPOINT_TESTER_AGENT_ID
+
+    cve_agent = {
+        "agent_id": CVELOOKUP_AGENT_ID,
+        "price_per_call_usd": 0.01,
+        "pricing_model": "fixed",
+        "pricing_config": None,
+    }
+    endpoint_agent = {
+        "agent_id": LIVE_ENDPOINT_TESTER_AGENT_ID,
+        "price_per_call_usd": 0.03,
+        "pricing_model": "fixed",
+        "pricing_config": None,
+    }
+
+    cve_estimate = pricing_helpers.estimate_variable_charge(
+        agent=cve_agent,
+        payload={"cve_ids": ["CVE-1", "CVE-2", "CVE-3", "CVE-4", "CVE-5"]},
+    )
+    endpoint_estimate = pricing_helpers.estimate_variable_charge(
+        agent=endpoint_agent,
+        payload={"url": "https://example.com", "requests": 50},
+    )
+
+    assert cve_estimate["price_cents"] == 3
+    assert cve_estimate["pricing_model"] == "tiered"
+    assert endpoint_estimate["price_cents"] == 48
+    assert endpoint_estimate["units"] == 50
+
+
+def test_cve_not_found_returns_error_envelope_not_billable_success(monkeypatch):
+    from agents import cve_lookup
+
+    monkeypatch.setattr(cve_lookup, "_fetch_cve", lambda _cve_id: {"error": "not found"})
+    monkeypatch.setattr(cve_lookup, "_fetch_cve_from_osv", lambda _cve_id: {"error": "not found"})
+    result = cve_lookup.run({"cve_id": "CVE-9999-99999"})
+
+    assert result["error"]["code"] == "cve_lookup.not_found"
+
+
+def test_pipeline_contradiction_blocks_clean_bill_of_health():
+    from core.pipelines.executor import _pipeline_contradiction
+
+    message = _pipeline_contradiction(
+        {
+            "analyze": {
+                "risk_tags": ["auth"],
+                "secret_pattern_added": True,
+                "error_handling_removed": True,
+            },
+            "review": {"issue_count": 0, "score": 9},
+        }
+    )
+
+    assert message and "Pipeline contradiction" in message
+
+
+def test_search_query_expansion_handles_typos_and_chinese():
+    from core.registry.agents_ops import _expand_search_query
+
+    assert "secret" in _expand_search_query("secrt scaner")
+    assert "vulnerability" in _expand_search_query("检查代码中的漏洞")
+
+
 def test_fix1_server_calls_verify_agent_api_key(tmp_path):
     """The _caller_from_raw_api_key function in server.py must call verify_agent_api_key."""
     import inspect

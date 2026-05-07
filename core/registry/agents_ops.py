@@ -75,6 +75,45 @@ SEMANTIC_SCORE_WEIGHT = 0.30
 TRUST_SCORE_WEIGHT_HYBRID = 0.15
 INVERSE_PRICE_WEIGHT_HYBRID = 0.10
 
+_QUERY_EXPANSIONS = {
+    "secrt": "secret",
+    "scaner": "scanner",
+    "linnt": "lint",
+    "depndency": "dependency",
+    "vuln": "vulnerability",
+    "vulns": "vulnerabilities",
+    "hardcoded": "hardcoded secret credential password",
+    "passwords": "passwords secrets credentials",
+    "tls": "ssl certificate https",
+    "jwt": "json web token security",
+    "xss": "cross site scripting security",
+    "redos": "regex denial service security",
+}
+
+_NON_ENGLISH_QUERY_EXPANSIONS = {
+    "检查代码中的漏洞": "scan code vulnerabilities security secret scanner code review",
+    "漏洞": "vulnerability security cve",
+    "代码": "code",
+    "秘密": "secret credential",
+    "密钥": "secret key credential",
+    "依赖": "dependency package audit",
+}
+
+
+def _expand_search_query(query: str) -> str:
+    lowered = str(query or "").strip().lower()
+    additions: list[str] = []
+    for needle, expansion in _NON_ENGLISH_QUERY_EXPANSIONS.items():
+        if needle in query:
+            additions.append(expansion)
+    for term in re.findall(r"[a-z0-9-]+", lowered):
+        expansion = _QUERY_EXPANSIONS.get(term)
+        if expansion:
+            additions.append(expansion)
+    if not additions:
+        return str(query or "").strip()
+    return " ".join([str(query or "").strip(), *additions]).strip()
+
 
 def _validate_agent_scalar_params(
     price_per_call_usd: float,
@@ -1142,6 +1181,13 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
         "vulnerabilities",
         "cve",
         "cves",
+        "secret",
+        "secrets",
+        "credential",
+        "credentials",
+        "password",
+        "passwords",
+        "hardcoded",
         "npm",
         "package",
         "dependency",
@@ -1156,6 +1202,19 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
     sbom_terms = {"sbom", "license", "licenses", "open", "source"}
 
     if security_terms & set(terms):
+        if {
+            "secret",
+            "secrets",
+            "credential",
+            "credentials",
+            "password",
+            "passwords",
+            "hardcoded",
+        } & set(terms):
+            if any(token in combined for token in ("secret", "credential", "password", "token")):
+                bonus += 0.40
+            elif any(token in combined for token in ("cve", "nvd", "osv")):
+                bonus -= 0.20
         if {"cve", "cves"} & set(terms) and any(
             token in combined for token in ("cve", "nvd", "osv")
         ):
@@ -1304,7 +1363,7 @@ def search_agents(
     Filters: ``min_trust``, ``max_price_cents``, ``pii_safe``, ``kind``, etc.
     Returns up to ``limit`` agents ranked by combined keyword + semantic score.
     """
-    normalized_query = str(query or "").strip()
+    normalized_query = _expand_search_query(str(query or "").strip())
     if not normalized_query:
         raise ValueError("query must be a non-empty string.")
     if limit < 1:

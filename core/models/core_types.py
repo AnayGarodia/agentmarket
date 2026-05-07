@@ -178,7 +178,7 @@ class WikiRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
         json_schema_extra={
-            "example": {"topic": "Capital asset pricing model", "depth": "standard"}
+            "example": {"query": "Capital asset pricing model", "depth": "standard"}
         },
     )
 

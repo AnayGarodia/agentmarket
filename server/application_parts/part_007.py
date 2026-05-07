@@ -128,7 +128,11 @@ def _mcp_active_agents() -> list[dict[str, Any]]:
     return [
         agent
         for agent in agents
-        if str(agent.get("status") or "").strip().lower() == "active"
+        if (
+            str(agent.get("status") or "").strip().lower() == "active"
+            or str(agent.get("agent_id") or "")
+            in _builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
+        )
         and not bool(agent.get("internal_only"))
     ]
 

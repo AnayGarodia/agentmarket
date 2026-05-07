@@ -241,17 +241,33 @@ def _quantity_from_payload(
 ) -> int:
     if not isinstance(payload, Mapping):
         return 0
-    field = str(config.get("input_field") or "").strip()
-    if not field:
+    field_names = [str(config.get("input_field") or "").strip()]
+    fallback_fields = config.get("fallback_input_fields")
+    if isinstance(fallback_fields, list):
+        field_names.extend(str(item or "").strip() for item in fallback_fields)
+    field_names = [field for field in field_names if field]
+    if not field_names:
         return 0
-    raw = payload.get(field)
+    raw = None
+    selected_field = ""
+    for field in field_names:
+        if field in payload:
+            raw = payload.get(field)
+            selected_field = field
+            break
     if raw is None:
         # Try common fall-through: if the payload nests everything under
         # "input", look one level deeper. This keeps API compatibility
         # with clients that wrap their request under ``{"input": {...}}``.
         inner = payload.get("input") if isinstance(payload, Mapping) else None
         if isinstance(inner, Mapping):
-            raw = inner.get(field)
+            for field in field_names:
+                if field in inner:
+                    raw = inner.get(field)
+                    selected_field = field
+                    break
+    if raw is None and selected_field == "" and "url" in payload and "request_count" in field_names:
+        raw = 1
     if isinstance(raw, bool) or raw is None:
         return 0
     if isinstance(raw, (int, float)):

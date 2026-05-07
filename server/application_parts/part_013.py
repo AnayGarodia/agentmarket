@@ -22,6 +22,15 @@ def create_topup_session(
             status_code=503,
             detail="Payment processing is not configured on this server.",
         )
+    if _ENVIRONMENT == "production" and _STRIPE_SECRET_KEY.startswith("sk_test_"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "payment.stripe_test_key_in_production",
+                "message": "Production wallet top-ups require a live Stripe secret key.",
+                "data": {"stripe_mode": "test"},
+            },
+        )
     _require_scope(caller, "caller")
     wallet = payments.get_wallet(body.wallet_id)
     if wallet is None:
@@ -85,7 +94,17 @@ def create_topup_session(
     except Exception as exc:
         status_code, payload = _stripe_http_error("topup_session", exc)
         raise HTTPException(status_code=status_code, detail=payload)
-    return JSONResponse({"checkout_url": session.url, "session_id": session.id})
+    session_id = str(_stripe_obj_id(session) or "").strip()
+    if _ENVIRONMENT == "production" and session_id.startswith("cs_test_"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "payment.stripe_test_session_in_production",
+                "message": "Stripe returned a test checkout session in production. Top-up was not exposed.",
+                "data": {"session_id_prefix": "cs_test"},
+            },
+        )
+    return JSONResponse({"checkout_url": session.url, "session_id": session_id})
 
 
 @app.post(

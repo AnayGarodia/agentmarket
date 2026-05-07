@@ -229,6 +229,26 @@ def _invoke_agent(
         return f"[request error: {type(exc).__name__}]", 0
 
 
+def _resolve_slug(base_url: str, api_key: str, slug: str) -> str:
+    try:
+        response = requests.get(
+            f"{base_url.rstrip('/')}/codex/tools",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-Aztea-Client": "aztea-red-teamer/1.0",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        lookup = response.json().get("tool_lookup") or {}
+        entry = lookup.get(slug) if isinstance(lookup, dict) else None
+        if isinstance(entry, dict):
+            return str(entry.get("agent_id") or "").strip()
+    except Exception:
+        return ""
+    return ""
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     """Run adversarial prompt tests against a registered Aztea agent.
 
@@ -248,10 +268,6 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     Returns ``{tests_run, passed, failed, findings, risk_score}`` where each
     finding records the prompt, the agent response, and the detected violation.
     """
-    agent_id = str(payload.get("target_agent_id") or "").strip()
-    if not agent_id:
-        return _err("ai_red_teamer.missing_target", "target_agent_id is required.")
-
     api_key = str(
         payload.get("api_key") or os.environ.get("AZTEA_API_KEY") or ""
     ).strip()
@@ -266,6 +282,15 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         or os.environ.get("SERVER_BASE_URL")
         or "https://aztea.ai"
     ).strip()
+    agent_id = str(payload.get("target_agent_id") or "").strip()
+    target_slug = str(payload.get("target_agent_slug") or "").strip()
+    if not agent_id and target_slug:
+        agent_id = _resolve_slug(base_url, api_key, target_slug)
+    if not agent_id:
+        return _err(
+            "ai_red_teamer.missing_target",
+            "target_agent_id is required, or pass a resolvable target_agent_slug.",
+        )
 
     categories_raw = payload.get("categories")
     if isinstance(categories_raw, list) and categories_raw:

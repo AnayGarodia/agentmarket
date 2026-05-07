@@ -675,6 +675,11 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                         "title": "Target agent ID",
                         "description": "UUID of the Aztea agent to test.",
                     },
+                    "target_agent_slug": {
+                        "type": "string",
+                        "title": "Target agent slug",
+                        "description": "Slug alias accepted by MCP/CLI callers; direct API callers should prefer target_agent_id.",
+                    },
                     "api_key": {
                         "type": "string",
                         "title": "API key",
@@ -705,7 +710,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                         "maximum": 50,
                     },
                 },
-                required=["target_agent_id"],
+                required=[],
             ),
             "output_schema": _output_schema_object(
                 {
