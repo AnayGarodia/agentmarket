@@ -442,8 +442,8 @@ def registry_auto_hire(
     - feature flag         (AZTEA_AUTO_INVOKE_ENABLED)
     - confidence floor     (AZTEA_AUTO_INVOKE_CONFIDENCE, default 0.55)
     - stability tier       (no auto-invoke for beta agents)
-    - trust score          (AZTEA_AUTO_INVOKE_TRUST_FLOOR, default 70)
-    - success rate         (AZTEA_AUTO_INVOKE_SUCCESS_FLOOR, default 0.90)
+    - trust score          (AZTEA_AUTO_INVOKE_TRUST_FLOOR, default 30)
+    - success rate         (AZTEA_AUTO_INVOKE_SUCCESS_FLOOR, default 0.50)
     - per-call price       (min(caller.max_cost_usd, AZTEA_AUTO_INVOKE_SERVER_CAP_USD))
     - required-input fields present in caller-supplied `input` or extractable
 

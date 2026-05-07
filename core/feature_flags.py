@@ -135,7 +135,11 @@ def auto_invoke_trust_floor() -> float:
 def auto_invoke_success_floor() -> float:
     """Minimum success rate (0.0–1.0) to be eligible for auto-invoke.
 
-    Default 0.80 — agents with <10 completed jobs sit at the seeded baseline.
-    Raised toward 0.90 once history accumulates.
+    Default 0.50 — most curated builtins sit between 0.40 and 0.80 because
+    the success counter mixes pre-fix schema rejections in with real failures.
+    A 0.80 floor effectively disables auto-invoke for most of the catalog,
+    which silently breaks `aztea_do`. Raise back toward 0.80 after the
+    rolling-window stats have stabilized post-deprecation cleanup
+    (2026-05-07).
     """
     return flag_float("AZTEA_AUTO_INVOKE_SUCCESS_FLOOR", default=0.80)
