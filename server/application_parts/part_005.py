@@ -1739,7 +1739,42 @@ def _settle_failed_job(
 
 def _dispute_view(dispute_row: dict) -> dict:
     payload = dict(dispute_row)
-    payload["judgments"] = disputes.get_judgments(payload["dispute_id"])
+    judgments = disputes.get_judgments(payload["dispute_id"])
+    payload["judgments"] = judgments
+    status = str(payload.get("status") or "").strip().lower()
+    judges_completed = len(judgments)
+    payload["judgments_required"] = 2
+    payload["judges_completed"] = judges_completed
+    payload["judgments_queued"] = max(0, 2 - judges_completed)
+    filed_at = str(payload.get("filed_at") or "").strip()
+    resolution_by = None
+    next_judge_run_by = None
+    try:
+        filed_dt = datetime.fromisoformat(filed_at)
+        if filed_dt.tzinfo is None:
+            filed_dt = filed_dt.replace(tzinfo=timezone.utc)
+        if status in {"pending", "judging"}:
+            next_judge_run_by = (
+                datetime.now(timezone.utc) + timedelta(seconds=60)
+            ).isoformat()
+            resolution_by = (filed_dt + timedelta(minutes=3)).isoformat()
+        elif status == "tied":
+            resolution_by = (filed_dt + timedelta(hours=48)).isoformat()
+        elif status in {"resolved", "final"}:
+            resolution_by = payload.get("resolved_at")
+    except Exception:
+        next_judge_run_by = None
+    payload["next_judge_run_by"] = next_judge_run_by
+    payload["resolution_by"] = resolution_by
+    if status in {"pending", "judging"}:
+        payload["eta_hint"] = (
+            "Dispute judges run about once per minute. Two matching judgments "
+            "resolve the dispute automatically."
+        )
+    elif status == "tied":
+        payload["eta_hint"] = "Tied disputes auto-resolve to caller after 48 hours."
+    elif status in {"resolved", "final"}:
+        payload["eta_hint"] = "Dispute is resolved."
     return payload
 
 

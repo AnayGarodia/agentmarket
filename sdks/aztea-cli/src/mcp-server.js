@@ -207,6 +207,7 @@ const AZTEA_BUDGET_TOOL = {
       amount_cents: { type: 'integer', minimum: 100, maximum: 50000 },
       limit_cents: { type: 'integer', minimum: 0, maximum: 1000000 },
       budget_cents: { type: 'integer', minimum: 0 },
+      max_price_cents: { type: 'integer', minimum: 0 },
       period: { type: 'string', enum: ['1d', '7d', '30d', '90d'] },
     },
     required: ['action'],
@@ -237,6 +238,7 @@ const AZTEA_WORKFLOW_TOOL = {
       slugs: { type: 'array', items: { type: 'string' } },
       intent: { type: 'string' },
       max_total_cents: { type: 'integer', minimum: 0 },
+      max_price_cents: { type: 'integer', minimum: 0 },
       dry_run: { type: 'boolean' },
       input: { type: 'object', additionalProperties: true },
       input_payload: { type: 'object', additionalProperties: true },
@@ -554,6 +556,9 @@ function searchCatalog(query, limit) {
     kind: entry.kind,
     agent_id: entry.agent_id,
     description: entry.description.slice(0, 400),
+    required_fields: schemaInputHint(entry.inputSchema).required_fields,
+    input_shape: schemaInputHint(entry.inputSchema).fields,
+    example_arguments: schemaInputHint(entry.inputSchema).example_arguments,
     score,
   }))
   return {
@@ -579,9 +584,35 @@ function describeCatalog(slug) {
       agent_id: entry.agent_id,
       description: entry.description,
       input_schema: entry.inputSchema,
-      next_step: `Call aztea_call(slug='${entry.slug}', arguments={...}) with fields from input_schema above.`,
+      input_shape: schemaInputHint(entry.inputSchema),
+      next_step: `Call aztea_call(slug='${entry.slug}', arguments={...}) with fields from input_shape.example_arguments or input_schema above.`,
     },
   }
+}
+
+function schemaInputHint(inputSchema) {
+  const schema = inputSchema && typeof inputSchema === 'object' ? inputSchema : {}
+  const props = schema.properties && typeof schema.properties === 'object' ? schema.properties : {}
+  const required = Array.isArray(schema.required) ? schema.required.map(String) : []
+  const fields = {}
+  const example = {}
+  for (const [name, rawSpec] of Object.entries(props).slice(0, 16)) {
+    const spec = rawSpec && typeof rawSpec === 'object' ? rawSpec : {}
+    let type = spec.type || (spec.items ? 'array' : 'object')
+    if (Array.isArray(type)) type = type.map(String).join('/')
+    fields[name] = { type, required: required.includes(name) }
+    if (spec.description) fields[name].description = String(spec.description).slice(0, 140)
+    if (Array.isArray(spec.enum)) fields[name].enum = spec.enum.slice(0, 8)
+    if (Object.prototype.hasOwnProperty.call(spec, 'default')) example[name] = spec.default
+    else if (Array.isArray(spec.enum) && spec.enum.length) example[name] = spec.enum[0]
+    else if (type === 'array') example[name] = []
+    else if (type === 'integer') example[name] = 1
+    else if (type === 'number') example[name] = 1.0
+    else if (type === 'boolean') example[name] = false
+    else if (type === 'object') example[name] = {}
+    else example[name] = `<${name}>`
+  }
+  return { required_fields: required, fields, example_arguments: example }
 }
 
 async function walletBalance(args) {
@@ -654,6 +685,9 @@ async function sessionSummary() {
     result.today_spend_cents = spend.body.total_cents
     result.today_jobs = spend.body.total_jobs
     result.today_by_agent = spend.body.by_agent
+    result.today_sunset_by_agent = spend.body.sunset_by_agent || []
+    result.today_live_catalog_spend_cents = spend.body.live_catalog_total_cents
+    result.today_sunset_spend_cents = spend.body.sunset_total_cents
   }
   return { ok: true, body: result }
 }
@@ -716,6 +750,7 @@ async function hireAsync(args) {
   if (args.callback_url) body.callback_url = String(args.callback_url)
   if (args.max_attempts != null) body.max_attempts = Number(args.max_attempts)
   if (args.budget_cents != null) body.budget_cents = Number(args.budget_cents)
+  if (args.max_price_cents != null) body.max_price_cents = Number(args.max_price_cents)
   if (args.private_task != null) body.private_task = Boolean(args.private_task)
   const res = parseApiResponse(await postJson('/jobs', body))
   if (res.ok) {
@@ -905,6 +940,7 @@ async function hireBatch(args) {
       agent_id: resolvedIds[i].id,
       input_payload: spec.input_payload == null ? (spec.input == null ? {} : spec.input) : spec.input_payload,
       ...(spec.budget_cents != null ? { budget_cents: Number(spec.budget_cents) } : {}),
+      ...(spec.max_price_cents != null ? { max_price_cents: Number(spec.max_price_cents) } : {}),
       ...(spec.private_task != null ? { private_task: Boolean(spec.private_task) } : {}),
     })),
   }
@@ -1306,6 +1342,7 @@ async function listAgents(args) {
     if (!agent || typeof agent !== 'object') continue
     const cat = String(agent.category || '').trim()
     if (categoryFilter && cat.toLowerCase() !== categoryFilter) continue
+    const inputHint = schemaInputHint(agent.input_schema)
     rows.push({
       slug: agent.slug || agent.agent_slug,
       agent_id: agent.agent_id,
@@ -1316,6 +1353,9 @@ async function listAgents(args) {
       trust_score: agent.trust_score,
       success_rate: agent.success_rate,
       tags: agent.tags || [],
+      required_fields: inputHint.required_fields,
+      input_shape: inputHint.fields,
+      example_arguments: inputHint.example_arguments,
     })
     if (rows.length >= limit) break
   }

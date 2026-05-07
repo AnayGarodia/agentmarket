@@ -220,6 +220,58 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
     assert _wallet_balance(caller_owner) == 200
 
 
+def test_dispute_status_includes_judge_eta_fields(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"ETA Agent {uuid.uuid4().hex[:6]}",
+    )
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    _complete_job(client, worker["raw_api_key"], job["job_id"])
+
+    filed = client.post(
+        f"/jobs/{job['job_id']}/dispute",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"reason": "Output omitted the requested section."},
+    )
+    assert filed.status_code == 201, filed.text
+    payload = filed.json()
+    assert payload["judgments_required"] == 2
+    assert payload["judges_completed"] == 0
+    assert payload["judgments_queued"] == 2
+    assert payload["resolution_by"]
+    assert payload["next_judge_run_by"]
+    assert "once per minute" in payload["eta_hint"]
+
+
+def test_jobs_create_honors_max_price_cents_alias(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Cap Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+    )
+    resp = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "analyze"},
+            "max_price_cents": 1,
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert body["error"] == "job.budget_exceeded"
+    assert body["details"]["max_price_cents"] == 1
+
+
 def test_dispute_tie_then_admin_split_settlement(client, monkeypatch):
     worker = _register_user()
     caller = _register_user()

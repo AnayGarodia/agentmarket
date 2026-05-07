@@ -16,6 +16,7 @@ from server.pricing_helpers import (
 from server.pricing_helpers import (
     resolve_agent_pricing as _resolve_agent_pricing,  # noqa: F401
 )
+import sqlite3
 
 
 def _validate_builtin_agent_payload(
@@ -880,7 +881,27 @@ def _hook_backoff_seconds(attempt_count: int) -> int:
 
 def _claim_due_hook_delivery(now_iso: str) -> dict | None:
     with jobs._conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        try:
+            exists = conn.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'job_event_deliveries'
+                LIMIT 1
+                """
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "database is locked" in str(exc).lower():
+                return None
+            raise
+        if exists is None:
+            return None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            if "database is locked" in str(exc).lower():
+                return None
+            raise
         row = conn.execute(
             """
             SELECT *

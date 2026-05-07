@@ -437,6 +437,7 @@ class AzteaClient:
         timeout_seconds: int = 60,
         max_attempts: int = 3,
         budget_cents: int | None = None,
+        max_price_cents: int | None = None,
         callback_url: str | None = None,
         callback_secret: str | None = None,
         parent_job_id: str | None = None,
@@ -454,6 +455,8 @@ class AzteaClient:
         }
         if budget_cents is not None:
             body["budget_cents"] = budget_cents
+        if max_price_cents is not None:
+            body["max_price_cents"] = max_price_cents
         if callback_url is not None:
             body["callback_url"] = callback_url
         if callback_secret is not None:
@@ -620,16 +623,10 @@ class AzteaClient:
             threading.Thread(target=_watch, daemon=True, name=f"aztea-watch-{result.job_id[:8]}").start()
         return result.job_id
 
-    # ─── Job lifecycle: cancel / rate / dispute / verify-output / retry ──────
-    # These wrap surfaces that already exist on the API. They were not exposed
-    # on the SDK before 2026-05-01; the production-eval audit flagged it as
-    # the "primitives are built but not wired in" gap.
-
     def cancel_job(self, job_id: str, *, reason: str | None = None) -> JSONObject:
         """Abort an in-flight async job and refund the unsettled charge.
 
-        Accepts pending/claimed/running/awaiting_clarification. Terminal-state
-        jobs raise ConflictError(409, error="job.invalid_state").
+        Terminal-state jobs raise ConflictError(409, error="job.invalid_state").
         """
         body: JSONObject = {}
         if reason:

@@ -1925,10 +1925,18 @@ def jobs_create(
                 ),
             )
 
+    effective_budget_cents = body.budget_cents
+    if body.max_price_cents is not None:
+        effective_budget_cents = (
+            body.max_price_cents
+            if effective_budget_cents is None
+            else min(effective_budget_cents, body.max_price_cents)
+        )
+
     pricing_estimate = _estimate_variable_charge(
         agent=agent,
         payload=body.input_payload,
-        budget_cents=body.budget_cents,
+        budget_cents=effective_budget_cents,
         per_job_cap_cents=_caller_key_per_job_cap(caller),
     )
     if pricing_estimate.get("cap_violated"):
@@ -1946,6 +1954,7 @@ def jobs_create(
                     {
                         "price_cents": violation["price_cents"],
                         "budget_cents": violation["limit_cents"],
+                        "max_price_cents": body.max_price_cents,
                         "pricing_model": pricing_estimate["pricing_model"],
                         "detail": pricing_estimate.get("detail"),
                         "agent_id": agent["agent_id"],
@@ -1999,15 +2008,16 @@ def jobs_create(
                 },
             ),
         )
-    if body.budget_cents is not None and price_cents > body.budget_cents:
+    if effective_budget_cents is not None and price_cents > effective_budget_cents:
         raise HTTPException(
             status_code=400,
             detail=error_codes.make_error(
                 error_codes.BUDGET_EXCEEDED,
-                f"Agent price ({price_cents}¢) exceeds your budget ({body.budget_cents}¢).",
+                f"Agent price ({price_cents}¢) exceeds your budget ({effective_budget_cents}¢).",
                 {
                     "price_cents": price_cents,
-                    "budget_cents": body.budget_cents,
+                    "budget_cents": effective_budget_cents,
+                    "max_price_cents": body.max_price_cents,
                     "agent_id": agent["agent_id"],
                 },
             ),

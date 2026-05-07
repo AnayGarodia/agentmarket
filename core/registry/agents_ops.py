@@ -85,9 +85,22 @@ _QUERY_EXPANSIONS = {
     "hardcoded": "hardcoded secret credential password",
     "passwords": "passwords secrets credentials",
     "tls": "ssl certificate https",
+    "ssl": "tls certificate https",
     "jwt": "json web token security",
+    "sbom": "software bill of materials dependency license package audit",
+    "sca": "software composition analysis dependency vulnerability license",
+    "owasp": "web application security vulnerability xss ssrf injection",
+    "ssrf": "server side request forgery url security endpoint",
     "xss": "cross site scripting security",
     "redos": "regex denial service security",
+    "rce": "remote code execution sandbox security exploit",
+    "dnssec": "dns ssl tls certificate domain",
+    "hsts": "http security headers ssl tls",
+    "csp": "content security policy http security headers",
+    "imds": "metadata service ssrf sandbox cloud security",
+    "poc": "proof of concept exploit security test",
+    "10k": "10-k sec edgar filing financial",
+    "10-q": "sec edgar filing financial",
 }
 
 _NON_ENGLISH_QUERY_EXPANSIONS = {

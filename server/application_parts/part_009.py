@@ -749,10 +749,17 @@ def jobs_batch_create(
                         },
                     ),
                 )
+        spec_budget_cents = spec.budget_cents
+        if spec.max_price_cents is not None:
+            spec_budget_cents = (
+                spec.max_price_cents
+                if spec_budget_cents is None
+                else min(spec_budget_cents, spec.max_price_cents)
+            )
         pricing_estimate = _estimate_variable_charge(
             agent=agent,
             payload=normalized_spec_input_payload,
-            budget_cents=spec.budget_cents,
+            budget_cents=spec_budget_cents,
             per_job_cap_cents=key_per_job_cap_cents,
         )
         if pricing_estimate.get("cap_violated"):

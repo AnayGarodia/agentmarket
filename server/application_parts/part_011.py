@@ -433,6 +433,7 @@ def payments_reconcile_runs(
 def wallet_spend_summary(
     request: Request,
     period: str = "7d",
+    include_sunset: bool = False,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     _require_scope(caller, "caller")
@@ -469,6 +470,8 @@ def wallet_spend_summary(
         ).fetchone()
 
     by_agent = []
+    sunset_by_agent = []
+    sunset_ids = set(_builtin_constants.SUNSET_DEPRECATED_AGENT_IDS)
     for row in rows:
         agent_id = row["agent_id"]
         agent_name = agent_id
@@ -479,21 +482,42 @@ def wallet_spend_summary(
                     agent_name = ag.get("name") or agent_id
             except Exception:
                 _LOG.warning("Failed to resolve agent name for %s in spending report", agent_id, exc_info=True)
-        by_agent.append(
-            {
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "total_cents": int(row["total_cents"] or 0),
-                "job_count": int(row["job_count"] or 0),
-            }
-        )
+        item = {
+            "agent_id": agent_id,
+            "agent_name": agent_name,
+            "total_cents": int(row["total_cents"] or 0),
+            "job_count": int(row["job_count"] or 0),
+            "is_sunset": agent_id in sunset_ids,
+            "catalog_visibility": "sunset" if agent_id in sunset_ids else "live",
+        }
+        if agent_id in sunset_ids:
+            sunset_by_agent.append(item)
+            if include_sunset:
+                by_agent.append(item)
+        else:
+            by_agent.append(item)
+    live_total_cents = sum(int(item["total_cents"]) for item in by_agent if not item["is_sunset"])
+    live_total_jobs = sum(int(item["job_count"]) for item in by_agent if not item["is_sunset"])
+    sunset_total_cents = sum(int(item["total_cents"]) for item in sunset_by_agent)
+    sunset_total_jobs = sum(int(item["job_count"]) for item in sunset_by_agent)
     return JSONResponse(
         content={
             "period": period,
             "days": days,
             "total_cents": int((totals["total_cents"] or 0) if totals else 0),
             "total_jobs": int((totals["job_count"] or 0) if totals else 0),
+            "live_catalog_total_cents": live_total_cents,
+            "live_catalog_total_jobs": live_total_jobs,
+            "sunset_total_cents": sunset_total_cents,
+            "sunset_total_jobs": sunset_total_jobs,
             "by_agent": by_agent,
+            "sunset_by_agent": sunset_by_agent,
+            "include_sunset": include_sunset,
+            "note": (
+                "by_agent shows live-catalog agents by default. Historical calls "
+                "to sunset agents are separated under sunset_by_agent; pass "
+                "include_sunset=true to fold them back into by_agent."
+            ),
             "wallet_id": wallet_id,
         }
     )

@@ -73,6 +73,49 @@ def _word_truncate(text: str, max_len: int, suffix: str = "…") -> str:
     return head + suffix
 
 
+def _schema_input_hint(input_schema: dict[str, Any] | None) -> dict[str, Any]:
+    """Compact schema guide for coding agents before they assemble arguments."""
+    schema = input_schema if isinstance(input_schema, dict) else {}
+    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = [str(item) for item in (schema.get("required") or [])]
+    fields: dict[str, Any] = {}
+    example: dict[str, Any] = {}
+    for name, spec in list(props.items())[:16]:
+        if not isinstance(spec, dict):
+            spec = {}
+        typ = spec.get("type") or ("array" if "items" in spec else "object")
+        if isinstance(typ, list):
+            typ = "/".join(str(item) for item in typ)
+        field_name = str(name)
+        item: dict[str, Any] = {"type": typ, "required": field_name in required}
+        if spec.get("description"):
+            item["description"] = _word_truncate(str(spec["description"]), 140)
+        if spec.get("enum"):
+            item["enum"] = list(spec["enum"])[:8]
+        fields[field_name] = item
+        if "default" in spec:
+            example[field_name] = spec["default"]
+        elif spec.get("enum"):
+            example[field_name] = list(spec["enum"])[0]
+        elif typ == "array":
+            example[field_name] = []
+        elif typ == "integer":
+            example[field_name] = 1
+        elif typ == "number":
+            example[field_name] = 1.0
+        elif typ == "boolean":
+            example[field_name] = False
+        elif typ == "object":
+            example[field_name] = {}
+        else:
+            example[field_name] = f"<{field_name}>"
+    return {
+        "required_fields": required,
+        "fields": fields,
+        "example_arguments": example,
+    }
+
+
 def _annotations(
     *,
     read_only: bool,
@@ -324,6 +367,11 @@ _TOOLS: list[dict[str, Any]] = [
                 "budget_cents": {
                     "type": "integer",
                     "description": "Optional ceiling in cents — job is rejected if agent price exceeds this.",
+                    "minimum": 0,
+                },
+                "max_price_cents": {
+                    "type": "integer",
+                    "description": "Alias for budget_cents. Use this as a buyer-side cap for one async hire.",
                     "minimum": 0,
                 },
                 "private_task": {
@@ -711,6 +759,11 @@ _TOOLS: list[dict[str, Any]] = [
                             "budget_cents": {
                                 "type": "integer",
                                 "description": "Optional per-job price ceiling in cents.",
+                                "minimum": 0,
+                            },
+                            "max_price_cents": {
+                                "type": "integer",
+                                "description": "Alias for budget_cents on this batch member.",
                                 "minimum": 0,
                             },
                             "private_task": {
@@ -1906,6 +1959,9 @@ def _session_summary(
         result["today_spend_cents"] = spend.get("total_cents")
         result["today_jobs"] = spend.get("total_jobs")
         result["today_by_agent"] = spend.get("by_agent")
+        result["today_sunset_by_agent"] = spend.get("sunset_by_agent") or []
+        result["today_live_catalog_spend_cents"] = spend.get("live_catalog_total_cents")
+        result["today_sunset_spend_cents"] = spend.get("sunset_total_cents")
     # Include this-session spend tracking
     result["session_spent_cents"] = int(session_state.get("spent_cents") or 0)
     result["session_spent_usd"] = round(float(result["session_spent_cents"]) / 100, 4)
@@ -2060,6 +2116,7 @@ def _list_agents(
         cat = str(agent.get("category") or "").strip()
         if category_filter and cat.lower() != category_filter:
             continue
+        input_hint = _schema_input_hint(agent.get("input_schema"))
         rows.append(
             {
                 "slug": agent.get("slug") or agent.get("agent_slug"),
@@ -2071,6 +2128,9 @@ def _list_agents(
                 "trust_score": agent.get("trust_score"),
                 "success_rate": agent.get("success_rate"),
                 "tags": agent.get("tags") or [],
+                "required_fields": input_hint["required_fields"],
+                "input_shape": input_hint["fields"],
+                "example_arguments": input_hint["example_arguments"],
             }
         )
         if len(rows) >= limit:
@@ -2191,6 +2251,8 @@ def _hire_async(
         body["max_attempts"] = int(args["max_attempts"])
     if args.get("budget_cents") is not None:
         body["budget_cents"] = int(args["budget_cents"])
+    if args.get("max_price_cents") is not None:
+        body["max_price_cents"] = int(args["max_price_cents"])
     if args.get("private_task") is not None:
         body["private_task"] = bool(args["private_task"])
     ok, result = _post(session, f"{base}/jobs", hdrs, timeout, body)
@@ -2863,6 +2925,7 @@ def _discover(
                 input_schema = {}
             properties = input_schema.get("properties")
             fields = sorted(properties.keys()) if isinstance(properties, dict) else []
+            input_hint = _schema_input_hint(input_schema)
             compact.append(
                 {
                     "agent_id": agent.get("agent_id"),
@@ -2875,8 +2938,10 @@ def _discover(
                     "trust_score": agent.get("trust_score"),
                     "success_rate": agent.get("success_rate"),
                     "avg_latency_ms": agent.get("avg_latency_ms"),
-                    "required_fields": list(input_schema.get("required") or []),
+                    "required_fields": input_hint["required_fields"],
                     "input_fields": fields[:12],
+                    "input_shape": input_hint["fields"],
+                    "example_arguments": input_hint["example_arguments"],
                     "pricing_model": agent.get("pricing_model"),
                     "pricing_config": agent.get("pricing_config"),
                     "blended_score": item.get("blended_score"),
@@ -2964,6 +3029,8 @@ def _hire_batch(
             }
         if spec.get("budget_cents") is not None:
             job["budget_cents"] = int(spec["budget_cents"])
+        if spec.get("max_price_cents") is not None:
+            job["max_price_cents"] = int(spec["max_price_cents"])
         if spec.get("private_task") is not None:
             job["private_task"] = bool(spec["private_task"])
         jobs_body.append(job)

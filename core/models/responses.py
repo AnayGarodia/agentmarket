@@ -401,6 +401,12 @@ class DisputeResponse(BaseModel):
     filed_at: str
     resolved_at: str | None = None
     judgments: list[DisputeJudgmentResponse] = Field(default_factory=list)
+    judgments_required: int | None = None
+    judgments_queued: int | None = None
+    judges_completed: int | None = None
+    resolution_by: str | None = None
+    next_judge_run_by: str | None = None
+    eta_hint: str | None = None
 
 
 class DisputeJudgeResponse(BaseModel):

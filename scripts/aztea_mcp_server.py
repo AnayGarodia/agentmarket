@@ -1362,6 +1362,7 @@ class RegistryBridge:
                 quality_parts.append(latency)
             required_list = list(entry.get("required_fields") or [])
             input_list = list(entry.get("input_fields") or [])[:12]
+            input_hint = meta_tools._schema_input_hint(entry.get("input_schema"))
             # Append a "Inputs:" line to the truncated description so callers see
             # the schema summary inline without a follow-up aztea_describe call.
             # This fixes the 422-on-first-try problem documented in QA.
@@ -1392,6 +1393,8 @@ class RegistryBridge:
                     "best_for": list(entry.get("short_use_cases") or [])[:4],
                     "required_fields": required_list,
                     "input_fields": input_list,
+                    "input_shape": input_hint["fields"],
+                    "example_arguments": input_hint["example_arguments"],
                     "pricing_model": entry.get("pricing_model"),
                     "pricing_config": entry.get("pricing_config"),
                     "quality_summary": " | ".join(quality_parts),
@@ -1464,6 +1467,9 @@ class RegistryBridge:
             "required_fields": list((entry["input_schema"].get("required") or []))
             if isinstance(entry["input_schema"], dict)
             else [],
+            "input_shape": meta_tools._schema_input_hint(entry["input_schema"])
+            if isinstance(entry["input_schema"], dict)
+            else {"required_fields": [], "fields": {}, "example_arguments": {}},
             "optional_fields": sorted(
                 [
                     key

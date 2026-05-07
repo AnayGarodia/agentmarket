@@ -142,6 +142,14 @@ class JobCreateRequest(BaseModel):
         ge=0,
         description="Optional max price the caller is willing to pay in cents. Rejected with 400 if agent.price_cents > budget_cents.",
     )
+    max_price_cents: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Alias for budget_cents on a single job. Prefer this name when the "
+            "intent is a buyer-side per-hire cap."
+        ),
+    )
     fee_bearer_policy: Literal["worker", "caller", "split"] = Field(
         default="caller",
         description=(
