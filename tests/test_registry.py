@@ -419,3 +419,51 @@ def test_price_queries_rank_by_price(isolated_db):
 
     costliest = registry.search_agents("the most expensive agent", limit=2)
     assert costliest[0]["agent"]["agent_id"] == expensive
+
+
+def test_semantic_outranks_spurious_lexical_overlap(isolated_db):
+    """Regression for the 2026-05-07 power-user eval. Lexical overlap on a
+    shared token (``base64`` for JWT/image, ``screenshot`` for browser/diff)
+    used to outrank intent matches because LEXICAL_SCORE_WEIGHT was higher
+    than SEMANTIC_SCORE_WEIGHT. Prove the new 0.30/0.50 split routes
+    intent-matching queries to the right agent."""
+    registry.init_db()
+    reputation.init_reputation_db()
+
+    browser = registry.register_agent(
+        name="Browser Agent",
+        description="Use when you need to fetch a live web page with a real browser. Launches headless Chromium and supports screenshot capture.",
+        endpoint_url="https://agents.example.com/browser",
+        price_per_call_usd=0.03,
+        tags=["browser", "screenshot", "playwright"],
+        input_schema={"type": "object", "properties": {"url": {"type": "string"}}},
+    )
+    visual_diff = registry.register_agent(
+        name="Visual Regression",
+        description="Compares two screenshot artifacts and computes a pixel-level diff. Useful for visual regression testing of rendered pages.",
+        endpoint_url="https://agents.example.com/visual",
+        price_per_call_usd=0.03,
+        tags=["visual", "diff", "screenshot"],
+        input_schema={
+            "type": "object",
+            "properties": {"left": {"type": "string"}, "right": {"type": "string"}},
+        },
+    )
+    _set_agent_stats(
+        isolated_db, browser, total_calls=10, successful_calls=10, avg_latency_ms=10.0
+    )
+    _set_agent_stats(
+        isolated_db,
+        visual_diff,
+        total_calls=10,
+        successful_calls=10,
+        avg_latency_ms=10.0,
+    )
+
+    # The eval saw "screenshot a website" rank visual_regression #1 over
+    # browser_agent. With semantic > lexical and the screenshot/website
+    # query expansions removed, the right agent should win.
+    results = registry.search_agents("screenshot a website", limit=2)
+    assert results[0]["agent"]["agent_id"] == browser, [
+        r["agent"]["name"] for r in results
+    ]

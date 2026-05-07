@@ -43,6 +43,17 @@ _MAX_CODE_CHARS = 16000
 _MAX_MEMORY_MB = max(
     64, min(int(os.environ.get("AZTEA_PYTHON_MAX_MEMORY_MB", "128") or "128"), 1024)
 )
+# Defense-in-depth rlimits applied alongside RLIMIT_AS. The audit hook
+# already blocks os.fork/file-write/exec, but kernel rlimits catch any
+# native-extension or ctypes path that bypasses Python's sys.audit. Picked
+# generously enough that any legitimate workload fits, tightly enough that
+# a hostile payload can't fork-bomb or fill /tmp with multi-GB files.
+_MAX_PROCESSES = int(os.environ.get("AZTEA_PYTHON_MAX_PROCESSES", "64") or "64")
+# Single-file size cap (bytes). Pairs with the audit hook's path filter so
+# even paths the hook would have allowed cannot grow without bound.
+_MAX_FILE_SIZE_BYTES = (
+    int(os.environ.get("AZTEA_PYTHON_MAX_FILE_SIZE_MB", "32") or "32") * 1024 * 1024
+)
 _MAX_CAPTURE_VALUE_CHARS = 1000
 _STATIC_ALLOCATION_LIMIT_BYTES = 32 * 1024 * 1024
 
@@ -518,15 +529,52 @@ def _init_pool_worker() -> None:
 
 
 def _apply_memory_limit() -> None:
+    """Apply rlimits inside the sandbox subprocess.
+
+    RLIMIT_AS is the primary memory cap. Static analysis catches obvious
+    allocation patterns (`'a' * 10**8`, `bytearray(40_000_000)`, etc.) but
+    code that builds the size dynamically (eval'd, computed in a loop,
+    pulled from stdin) bypasses static checks — the kernel-level cap is
+    the backstop. NPROC and FSIZE close fork-bomb and file-write
+    side-channels even if the audit hook is somehow bypassed by a native
+    extension. Failures are silent so a missing rlimit doesn't break the
+    sandbox; the audit hook + RLIMIT_AS still hold.
+    """
     if os.name != "posix":
         return
     try:
         import resource
 
-        limit_bytes = int(_MAX_MEMORY_MB) * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        memory_bytes = int(_MAX_MEMORY_MB) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+        # NPROC caps the number of processes this UID can have. Defense in
+        # depth on top of the static `os.fork`/`subprocess` block.
+        try:
+            resource.setrlimit(
+                resource.RLIMIT_NPROC, (_MAX_PROCESSES, _MAX_PROCESSES)
+            )
+        except (ValueError, OSError):
+            pass
+        # FSIZE caps any single file write. Audit hook blocks most paths,
+        # but if a future change opens a writable scratch dir this prevents
+        # a runaway loop from filling the disk.
+        try:
+            resource.setrlimit(
+                resource.RLIMIT_FSIZE, (_MAX_FILE_SIZE_BYTES, _MAX_FILE_SIZE_BYTES)
+            )
+        except (ValueError, OSError):
+            pass
+        # CPU rlimit is a kernel-enforced cousin of subprocess.run(timeout=).
+        # subprocess.run's timeout watches wall clock from the parent; the
+        # kernel rlimit watches CPU seconds inside the child and survives
+        # any parent-side bug that drops the timer.
+        timeout = int(os.environ.get("AZTEA_PYTHON_CPU_LIMIT_SECONDS", "32") or "32")
+        try:
+            resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout + 1))
+        except (ValueError, OSError):
+            pass
     except Exception:
-        _LOG.debug("Could not apply Python executor memory limit", exc_info=True)
+        _LOG.debug("Could not apply Python executor sandbox rlimits", exc_info=True)
 
 
 def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, Any]:

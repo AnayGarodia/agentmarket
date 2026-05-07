@@ -70,11 +70,23 @@ from .pricing import (
     validate_pricing_config,
 )
 
-LEXICAL_SCORE_WEIGHT = 0.45
-SEMANTIC_SCORE_WEIGHT = 0.30
-TRUST_SCORE_WEIGHT_HYBRID = 0.15
-INVERSE_PRICE_WEIGHT_HYBRID = 0.10
+# Semantic above lexical: lexical-only ranking produced the eval's wrong-intent
+# bugs (JWT decode → visual_regression because both share "base64", screenshot
+# a website → visual_regression over browser_agent because of the "screenshot"
+# token). Semantic similarity (sentence-transformers / OpenAI embeddings)
+# captures intent the way lexical overlap can't. Lexical retains 0.30 as a
+# tiebreaker so exact-slug queries still resolve fast.
+LEXICAL_SCORE_WEIGHT = 0.30
+SEMANTIC_SCORE_WEIGHT = 0.50
+TRUST_SCORE_WEIGHT_HYBRID = 0.12
+INVERSE_PRICE_WEIGHT_HYBRID = 0.08
 
+# Typo + acronym → canonical-term expansions ONLY. Do not list "code
+# execution", "python", "base64", or other generic terms here — every
+# expansion you add to a query is a token every candidate's lexical
+# overlap can match on, so an expansion of "jwt → ...base64 decode python"
+# made visual_regression (image base64) outrank the right answer for
+# "JWT decode". Keep these tight and intent-preserving.
 _QUERY_EXPANSIONS = {
     "secrt": "secret",
     "scaner": "scanner",
@@ -82,30 +94,24 @@ _QUERY_EXPANSIONS = {
     "depndency": "dependency",
     "vuln": "vulnerability",
     "vulns": "vulnerabilities",
-    "hardcoded": "hardcoded secret credential password",
-    "passwords": "passwords secrets credentials",
-    "tls": "ssl certificate https",
-    "handshake": "ssl tls certificate domain endpoint",
-    "ssl": "tls certificate https",
-    "jwt": "json web token security token base64 decode python",
-    "sbom": "software bill of materials dependency license package audit",
-    "sca": "software composition analysis dependency vulnerability license",
-    "owasp": "web application security vulnerability xss ssrf injection",
-    "ssrf": "server side request forgery url security endpoint",
-    "xss": "cross site scripting security",
-    "redos": "regex denial service security",
-    "rce": "remote code execution sandbox security exploit",
-    "dnssec": "dns ssl tls certificate domain",
-    "hsts": "http security headers ssl tls",
-    "csp": "content security policy http security headers",
-    "imds": "metadata service ssrf sandbox cloud security",
-    "poc": "proof of concept exploit security test",
-    "disk": "filesystem file write sandbox code execution",
-    "write": "filesystem file write sandbox code execution",
-    "screenshot": "browser playwright rendered webpage screenshot",
-    "website": "browser playwright rendered webpage url",
-    "10k": "10-k sec edgar filing financial",
-    "10-q": "sec edgar filing financial",
+    "hardcoded": "hardcoded credential",
+    "tls": "ssl certificate",
+    "handshake": "ssl tls certificate",
+    "ssl": "tls certificate",
+    "jwt": "json web token",
+    "sbom": "software bill of materials dependency",
+    "sca": "software composition analysis dependency",
+    "owasp": "web application security vulnerability",
+    "ssrf": "server side request forgery url",
+    "xss": "cross site scripting",
+    "redos": "regex denial of service",
+    "rce": "remote code execution",
+    "dnssec": "dns certificate",
+    "hsts": "http security headers",
+    "csp": "content security policy",
+    "imds": "metadata service ssrf",
+    "10k": "10-k sec edgar filing",
+    "10-q": "sec edgar filing",
 }
 
 _NON_ENGLISH_QUERY_EXPANSIONS = {

@@ -25,3 +25,8 @@ regex>=2024.0.0
 # itself is downloaded by `playwright install chromium` at image build time
 # (see Dockerfile); pip pulls only the python bindings here.
 playwright>=1.40.0
+# Local embedding model for the agent-search ranker. Without this (and without
+# OPENAI_API_KEY) the semantic similarity term is always 0, so search is
+# effectively lexical-only. The 2026-05-07 power-user eval scored discovery
+# 5/10 specifically because production had no embedding backend installed.
+sentence-transformers>=3.0.0
