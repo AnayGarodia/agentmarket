@@ -93,7 +93,10 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                 },
                 required=["content"],
             )
-            | {"additionalProperties": False},
+            | {"additionalProperties": True},
+            # Aztea injects a `protocol` envelope on every job (private_task,
+            # input_artifacts, preferred_*_formats). Strict additionalProperties
+            # would reject every batch hire of this agent.
             "output_schema": _output_schema_object(
                 {
                     "filename": {"type": ["string", "null"]},

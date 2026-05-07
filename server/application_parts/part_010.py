@@ -891,6 +891,18 @@ def disputes_get(
     return JSONResponse(content=_dispute_view(dispute_row))
 
 
+# Public alias so the MCP `dispute_status` action can poll the dispute_id
+# returned from `aztea_job(action='dispute')` directly. Same auth + ownership
+# rules — `disputes_get` checks them inline.
+app.add_api_route(
+    "/disputes/{dispute_id}",
+    disputes_get,
+    methods=["GET"],
+    response_model=core_models.DisputeResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+
+
 @app.post(
     "/jobs/{job_id}/dispute",
     status_code=201,

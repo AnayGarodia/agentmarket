@@ -17,6 +17,15 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
+# browser_agent + visual_regression need a real Chromium. `playwright
+# install-deps` pulls in the (long) list of shared-libs Chromium needs on
+# slim Debian, then `playwright install chromium` downloads the browser
+# binary. We do this as root before dropping privileges. ~300MB image
+# growth, but otherwise both agents return 0% success in prod.
+RUN python -m playwright install-deps chromium \
+    && python -m playwright install chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 RUN useradd --create-home --shell /bin/bash appuser \

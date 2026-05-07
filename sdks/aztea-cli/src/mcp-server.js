@@ -1181,8 +1181,21 @@ async function verifyJobSignature(args) {
       verificationMethod = 'did-document'
     }
     const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' })
-    const signed = Buffer.from(canonicalJson(job.output_payload), 'utf8')
-    verified = crypto.verify(null, signed, publicKey, Buffer.from(String(res.body.signature || ''), 'base64'))
+    // The job document occasionally arrives as either the raw row (output_payload
+    // top-level) or the parseApiResponse-wrapped envelope ({ ok, body: {...} }).
+    // Tolerate both, and also fall back to the receipt's pre-computed
+    // output_hash when the payload was elided (e.g. private_task=true jobs).
+    const outputPayload =
+      (job && job.output_payload) ||
+      (job && job.body && job.body.output_payload) ||
+      null
+    if (!outputPayload && !res.body.output_hash) {
+      throw new Error('verify: job has no output_payload and no output_hash; cannot reconstruct signed bytes')
+    }
+    const signedBytes = outputPayload
+      ? Buffer.from(canonicalJson(outputPayload), 'utf8')
+      : Buffer.from(String(res.body.output_hash), 'utf8')
+    verified = crypto.verify(null, signedBytes, publicKey, Buffer.from(String(res.body.signature || ''), 'base64'))
   } catch (exc) {
     verificationError = String(exc && exc.message ? exc.message : exc)
   }

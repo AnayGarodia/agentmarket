@@ -21,3 +21,7 @@ jsonschema>=4.0.0
 psycopg2-binary>=2.9.0
 # Used by regex_tester for \p{} unicode-property fall-back when stdlib `re` rejects.
 regex>=2024.0.0
+# browser_agent + visual_regression need Playwright + chromium. The browser
+# itself is downloaded by `playwright install chromium` at image build time
+# (see Dockerfile); pip pulls only the python bindings here.
+playwright>=1.40.0

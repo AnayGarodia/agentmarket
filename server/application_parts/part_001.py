@@ -415,7 +415,11 @@ def ensure_builtin_agents_registered() -> None:
     # suspended later, the resurrection never happened. (Bug found in prod:
     # shell_executor was suspended despite being in CURATED_PUBLIC.)
     with registry._conn() as conn:
-        for curated_id in _CURATED_PUBLIC_BUILTIN_AGENT_IDS:
+        # Seed every managed builtin (public + sunset). Sunset agents are
+        # hidden from list_agents but must remain approved/active so direct
+        # slug/agent_id calls (and historical receipts referencing them)
+        # continue to resolve cleanly.
+        for curated_id in _CURATED_BUILTIN_AGENT_IDS - {_QUALITY_JUDGE_AGENT_ID}:
             conn.execute(
                 """
                 UPDATE agents

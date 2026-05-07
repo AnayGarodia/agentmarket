@@ -98,40 +98,68 @@ BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(f"{SERVER_BASE_URL}/analyze"
 
 BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 
-CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
+# Agents demoted from the public catalog after the 2026-05-07 power-user eval.
+# They remain callable by direct slug/agent_id (so existing receipts and
+# job_ids stay resolvable) but are excluded from list_agents / search /
+# auto-hire. Hard-delete after the platform-wide sunset window:
+#   - Pure code wrappers (linter / type_checker / regex_tester /
+#     json_schema_validator / git_diff_analyzer / shell_executor /
+#     multi_file_executor): a coding agent runs these locally in 1-20 lines.
+#   - LLM-only wrappers (code_review / arxiv / wiki / web_researcher / financial /
+#     ai_red_teamer): no live data Claude can't reach via WebFetch+training.
+#   - Wrong surface for a coding marketplace (image_generator / semantic_search:
+#     the latter is dominated by Grep/Glob/Read).
+SUNSET_DEPRECATED_AGENT_IDS = frozenset(
     {
-        # Real-tool agents: perform live external work Claude cannot do in a chat session
-        CVELOOKUP_AGENT_ID,
         ARXIV_RESEARCH_AGENT_ID,
-        PYTHON_EXECUTOR_AGENT_ID,
         WEB_RESEARCHER_AGENT_ID,
         CODEREVIEW_AGENT_ID,
-        DNS_INSPECTOR_AGENT_ID,
-        DEPENDENCY_AUDITOR_AGENT_ID,
         MULTI_FILE_EXECUTOR_AGENT_ID,
         LINTER_AGENT_ID,
         SHELL_EXECUTOR_AGENT_ID,
         TYPE_CHECKER_AGENT_ID,
-        DB_SANDBOX_AGENT_ID,
-        LIVE_ENDPOINT_TESTER_AGENT_ID,
-        BROWSER_AGENT_ID,
-        VISUAL_REGRESSION_AGENT_ID,
-        MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
         SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
         AI_RED_TEAMER_AGENT_ID,
         IMAGE_GENERATOR_AGENT_ID,
         FINANCIAL_AGENT_ID,
         WIKI_AGENT_ID,
-        SECRET_SCANNER_AGENT_ID,
         JSON_SCHEMA_VALIDATOR_AGENT_ID,
         REGEX_TESTER_AGENT_ID,
-        SQL_EXPLAINER_AGENT_ID,
         GIT_DIFF_ANALYZER_AGENT_ID,
     }
 )
-CURATED_BUILTIN_AGENT_IDS = frozenset(
-    set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID}
+
+# The public catalog: agents that give a coding-agent integrator a primitive
+# they cannot trivially build themselves — isolation (sandboxes), live
+# external data (CVE/DNS/HTTP), or specialist runtimes (browser, pixel diff).
+CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
+    {
+        CVELOOKUP_AGENT_ID,
+        PYTHON_EXECUTOR_AGENT_ID,
+        DNS_INSPECTOR_AGENT_ID,
+        DEPENDENCY_AUDITOR_AGENT_ID,
+        DB_SANDBOX_AGENT_ID,
+        LIVE_ENDPOINT_TESTER_AGENT_ID,
+        BROWSER_AGENT_ID,
+        VISUAL_REGRESSION_AGENT_ID,
+        MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
+        SECRET_SCANNER_AGENT_ID,
+        SQL_EXPLAINER_AGENT_ID,
+    }
 )
+# Sanity: a sunset agent must never accidentally re-appear in the public set.
+assert not (
+    SUNSET_DEPRECATED_AGENT_IDS & CURATED_PUBLIC_BUILTIN_AGENT_IDS
+), "Sunset agents must not be in the curated public catalog"
+CURATED_BUILTIN_AGENT_IDS = frozenset(
+    set(CURATED_PUBLIC_BUILTIN_AGENT_IDS)
+    | set(SUNSET_DEPRECATED_AGENT_IDS)
+    | {QUALITY_JUDGE_AGENT_ID}
+)
+# Public-catalog filter (list_agents / search / auto-hire) uses
+# CURATED_PUBLIC. Registry seeding + spec generation use CURATED_BUILTIN
+# (which now includes sunset). Net: sunset agents stay approved + callable
+# by direct slug/agent_id, but no longer surface to discovery.
 
 BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 SYSTEM_USERNAME = "system"

@@ -57,7 +57,12 @@ from typing import Any
 _MAX_SAMPLES = 50
 _MAX_SAMPLE_CHARS = 2048
 _MAX_PATTERN_CHARS = 2000
-_DEFAULT_TIMEOUT_MS = 200
+# 200ms was the wall-clock-vs-pattern budget, but Linux subprocess startup
+# alone (fork + interpreter import) reliably eats 100-300ms, so trivial
+# patterns like \d+ on a 6-char string hit the timeout and got mislabeled
+# as catastrophic-backtracking. 1000ms gives the regex itself the budget
+# it needs while still capping real ReDoS exploits.
+_DEFAULT_TIMEOUT_MS = 1000
 _MAX_TIMEOUT_MS = 2000
 
 _FLAG_MAP = {
