@@ -523,6 +523,9 @@ def _caller_is_admin(caller: core_models.CallerContext) -> bool:
 def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> bool:
     if _caller_is_admin(caller):
         return True
+    # Sunset agents stay callable by direct slug/agent_id so existing receipts
+    # and integrations don't break; they're filtered out of list_agents,
+    # search, MCP manifest, and auto-hire elsewhere (see part_007).
     if bool(agent.get("internal_only")):
         return _caller_can_manage_agent(caller, agent)
     review_status = str(agent.get("review_status") or "approved").strip().lower()

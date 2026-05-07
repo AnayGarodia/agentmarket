@@ -1,4 +1,3 @@
-
 from core import db as _db
 # server.application shard 5 — verification, settlement, and dispute
 # adjudication: output-verifier calls, registration verifier, quality-gate
@@ -980,11 +979,24 @@ def _deterministic_quality_result(
                 "score": 2,
                 "reason": "DNS inspector output must include numeric billing_units_actual.",
             }
-        if billing_units_actual != len(results):
+        successful_results = [
+            item
+            for item in results
+            if isinstance(item, dict)
+            and not item.get("error")
+            and not item.get("issues")
+        ]
+        if billing_units_actual > len(results) or billing_units_actual < 0:
             return {
                 "verdict": "fail",
                 "score": 2,
-                "reason": "DNS inspector output is internally inconsistent: billing_units_actual does not match results.",
+                "reason": "DNS inspector output is internally inconsistent: billing_units_actual exceeds results.",
+            }
+        if billing_units_actual not in {len(results), len(successful_results)}:
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "DNS inspector output is internally inconsistent: billing_units_actual must count attempted domains or fully successful domains.",
             }
         return {
             "verdict": "pass",

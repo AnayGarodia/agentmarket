@@ -32,7 +32,13 @@ def _auth_headers(raw_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {raw_key}"}
 
 
-def _set_agent_stats(db_path: Path, agent_id: str, total_calls: int, successful_calls: int, avg_latency_ms: float) -> None:
+def _set_agent_stats(
+    db_path: Path,
+    agent_id: str,
+    total_calls: int,
+    successful_calls: int,
+    avg_latency_ms: float,
+) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -157,9 +163,15 @@ def _seed_synthetic_agents(db_path: Path) -> dict[str, str]:
         },
     )
 
-    _set_agent_stats(db_path, filing, total_calls=50, successful_calls=47, avg_latency_ms=450)
-    _set_agent_stats(db_path, image, total_calls=6, successful_calls=3, avg_latency_ms=1900)
-    _set_agent_stats(db_path, code, total_calls=35, successful_calls=31, avg_latency_ms=550)
+    _set_agent_stats(
+        db_path, filing, total_calls=50, successful_calls=47, avg_latency_ms=450
+    )
+    _set_agent_stats(
+        db_path, image, total_calls=6, successful_calls=3, avg_latency_ms=1900
+    )
+    _set_agent_stats(
+        db_path, code, total_calls=35, successful_calls=31, avg_latency_ms=550
+    )
     return {"filing": filing, "image": image, "code": code}
 
 
@@ -202,7 +214,10 @@ def test_semantic_search_applies_filters_and_weighting(isolated_db):
     results = registry.search_agents("find bugs in python code", limit=3)
     assert len(results) == 3
 
-    prices = [registry._price_usd_to_cents(item["agent"]["price_per_call_usd"]) for item in results]
+    prices = [
+        registry._price_usd_to_cents(item["agent"]["price_per_call_usd"])
+        for item in results
+    ]
     min_price = min(prices)
     max_price = max(prices)
 
@@ -211,7 +226,9 @@ def test_semantic_search_applies_filters_and_weighting(isolated_db):
             inverse_price = 1.0
         else:
             inverse_price = 1.0 - ((price_cents - min_price) / (max_price - min_price))
-        intent_bonus = registry._intent_match_bonus("find bugs in python code", item["agent"])
+        intent_bonus = registry._intent_match_bonus(
+            "find bugs in python code", item["agent"]
+        )
         expected = (
             registry.LEXICAL_SCORE_WEIGHT * item["lexical_score"]
             + registry.SEMANTIC_SCORE_WEIGHT * item["similarity"]
@@ -221,8 +238,13 @@ def test_semantic_search_applies_filters_and_weighting(isolated_db):
         )
         assert item["blended_score"] == pytest.approx(round(expected, 6), abs=1e-5)
 
-    budget = registry.search_agents("find bugs in python code", limit=3, max_price_cents=8)
-    assert all(registry._price_usd_to_cents(item["agent"]["price_per_call_usd"]) <= 8 for item in budget)
+    budget = registry.search_agents(
+        "find bugs in python code", limit=3, max_price_cents=8
+    )
+    assert all(
+        registry._price_usd_to_cents(item["agent"]["price_per_call_usd"]) <= 8
+        for item in budget
+    )
     assert all(item["agent"]["agent_id"] != ids["code"] for item in budget)
 
     ticker_only = registry.search_agents(
@@ -235,11 +257,15 @@ def test_semantic_search_applies_filters_and_weighting(isolated_db):
         props = item["agent"]["input_schema"].get("properties", {})
         assert "ticker" in props
 
-    strict_trust = registry.search_agents("analyze a quarterly SEC report", limit=3, min_trust=0.7)
+    strict_trust = registry.search_agents(
+        "analyze a quarterly SEC report", limit=3, min_trust=0.7
+    )
     assert all(item["trust"] >= 0.7 for item in strict_trust)
 
 
-def test_search_falls_back_to_lexical_scoring_when_embeddings_disabled(isolated_db, monkeypatch):
+def test_search_falls_back_to_lexical_scoring_when_embeddings_disabled(
+    isolated_db, monkeypatch
+):
     ids = _seed_synthetic_agents(isolated_db)
     monkeypatch.setattr(registry._feature_flags, "DISABLE_EMBEDDINGS", True)
 
@@ -263,11 +289,15 @@ def test_search_uses_output_examples_as_lexical_signal(isolated_db):
         output_examples=[
             {
                 "input": {"task": "generate pytest coverage plan"},
-                "output": {"summary": "Create a pytest suite and coverage thresholds for the module."},
+                "output": {
+                    "summary": "Create a pytest suite and coverage thresholds for the module."
+                },
             }
         ],
     )
-    _set_agent_stats(isolated_db, agent_id, total_calls=8, successful_calls=8, avg_latency_ms=300)
+    _set_agent_stats(
+        isolated_db, agent_id, total_calls=8, successful_calls=8, avg_latency_ms=300
+    )
 
     results = registry.search_agents("pytest coverage plan", limit=5)
     top = results[0]
@@ -296,8 +326,15 @@ def test_registry_search_endpoint_returns_ranked_results(isolated_db):
     assert server._CODEREVIEW_AGENT_ID in result_ids, (
         f"Code review agent not found in top results: {result_ids}"
     )
-    review_result = next(r for r in body["results"] if r["agent"]["agent_id"] == server._CODEREVIEW_AGENT_ID)
-    assert isinstance(review_result["match_reasons"], list) and review_result["match_reasons"]
+    review_result = next(
+        r
+        for r in body["results"]
+        if r["agent"]["agent_id"] == server._CODEREVIEW_AGENT_ID
+    )
+    assert (
+        isinstance(review_result["match_reasons"], list)
+        and review_result["match_reasons"]
+    )
 
 
 def test_security_queries_prefer_dependency_audit_over_package_finder(isolated_db):
@@ -321,9 +358,64 @@ def test_security_queries_prefer_dependency_audit_over_package_finder(isolated_d
         input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
     )
 
-    _set_agent_stats(isolated_db, dependency_auditor, total_calls=8, successful_calls=8, avg_latency_ms=600)
-    _set_agent_stats(isolated_db, package_finder, total_calls=30, successful_calls=30, avg_latency_ms=300)
+    _set_agent_stats(
+        isolated_db,
+        dependency_auditor,
+        total_calls=8,
+        successful_calls=8,
+        avg_latency_ms=600,
+    )
+    _set_agent_stats(
+        isolated_db,
+        package_finder,
+        total_calls=30,
+        successful_calls=30,
+        avg_latency_ms=300,
+    )
 
-    results = registry.search_agents("find security vulnerabilities in npm package", limit=5)
+    results = registry.search_agents(
+        "find security vulnerabilities in npm package", limit=5
+    )
     assert results[0]["agent"]["agent_id"] == dependency_auditor
-    assert all(item["agent"]["agent_id"] != package_finder or idx > 0 for idx, item in enumerate(results))
+    assert all(
+        item["agent"]["agent_id"] != package_finder or idx > 0
+        for idx, item in enumerate(results)
+    )
+
+
+def test_price_queries_rank_by_price(isolated_db):
+    registry.init_db()
+    reputation.init_reputation_db()
+
+    cheap = registry.register_agent(
+        name="Cheap Runtime",
+        description="Runs simple sandbox tasks.",
+        endpoint_url="https://agents.example.com/cheap",
+        price_per_call_usd=0.01,
+        tags=["runtime"],
+        input_schema={"type": "object", "properties": {"task": {"type": "string"}}},
+    )
+    expensive = registry.register_agent(
+        name="Expensive Runtime",
+        description="Runs simple sandbox tasks.",
+        endpoint_url="https://agents.example.com/expensive",
+        price_per_call_usd=0.20,
+        tags=["runtime"],
+        input_schema={"type": "object", "properties": {"task": {"type": "string"}}},
+    )
+    _set_agent_stats(
+        isolated_db, cheap, total_calls=1, successful_calls=1, avg_latency_ms=10.0
+    )
+    _set_agent_stats(
+        isolated_db,
+        expensive,
+        total_calls=100,
+        successful_calls=100,
+        avg_latency_ms=10.0,
+    )
+
+    cheapest = registry.search_agents("the cheapest agent", limit=2)
+    assert cheapest[0]["agent"]["agent_id"] == cheap
+
+    costliest = registry.search_agents("the most expensive agent", limit=2)
+    assert costliest[0]["agent"]["agent_id"] == expensive

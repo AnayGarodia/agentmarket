@@ -99,9 +99,9 @@ BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(f"{SERVER_BASE_URL}/analyze"
 BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 
 # Agents demoted from the public catalog after the 2026-05-07 power-user eval.
-# They remain callable by direct slug/agent_id (so existing receipts and
-# job_ids stay resolvable) but are excluded from list_agents / search /
-# auto-hire. Hard-delete after the platform-wide sunset window:
+# They remain resolvable through historical job and receipt endpoints, but
+# non-admin callers can no longer discover or hire them. Hard-delete after the
+# platform-wide sunset window:
 #   - Pure code wrappers (linter / type_checker / regex_tester /
 #     json_schema_validator / git_diff_analyzer / shell_executor /
 #     multi_file_executor): a coding agent runs these locally in 1-20 lines.
@@ -148,18 +148,17 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.
-assert not (
-    SUNSET_DEPRECATED_AGENT_IDS & CURATED_PUBLIC_BUILTIN_AGENT_IDS
-), "Sunset agents must not be in the curated public catalog"
+assert not (SUNSET_DEPRECATED_AGENT_IDS & CURATED_PUBLIC_BUILTIN_AGENT_IDS), (
+    "Sunset agents must not be in the curated public catalog"
+)
 CURATED_BUILTIN_AGENT_IDS = frozenset(
     set(CURATED_PUBLIC_BUILTIN_AGENT_IDS)
     | set(SUNSET_DEPRECATED_AGENT_IDS)
     | {QUALITY_JUDGE_AGENT_ID}
 )
-# Public-catalog filter (list_agents / search / auto-hire) uses
-# CURATED_PUBLIC. Registry seeding + spec generation use CURATED_BUILTIN
-# (which now includes sunset). Net: sunset agents stay approved + callable
-# by direct slug/agent_id, but no longer surface to discovery.
+# Public-catalog filter (list_agents / search / auto-hire / MCP manifests) uses
+# CURATED_PUBLIC. Registry seeding + spec generation use CURATED_BUILTIN so old
+# job IDs and receipts still resolve cleanly.
 
 BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 SYSTEM_USERNAME = "system"

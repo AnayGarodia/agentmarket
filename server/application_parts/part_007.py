@@ -1,4 +1,3 @@
-
 from core import db as _db
 # server.application shard 7 — registry routes: register, list, search, get,
 # update, delist, MCP manifest + invoke. All auth + SSRF validation lives
@@ -125,13 +124,17 @@ def _mcp_active_agents() -> list[dict[str, Any]]:
         reputation.enrich_agent_record(agent)
         for agent in registry.get_agents(include_internal=True, include_banned=True)
     ]
+    sunset_ids = set(_builtin_constants.SUNSET_DEPRECATED_AGENT_IDS)
     return [
         agent
         for agent in agents
         if (
-            str(agent.get("status") or "").strip().lower() == "active"
-            or str(agent.get("agent_id") or "")
-            in _builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
+            str(agent.get("agent_id") or "") not in sunset_ids
+            and (
+                str(agent.get("status") or "").strip().lower() == "active"
+                or str(agent.get("agent_id") or "")
+                in _builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
+            )
         )
         and not bool(agent.get("internal_only"))
     ]
@@ -143,6 +146,24 @@ def _mcp_tools_and_lookup() -> tuple[list[dict[str, Any]], dict[str, dict[str, A
     return [entry["tool"] for entry in entries], {
         str(entry["tool_name"]): agent for entry, agent in zip(entries, agents)
     }
+
+
+def _mcp_invoke_lookup() -> dict[str, dict[str, Any]]:
+    """Tool-name → agent map for /mcp/invoke. Includes sunset agents so existing
+    integrations that call them by exact slug keep working, even though the
+    manifest endpoints (/mcp/tools, /openai_*, /gemini_*) hide them."""
+    agents = [
+        reputation.enrich_agent_record(agent)
+        for agent in registry.get_agents(include_internal=True, include_banned=True)
+        if (
+            str(agent.get("status") or "").strip().lower() == "active"
+            or str(agent.get("agent_id") or "")
+            in _builtin_constants.CURATED_BUILTIN_AGENT_IDS
+        )
+        and not bool(agent.get("internal_only"))
+    ]
+    entries = mcp_manifest.build_mcp_tool_entries(agents)
+    return {str(entry["tool_name"]): agent for entry, agent in zip(entries, agents)}
 
 
 def _caller_from_raw_api_key(raw_api_key: str) -> core_models.CallerContext | None:
@@ -647,8 +668,9 @@ def jobs_cancel(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobResponse:
     job = jobs.get_job(job_id)
-    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
-    if job is None or not _caller_can_view_job(caller, job):
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     current_status = str(job.get("status") or "").strip().lower()
     if current_status not in _CANCELLABLE_JOB_STATUSES:
@@ -845,8 +867,10 @@ def mcp_invoke(
             ),
         )
 
-    # 3. Tool lookup.
-    _, lookup = _mcp_tools_and_lookup()
+    # 3. Tool lookup. Sunset agents stay resolvable here so existing slug-based
+    # invocations don't break, even though they're hidden from the public
+    # manifest endpoints (see _mcp_active_agents).
+    lookup = _mcp_invoke_lookup()
     agent = lookup.get(body.tool_name)
     if agent is None:
         raise HTTPException(

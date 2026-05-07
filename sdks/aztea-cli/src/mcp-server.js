@@ -531,7 +531,7 @@ async function refreshCatalog() {
   }
 }
 
-function searchCatalog(query, limit) {
+function localSearchCatalog(query, limit) {
   const normalized = String(query || '').trim().toLowerCase()
   const capped = Math.max(1, Math.min(Number(limit || 8), 20))
   const terms = normalized.split(/\s+/).filter(Boolean)
@@ -569,6 +569,60 @@ function searchCatalog(query, limit) {
       ? `Call aztea_describe(slug='${results[0].slug}') to get the full schema, then aztea_call(slug=..., arguments={...}).`
       : 'No matches found. Try a broader query.',
   }
+}
+
+function backendSearchItem(item) {
+  const agent = item && typeof item === 'object' && item.agent && typeof item.agent === 'object'
+    ? item.agent
+    : {}
+  const inputSchema = agent.input_schema && typeof agent.input_schema === 'object'
+    ? agent.input_schema
+    : {}
+  const hint = schemaInputHint(inputSchema)
+  return {
+    slug: agent.slug || agent.agent_slug || agent.name,
+    kind: agent.kind || 'registry_agent',
+    agent_id: agent.agent_id,
+    name: agent.name,
+    category: agent.category || null,
+    description: String(agent.description || '').slice(0, 400),
+    price_per_call_usd: agent.price_per_call_usd,
+    price_cents: agent.price_cents,
+    caller_charge_cents: agent.caller_charge_cents,
+    pricing_model: agent.pricing_model,
+    trust_score: agent.trust_score,
+    success_rate: agent.success_rate,
+    avg_latency_ms: agent.avg_latency_ms,
+    required_fields: hint.required_fields,
+    input_shape: hint.fields,
+    example_arguments: hint.example_arguments,
+    score: item.blended_score,
+    match_reasons: Array.isArray(item.match_reasons) ? item.match_reasons : [],
+  }
+}
+
+async function searchCatalog(query, limit) {
+  const capped = Math.max(1, Math.min(Number(limit || 8), 20))
+  try {
+    const remote = parseApiResponse(await postJson('/registry/search', { query, limit: capped }))
+    if (remote.ok && Array.isArray(remote.body.results) && remote.body.results.length) {
+      const results = remote.body.results.map(backendSearchItem).filter(item => item.slug)
+      return {
+        query,
+        count: results.length,
+        results,
+        source: 'registry_search',
+        next_step: results.length
+          ? `Call aztea_describe(slug='${results[0].slug}') to get the full schema, then aztea_call(slug=..., arguments={...}).`
+          : 'No matches found. Try a broader query.',
+      }
+    }
+  } catch (err) {
+    log(`backend search failed; falling back to local catalog: ${err.message}`)
+  }
+  const fallback = localSearchCatalog(query, capped)
+  fallback.source = 'local_catalog_fallback'
+  return fallback
 }
 
 function describeCatalog(slug) {
@@ -1461,7 +1515,7 @@ async function callTool(name, args) {
     const query = String(args.query || '').trim()
     if (!query) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'query is required.' } }
     if (!_catalog.length) await refreshCatalog()
-    return { ok: true, payload: searchCatalog(query, args.limit) }
+    return { ok: true, payload: await searchCatalog(query, args.limit) }
   }
   if (name === LAZY_DESCRIBE_TOOL.name) {
     const slug = String(args.slug || '').trim()

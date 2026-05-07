@@ -179,8 +179,8 @@ def _sign_builtin_output(agent: dict | None, output: dict) -> dict[str, str | No
         private_pem = agent.get("signing_private_key")
         agent_did_value = agent.get("did")
         if not private_pem or not agent_did_value:
-            private_pem, _public_pem, agent_did_value = registry.ensure_agent_signing_keys(
-                agent["agent_id"]
+            private_pem, _public_pem, agent_did_value = (
+                registry.ensure_agent_signing_keys(agent["agent_id"])
             )
         if private_pem and agent_did_value:
             sig["signature"] = _crypto.sign_payload(private_pem, output)
@@ -188,7 +188,10 @@ def _sign_builtin_output(agent: dict | None, output: dict) -> dict[str, str | No
             sig["did"] = agent_did_value
             sig["signed_at"] = datetime.now(timezone.utc).isoformat()
     except Exception:
-        _LOG.exception("Failed to sign builtin async output for agent %s", (agent or {}).get("agent_id"))
+        _LOG.exception(
+            "Failed to sign builtin async output for agent %s",
+            (agent or {}).get("agent_id"),
+        )
     return sig
 
 
@@ -434,9 +437,7 @@ def _process_pending_builtin_jobs(
         all_pending = []
         for agent_id in eligible_agent_ids:
             all_pending.extend(
-                jobs.list_jobs_for_agent(
-                    agent_id, status="pending", limit=batch_limit
-                )
+                jobs.list_jobs_for_agent(agent_id, status="pending", limit=batch_limit)
             )
     for job in all_pending:
         agent_id = str(job.get("agent_id") or "")
@@ -458,6 +459,18 @@ def _process_pending_builtin_jobs(
         return {"scanned": 0, "processed": 0, "queue_depth": 0}
 
     max_workers = min(max(1, _BUILTIN_JOB_WORKER_PARALLELISM), len(pending_jobs))
+    _set_builtin_worker_state(
+        last_run_at=_utc_now_iso(),
+        last_summary={
+            "scanned": scanned,
+            "processed": 0,
+            "queue_depth": max(0, len(pending_jobs)),
+            "max_workers": max_workers,
+            "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
+            "in_progress": True,
+        },
+        last_error=None,
+    )
     with ThreadPoolExecutor(
         max_workers=max_workers, thread_name_prefix="aztea-builtin"
     ) as pool:
@@ -480,10 +493,50 @@ def _process_pending_builtin_jobs(
     return {
         "scanned": scanned,
         "processed": processed,
-        "queue_depth": remaining if remaining is not None else max(0, scanned - processed),
+        "queue_depth": remaining
+        if remaining is not None
+        else max(0, scanned - processed),
         "max_workers": max_workers,
         "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
     }
+
+
+def _run_builtin_worker_rescue_async(reason: str) -> bool:
+    """Start one non-blocking queue drain when the normal worker looks stale.
+
+    Never run worker rescue inside a status HTTP request. A batch-status poll
+    can happen while many slow jobs are queued, and blocking the request on
+    those jobs caused empty-body 502s under Claude Code's concurrent polling.
+    """
+    global _BUILTIN_WORKER_RESCUE_RUNNING
+    with _BUILTIN_WORKER_RESCUE_LOCK:
+        if _BUILTIN_WORKER_RESCUE_RUNNING:
+            return False
+        _BUILTIN_WORKER_RESCUE_RUNNING = True
+
+    def _target() -> None:
+        global _BUILTIN_WORKER_RESCUE_RUNNING
+        started = _utc_now_iso()
+        try:
+            summary = _process_pending_builtin_jobs(limit_per_agent=50)
+            _set_builtin_worker_state(
+                last_run_at=started,
+                last_summary={**summary, "source": reason},
+                last_error=None,
+            )
+        except Exception as exc:
+            _LOG.exception("Built-in worker async rescue failed.")
+            _set_builtin_worker_state(last_run_at=started, last_error=str(exc))
+        finally:
+            with _BUILTIN_WORKER_RESCUE_LOCK:
+                _BUILTIN_WORKER_RESCUE_RUNNING = False
+
+    threading.Thread(
+        target=_target,
+        name="aztea-builtin-rescue",
+        daemon=True,
+    ).start()
+    return True
 
 
 def _builtin_worker_loop(stop_event: threading.Event) -> None:

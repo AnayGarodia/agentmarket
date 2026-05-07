@@ -26,7 +26,9 @@ def _batch_fee_split(job: dict) -> dict:
         "platform_fee_pct": platform_fee_pct,
         "caller_charge_cents": caller_charge_cents,
         "agent_payout_cents": 0 if failed else int(distribution["agent_payout_cents"]),
-        "would_pay_agent_cents": int(distribution["agent_payout_cents"]) if failed else None,
+        "would_pay_agent_cents": int(distribution["agent_payout_cents"])
+        if failed
+        else None,
         "platform_fee_cents": 0 if failed else int(distribution["platform_fee_cents"]),
     }
 
@@ -73,6 +75,11 @@ def _batch_job_trace_item(
     }
     if include_detail:
         item["detail"] = _job_response(job, caller)
+    # Inline an `output` payload only in detailed responses so compact polling
+    # stays small for 25-50 job fan-outs. Callers can request include=full when
+    # they are ready to consume terminal outputs.
+    if not include_detail:
+        return item
     # Inline a compact `output` payload on terminal jobs so callers don't have
     # to fan-out N follow-up status calls for each child of a batch. Truncate
     # at 6KB per job to keep the parent response sane; callers can still hit
@@ -291,7 +298,7 @@ def jobs_compare_create(
 
     resolved: list[dict[str, Any]] = []
     total_charged_cents = 0
-    for agent_id in agent_ids:
+    for index, agent_id in enumerate(agent_ids):
         agent = registry.get_agent(agent_id, include_unapproved=True)
         if agent is None or not _caller_can_access_agent(caller, agent):
             raise HTTPException(
@@ -330,6 +337,7 @@ def jobs_compare_create(
         resolved.append(
             {
                 "agent": agent,
+                "index": index,
                 "price_cents": price_cents,
                 "caller_charge_cents": caller_charge_cents,
             }
@@ -660,9 +668,10 @@ def jobs_batch_create(
     batch_id = str(uuid.uuid4())
 
     resolved: list[dict] = []
+    invalid_jobs: list[dict[str, Any]] = []
     total_price_cents = 0
     key_per_job_cap_cents = _caller_key_per_job_cap(caller)
-    for spec in body.jobs:
+    for index, spec in enumerate(body.jobs):
         parent_job = _resolve_parent_job_for_creation(
             caller,
             spec.parent_job_id,
@@ -673,20 +682,42 @@ def jobs_batch_create(
         )
         tree_depth = parent_tree_depth + 1 if parent_job is not None else 0
         if tree_depth >= 10:
-            raise HTTPException(
-                status_code=422,
-                detail=error_codes.make_error(
-                    error_codes.ORCHESTRATION_DEPTH_EXCEEDED,
-                    "Maximum orchestration depth is 10 levels.",
-                    {"max_depth": 10, "attempted_depth": tree_depth},
-                ),
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": spec.agent_id,
+                    "status_code": 422,
+                    "detail": error_codes.make_error(
+                        error_codes.ORCHESTRATION_DEPTH_EXCEEDED,
+                        "Maximum orchestration depth is 10 levels.",
+                        {"max_depth": 10, "attempted_depth": tree_depth},
+                    ),
+                }
             )
+            continue
         agent = registry.get_agent(spec.agent_id, include_unapproved=True)
         if agent is None or not _caller_can_access_agent(caller, agent):
-            raise HTTPException(
-                status_code=404, detail=f"Agent '{spec.agent_id}' not found."
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": spec.agent_id,
+                    "status_code": 404,
+                    "detail": f"Agent '{spec.agent_id}' not found.",
+                }
             )
-        _assert_agent_callable(spec.agent_id, agent)
+            continue
+        try:
+            _assert_agent_callable(spec.agent_id, agent)
+        except HTTPException as exc:
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": spec.agent_id,
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                }
+            )
+            continue
         try:
             normalized_spec_input_payload = _merge_protocol_input_envelope(
                 spec.input_payload,
@@ -713,7 +744,15 @@ def jobs_batch_create(
                 private_task=bool(spec.private_task),
             )
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": spec.agent_id,
+                    "status_code": 422,
+                    "detail": str(exc),
+                }
+            )
+            continue
         builtin_agent_id = _resolve_builtin_agent_id(agent)
         if builtin_agent_id is not None:
             try:
@@ -721,14 +760,19 @@ def jobs_batch_create(
                     builtin_agent_id, normalized_spec_input_payload
                 )
             except Exception as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail=error_codes.make_error(
-                        error_codes.INVALID_INPUT,
-                        str(exc),
-                        {"agent_id": agent["agent_id"]},
-                    ),
+                invalid_jobs.append(
+                    {
+                        "index": index,
+                        "agent_id": agent["agent_id"],
+                        "status_code": 422,
+                        "detail": error_codes.make_error(
+                            error_codes.INVALID_INPUT,
+                            str(exc),
+                            {"agent_id": agent["agent_id"]},
+                        ),
+                    }
                 )
+                continue
         agent_input_schema = agent.get("input_schema")
         if isinstance(agent_input_schema, dict) and agent_input_schema:
             try:
@@ -738,17 +782,22 @@ def jobs_batch_create(
                     allow_string_coercion=_allow_schema_string_coercion(request),
                 )
             except Exception as _schema_exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail=error_codes.make_error(
-                        error_codes.INPUT_SCHEMA_VIOLATION,
-                        f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
-                        {
-                            "path": list(getattr(_schema_exc, "absolute_path", [])),
-                            "agent_id": agent["agent_id"],
-                        },
-                    ),
+                invalid_jobs.append(
+                    {
+                        "index": index,
+                        "agent_id": agent["agent_id"],
+                        "status_code": 422,
+                        "detail": error_codes.make_error(
+                            error_codes.INPUT_SCHEMA_VIOLATION,
+                            f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                            {
+                                "path": list(getattr(_schema_exc, "absolute_path", [])),
+                                "agent_id": agent["agent_id"],
+                            },
+                        ),
+                    }
                 )
+                continue
         spec_budget_cents = spec.budget_cents
         if spec.max_price_cents is not None:
             spec_budget_cents = (
@@ -764,31 +813,41 @@ def jobs_batch_create(
         )
         if pricing_estimate.get("cap_violated"):
             violation = pricing_estimate["cap_violated"]
-            raise HTTPException(
-                status_code=402,
-                detail=error_codes.make_error(
-                    error_codes.SPEND_LIMIT_EXCEEDED,
-                    "Variable-price estimate exceeds a spend cap.",
-                    {
-                        "scope": violation["scope"],
-                        "limit_cents": violation["limit_cents"],
-                        "attempted_cents": violation["price_cents"],
-                        "agent_id": agent["agent_id"],
-                        "pricing_model": pricing_estimate["pricing_model"],
-                        "detail": pricing_estimate.get("detail"),
-                    },
-                ),
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": agent["agent_id"],
+                    "status_code": 402,
+                    "detail": error_codes.make_error(
+                        error_codes.SPEND_LIMIT_EXCEEDED,
+                        "Variable-price estimate exceeds a spend cap.",
+                        {
+                            "scope": violation["scope"],
+                            "limit_cents": violation["limit_cents"],
+                            "attempted_cents": violation["price_cents"],
+                            "agent_id": agent["agent_id"],
+                            "pricing_model": pricing_estimate["pricing_model"],
+                            "detail": pricing_estimate.get("detail"),
+                        },
+                    ),
+                }
             )
+            continue
         price_cents = int(pricing_estimate["price_cents"])
         if price_cents > 2000 and not _agent_has_verified_contract(agent):
-            raise HTTPException(
-                status_code=422,
-                detail=error_codes.make_error(
-                    error_codes.VERIFIED_CONTRACT_REQUIRED,
-                    "Jobs above $20 require a worker with a verified input/output contract.",
-                    {"agent_id": agent["agent_id"], "price_cents": price_cents},
-                ),
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": agent["agent_id"],
+                    "status_code": 422,
+                    "detail": error_codes.make_error(
+                        error_codes.VERIFIED_CONTRACT_REQUIRED,
+                        "Jobs above $20 require a worker with a verified input/output contract.",
+                        {"agent_id": agent["agent_id"], "price_cents": price_cents},
+                    ),
+                }
             )
+            continue
         fee_bearer_policy = payments.normalize_fee_bearer_policy(spec.fee_bearer_policy)
         platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
         success_distribution = payments.compute_success_distribution(
@@ -800,6 +859,7 @@ def jobs_batch_create(
         total_price_cents += caller_charge_cents
         resolved.append(
             {
+                "index": index,
                 "agent": agent,
                 "price_cents": price_cents,
                 "caller_charge_cents": caller_charge_cents,
@@ -816,14 +876,24 @@ def jobs_batch_create(
             }
         )
 
+    if not resolved:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INPUT_SCHEMA_VIOLATION,
+                "No valid jobs in batch; no charge was applied.",
+                {"invalid_jobs": invalid_jobs, "submitted_count": len(body.jobs)},
+            ),
+        )
+
     if body.dry_run:
         planned_jobs: list[dict[str, Any]] = []
-        for index, item in enumerate(resolved):
+        for item in resolved:
             agent = item["agent"]
             distribution = item["success_distribution"]
             planned_jobs.append(
                 {
-                    "index": index,
+                    "index": item["index"],
                     "agent_id": agent["agent_id"],
                     "agent_slug": agent.get("slug") or agent.get("agent_slug"),
                     "agent_name": agent.get("name"),
@@ -849,6 +919,8 @@ def jobs_batch_create(
                 "batch_id": None,
                 "intent": body.intent,
                 "job_count": len(planned_jobs),
+                "invalid_job_count": len(invalid_jobs),
+                "invalid_jobs": invalid_jobs,
                 "estimated_total_charged_cents": total_price_cents,
                 "max_total_cents": body.max_total_cents,
                 "within_cap": within_cap,
@@ -879,6 +951,8 @@ def jobs_batch_create(
                     "max_total_cents": body.max_total_cents,
                     "attempted_cents": total_price_cents,
                     "job_count": len(body.jobs),
+                    "valid_job_count": len(resolved),
+                    "invalid_job_count": len(invalid_jobs),
                 },
             ),
         )
@@ -1088,6 +1162,9 @@ def jobs_batch_create(
             "batch_id": batch_id,
             "jobs": response_jobs,
             "count": len(created_jobs),
+            "submitted_count": len(body.jobs),
+            "invalid_job_count": len(invalid_jobs),
+            "invalid_jobs": invalid_jobs,
             "total_price_cents": total_price_cents,
             "total_charged_cents": total_price_cents,
             "job_ids": [
@@ -1135,7 +1212,9 @@ def jobs_batch_status(
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
     include_mode = str(request.query_params.get("include") or "full").strip().lower()
     compact = include_mode in {"minimal", "compact"}
-    if any(str(job.get("status") or "") in {"pending", "running"} for job in batch_jobs):
+    if any(
+        str(job.get("status") or "") in {"pending", "running"} for job in batch_jobs
+    ):
         with _BUILTIN_WORKER_STATE_LOCK:
             worker_state = dict(_BUILTIN_WORKER_STATE)
         last_summary = worker_state.get("last_summary")
@@ -1150,18 +1229,9 @@ def jobs_batch_status(
         )
         if should_rescue:
             try:
-                rescue_summary = _process_pending_builtin_jobs(limit_per_agent=50)
-                _set_builtin_worker_state(
-                    last_run_at=_utc_now_iso(),
-                    last_summary={
-                        **rescue_summary,
-                        "source": "batch_status_rescue",
-                    },
-                    last_error=None,
-                )
-                batch_jobs = jobs.list_jobs_for_batch(batch_id, owner_id)
+                _run_builtin_worker_rescue_async("batch_status_rescue")
             except Exception as exc:
-                _LOG.exception("Batch-status builtin worker rescue failed.")
+                _LOG.exception("Batch-status builtin worker rescue scheduling failed.")
                 _set_builtin_worker_state(last_error=str(exc))
         else:
             try:
@@ -1305,9 +1375,15 @@ def jobs_get(
 ) -> core_models.JobResponse:
     _require_scope(caller, "caller")
     job = jobs.get_job(job_id)
-    # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
-    if job is None or not _caller_can_view_job(caller, job):
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Job not found or not authorized.")
+    if str(job.get("status") or "").strip().lower() == "pending":
+        try:
+            _wake_builtin_worker()
+        except Exception:
+            pass
     output_mode = (
         request.query_params.get("mode")
         or request.headers.get("X-Aztea-Output-Mode")
@@ -1398,7 +1474,9 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
         # exception that signed:None ate at completion time. Either way we can
         # produce a signature now without re-running the agent — the output
         # is already canonical and frozen on the row.
-        agent_row = registry.get_agent(job.get("agent_id") or "", include_unapproved=True)
+        agent_row = registry.get_agent(
+            job.get("agent_id") or "", include_unapproved=True
+        )
         if (
             agent_row is not None
             and str(job.get("status") or "").lower() == "complete"

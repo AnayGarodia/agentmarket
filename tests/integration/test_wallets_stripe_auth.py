@@ -2,6 +2,7 @@
 
 from tests.integration.support import *  # noqa: F403
 
+
 def test_jobs_batch_status_endpoint_returns_aggregate_counts(client):
     worker_owner = _register_user()
     caller = _register_user()
@@ -31,7 +32,9 @@ def test_jobs_batch_status_endpoint_returns_aggregate_counts(client):
     assert created_body["count"] == 2
     assert created_body["total_price_cents"] == 12
     assert created_body["mode"] == "parallel_marketplace_hire"
-    assert created_body["parallel_hire_trace"]["summary"].startswith("2 specialist hires")
+    assert created_body["parallel_hire_trace"]["summary"].startswith(
+        "2 specialist hires"
+    )
     assert created_body["marketplace_transaction"]["escrow"] == "opened_per_job"
     batch_id = created_body["batch_id"]
 
@@ -252,7 +255,9 @@ def test_listing_and_job_create_show_caller_all_in_charge(client):
         headers=_auth_headers(caller["raw_api_key"]),
     )
     assert listings.status_code == 200, listings.text
-    listing_agent = next(agent for agent in listings.json()["agents"] if agent["agent_id"] == agent_id)
+    listing_agent = next(
+        agent for agent in listings.json()["agents"] if agent["agent_id"] == agent_id
+    )
     assert listing_agent["caller_charge_cents"] == 11
 
     created = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
@@ -283,13 +288,17 @@ def test_topup_session_enforces_daily_limit(client, monkeypatch):
 
     fake_checkout = SimpleNamespace(
         Session=SimpleNamespace(
-            create=lambda **kwargs: SimpleNamespace(url="https://checkout.example/session", id="cs_test_123")
+            create=lambda **kwargs: SimpleNamespace(
+                url="https://checkout.example/session", id="cs_test_123"
+            )
         )
     )
     monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
     monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
     monkeypatch.setattr(server, "_TOPUP_DAILY_LIMIT_CENTS", 10_000)
-    monkeypatch.setattr(server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout))
+    monkeypatch.setattr(
+        server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout)
+    )
 
     blocked = client.post(
         "/wallets/topup/session",
@@ -338,12 +347,16 @@ def test_wallet_topup_session_enforces_minimum_amount(client, monkeypatch):
     wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
     fake_checkout = SimpleNamespace(
         Session=SimpleNamespace(
-            create=lambda **kwargs: SimpleNamespace(url="https://checkout.example/session", id="cs_test_minimum")
+            create=lambda **kwargs: SimpleNamespace(
+                url="https://checkout.example/session", id="cs_test_minimum"
+            )
         )
     )
     monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
     monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
-    monkeypatch.setattr(server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout))
+    monkeypatch.setattr(
+        server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout)
+    )
 
     below = client.post(
         "/wallets/topup/session",
@@ -390,7 +403,9 @@ def test_stripe_webhook_retries_after_transient_deposit_failure(client, monkeypa
     monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
     monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
     monkeypatch.setattr(server, "_STRIPE_WEBHOOK_SECRET", "whsec_test_123")
-    monkeypatch.setattr(server, "_stripe_lib", SimpleNamespace(api_key=None, Webhook=_FakeWebhook))
+    monkeypatch.setattr(
+        server, "_stripe_lib", SimpleNamespace(api_key=None, Webhook=_FakeWebhook)
+    )
 
     real_deposit = payments.deposit
     attempts = {"count": 0}
@@ -452,7 +467,14 @@ def test_wallet_withdrawals_returns_only_caller_wallet_history(client):
                 (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (str(uuid.uuid4()), wallet["wallet_id"], 1234, "tr_user_123", "Withdrawal to bank", now),
+            (
+                str(uuid.uuid4()),
+                wallet["wallet_id"],
+                1234,
+                "tr_user_123",
+                "Withdrawal to bank",
+                now,
+            ),
         )
         conn.execute(
             """
@@ -460,11 +482,20 @@ def test_wallet_withdrawals_returns_only_caller_wallet_history(client):
                 (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (str(uuid.uuid4()), other_wallet["wallet_id"], 4321, "tr_other_456", "Other withdrawal", now),
+            (
+                str(uuid.uuid4()),
+                other_wallet["wallet_id"],
+                4321,
+                "tr_other_456",
+                "Other withdrawal",
+                now,
+            ),
         )
         conn.commit()
 
-    response = client.get("/wallets/withdrawals?limit=10", headers=_auth_headers(user["raw_api_key"]))
+    response = client.get(
+        "/wallets/withdrawals?limit=10", headers=_auth_headers(user["raw_api_key"])
+    )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["count"] == 1
@@ -525,7 +556,9 @@ def test_manifest_url_redirects_are_blocked(client, monkeypatch):
     assert captured["allow_redirects"] is False
 
 
-def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(client, monkeypatch):
+def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(
+    client, monkeypatch
+):
     worker = _register_user()
     caller = _register_user()
     _fund_user_wallet(caller, 300)
@@ -595,7 +628,9 @@ def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(client
     assert processed.status_code == 200, processed.text
     assert processed.json()["delivered"] >= 1
 
-    callback_match = next((entry for entry in callback_requests if entry["url"] == callback_url), None)
+    callback_match = next(
+        (entry for entry in callback_requests if entry["url"] == callback_url), None
+    )
     assert callback_match is not None
     payload_bytes = callback_match["data"]
     assert isinstance(payload_bytes, (bytes, bytearray))
@@ -605,11 +640,14 @@ def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(client
     assert payload["output_payload"] == {"ok": True, "source": "specialist"}
 
     signature = callback_match["headers"].get("X-Aztea-Signature")
-    expected_signature = "sha256=" + hmac.new(
-        callback_secret.encode("utf-8"),
-        payload_bytes,
-        hashlib.sha256,
-    ).hexdigest()
+    expected_signature = (
+        "sha256="
+        + hmac.new(
+            callback_secret.encode("utf-8"),
+            payload_bytes,
+            hashlib.sha256,
+        ).hexdigest()
+    )
     assert signature == expected_signature
 
 
@@ -646,7 +684,9 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     )
     assert hook_resp.status_code == 201, hook_resp.text
 
-    timeout_job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=2)
+    timeout_job = _create_job_via_api(
+        client, caller["raw_api_key"], agent_id=agent_id, max_attempts=2
+    )
     timeout_job_id = timeout_job["job_id"]
     claim = client.post(
         f"/jobs/{timeout_job_id}/claim",
@@ -655,9 +695,13 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     )
     assert claim.status_code == 200
 
-    sla_job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=1)
+    sla_job = _create_job_via_api(
+        client, caller["raw_api_key"], agent_id=agent_id, max_attempts=1
+    )
     sla_job_id = sla_job["job_id"]
-    retry_job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=3)
+    retry_job = _create_job_via_api(
+        client, caller["raw_api_key"], agent_id=agent_id, max_attempts=3
+    )
     retry_job_id = retry_job["job_id"]
 
     with jobs._conn() as conn:
@@ -717,9 +761,15 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     )
     assert process.status_code == 200, process.text
 
-    timeout_state = client.get(f"/jobs/{timeout_job_id}", headers=_auth_headers(caller["raw_api_key"]))
-    sla_state = client.get(f"/jobs/{sla_job_id}", headers=_auth_headers(caller["raw_api_key"]))
-    retry_state = client.get(f"/jobs/{retry_job_id}", headers=_auth_headers(caller["raw_api_key"]))
+    timeout_state = client.get(
+        f"/jobs/{timeout_job_id}", headers=_auth_headers(caller["raw_api_key"])
+    )
+    sla_state = client.get(
+        f"/jobs/{sla_job_id}", headers=_auth_headers(caller["raw_api_key"])
+    )
+    retry_state = client.get(
+        f"/jobs/{retry_job_id}", headers=_auth_headers(caller["raw_api_key"])
+    )
     assert timeout_state.status_code == 200
     assert sla_state.status_code == 200
     assert retry_state.status_code == 200
@@ -735,12 +785,15 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     assert retry_state.json()["last_heartbeat_at"] is None
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
-    assert (
-        payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
-        == 300 - int(timeout_job["caller_charge_cents"]) - int(retry_job["caller_charge_cents"])
+    assert payments.get_wallet(caller_wallet["wallet_id"])[
+        "balance_cents"
+    ] == 300 - int(timeout_job["caller_charge_cents"]) - int(
+        retry_job["caller_charge_cents"]
     )
 
-    events = client.get("/ops/jobs/events", headers=_auth_headers(caller["raw_api_key"]))
+    events = client.get(
+        "/ops/jobs/events", headers=_auth_headers(caller["raw_api_key"])
+    )
     assert events.status_code == 200
     event_types = {event["event_type"] for event in events.json()["events"]}
     assert "job.timeout_retry_scheduled" in event_types
@@ -768,7 +821,9 @@ def test_hook_delivery_dead_letter_listing(client, monkeypatch):
     _fund_user_wallet(caller, 200)
     monkeypatch.setattr(server, "_HOOK_DELIVERY_MAX_ATTEMPTS", 1)
 
-    def always_fail_post(url, data=None, headers=None, timeout=None, allow_redirects=None):
+    def always_fail_post(
+        url, data=None, headers=None, timeout=None, allow_redirects=None
+    ):
         raise requests.RequestException("hook unavailable")
 
     monkeypatch.setattr(server.http, "post", always_fail_post)
@@ -875,6 +930,40 @@ def test_jobs_batch_accepts_input_alias(client):
     assert job["input_payload"]["task"] == "via_alias"
 
 
+def test_jobs_batch_submits_valid_jobs_when_siblings_are_invalid(client):
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    created = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "jobs": [
+                {
+                    "agent_id": server._SECRET_SCANNER_AGENT_ID,
+                    "input_payload": {},
+                },
+                {
+                    "agent_id": server._PYTHON_EXECUTOR_AGENT_ID,
+                    "input_payload": {
+                        "code": "print(1)",
+                        "timeout": 1,
+                        "explain": False,
+                    },
+                },
+            ]
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["count"] == 1
+    assert body["submitted_count"] == 2
+    assert body["invalid_job_count"] == 1
+    assert body["invalid_jobs"][0]["index"] == 0
+    assert body["jobs"][0]["agent_id"] == server._PYTHON_EXECUTOR_AGENT_ID
+
+
 def test_jobs_batch_status_compact_omits_duplicate_detail(client):
     worker = _register_user()
     caller = _register_user()
@@ -944,7 +1033,12 @@ def test_sync_builtin_call_signs_output_and_signature_verifies(client, monkeypat
     monkeypatch.setattr(
         server.agent_linter_agent,
         "run",
-        lambda payload: {"language": "python", "tool": "ruff", "issues": [], "clean": True},
+        lambda payload: {
+            "language": "python",
+            "tool": "ruff",
+            "issues": [],
+            "clean": True,
+        },
     )
 
     sync_call = client.post(
@@ -997,7 +1091,12 @@ def test_sync_call_response_includes_pricing_units_block(client, monkeypatch):
     monkeypatch.setattr(
         server.agent_linter_agent,
         "run",
-        lambda payload: {"language": "python", "tool": "ruff", "issues": [], "clean": True},
+        lambda payload: {
+            "language": "python",
+            "tool": "ruff",
+            "issues": [],
+            "clean": True,
+        },
     )
     caller = _register_user()
     _fund_user_wallet(caller, 200)
@@ -1074,7 +1173,12 @@ def test_sync_builtin_lazy_provisions_signing_keys_when_missing(client, monkeypa
     monkeypatch.setattr(
         server.agent_linter_agent,
         "run",
-        lambda payload: {"language": "python", "tool": "ruff", "issues": [], "clean": True},
+        lambda payload: {
+            "language": "python",
+            "tool": "ruff",
+            "issues": [],
+            "clean": True,
+        },
     )
 
     caller = _register_user()

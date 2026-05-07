@@ -662,6 +662,8 @@ def _wake_builtin_worker() -> None:
         _BUILTIN_WORKER_WAKE_EVENT.set()
     except Exception:
         pass
+
+
 _TOPUP_DAILY_LIMIT_CENTS = _env_int(
     "TOPUP_DAILY_LIMIT_CENTS",
     _DEFAULT_TOPUP_DAILY_LIMIT_CENTS,
@@ -775,6 +777,8 @@ _BUILTIN_WORKER_STATE = {
     "last_summary": None,
     "last_error": None,
 }
+_BUILTIN_WORKER_RESCUE_LOCK = threading.Lock()
+_BUILTIN_WORKER_RESCUE_RUNNING = False
 _DISPUTE_JUDGE_STATE_LOCK = threading.Lock()
 _DISPUTE_JUDGE_STATE = {
     "enabled": _DISPUTE_JUDGE_ENABLED,

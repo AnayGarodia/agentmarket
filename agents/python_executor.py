@@ -23,6 +23,7 @@ import logging
 import multiprocessing as mp
 import os
 import re
+import ast
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,11 @@ from core.llm import CompletionRequest, Message, run_with_fallback
 
 _MAX_OUTPUT_CHARS = 8000
 _MAX_CODE_CHARS = 16000
+_MAX_MEMORY_MB = max(
+    64, min(int(os.environ.get("AZTEA_PYTHON_MAX_MEMORY_MB", "128") or "128"), 1024)
+)
+_MAX_CAPTURE_VALUE_CHARS = 1000
+_STATIC_ALLOCATION_LIMIT_BYTES = 32 * 1024 * 1024
 
 _EXPLAIN_SYSTEM = """\
 You are a Python expert explaining a code snippet and its execution result to a developer.
@@ -210,15 +216,28 @@ _PRELUDE_LINE_COUNT: int = _SANDBOX_PRELUDE.count("\n") + 1
 _CAPTURE_SUFFIX = """
 import json as _json, sys as _sys
 _captured = {}
+def _aztea_capture_value(_v):
+    if isinstance(_v, str):
+        if len(_v) > 1000:
+            return f"<str length={len(_v)} omitted>"
+        return _v
+    if isinstance(_v, (bytes, bytearray)):
+        if len(_v) > 1000:
+            return f"<bytes length={len(_v)} omitted>"
+        return repr(_v)
+    try:
+        _encoded = _json.dumps(_v)
+        if len(_encoded) > 1000:
+            return f"<{type(_v).__name__} json_length={len(_encoded)} omitted>"
+        return _v
+    except Exception:
+        _repr = repr(_v)
+        return _repr[:1000] + ("..." if len(_repr) > 1000 else "")
 try:
     _frame = _sys._getframe(0)
     for _k, _v in list(_frame.f_locals.items()):
         if not _k.startswith('_'):
-            try:
-                _json.dumps(_v)
-                _captured[_k] = _v
-            except Exception:
-                _captured[_k] = repr(_v)
+            _captured[_k] = _aztea_capture_value(_v)
 except Exception:
     pass
 print('__VARS__:' + _json.dumps(_captured), file=_sys.stderr)
@@ -286,11 +305,23 @@ def _capture_variables(namespace: dict[str, Any]) -> dict[str, Any]:
     for key, value in list(namespace.items()):
         if key.startswith("_"):
             continue
+        if isinstance(value, str):
+            captured[key] = (
+                value
+                if len(value) <= _MAX_CAPTURE_VALUE_CHARS
+                else f"<str length={len(value)} omitted>"
+            )
+            continue
         try:
-            json.dumps(value)
+            encoded = json.dumps(value)
+            if len(encoded) > _MAX_CAPTURE_VALUE_CHARS:
+                captured[key] = (
+                    f"<{type(value).__name__} json_length={len(encoded)} omitted>"
+                )
+                continue
             captured[key] = value
         except Exception:
-            captured[key] = repr(value)
+            captured[key] = repr(value)[:_MAX_CAPTURE_VALUE_CHARS]
     return captured
 
 
@@ -338,6 +369,49 @@ def _is_safe(code: str) -> bool:
     return True
 
 
+def _literal_int(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return int(node.value)
+    if (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Pow)
+        and (base := _literal_int(node.left)) is not None
+        and (exp := _literal_int(node.right)) is not None
+        and exp <= 12
+    ):
+        return int(base**exp)
+    return None
+
+
+def _literal_size(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str | bytes):
+        return len(node.value)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return max(1, len(node.elts)) * 64
+    return None
+
+
+def _has_obvious_memory_bomb(code: str) -> bool:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mult):
+            continue
+        left_size = _literal_size(node.left)
+        right_size = _literal_size(node.right)
+        left_count = _literal_int(node.left)
+        right_count = _literal_int(node.right)
+        if left_size is not None and right_count is not None:
+            if left_size * right_count > _STATIC_ALLOCATION_LIMIT_BYTES:
+                return True
+        if right_size is not None and left_count is not None:
+            if right_size * left_count > _STATIC_ALLOCATION_LIMIT_BYTES:
+                return True
+    return False
+
+
 def _get_warm_pool() -> Pool:
     global _WARM_POOL
     if _WARM_POOL is None:
@@ -361,6 +435,19 @@ def _init_pool_worker() -> None:
     sandbox_env = build_subprocess_env()
     os.environ.clear()
     os.environ.update(sandbox_env)
+    _apply_memory_limit()
+
+
+def _apply_memory_limit() -> None:
+    if os.name != "posix":
+        return
+    try:
+        import resource
+
+        limit_bytes = int(_MAX_MEMORY_MB) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+    except Exception:
+        _LOG.debug("Could not apply Python executor memory limit", exc_info=True)
 
 
 def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, Any]:
@@ -406,6 +493,7 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
                 timeout=timeout,
                 cwd=tmpdir,
                 env=sandbox_env,
+                preexec_fn=_apply_memory_limit if os.name == "posix" else None,
             )
             stdout = proc.stdout
             stderr_raw = proc.stderr
@@ -429,7 +517,9 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
             try:
                 variables_captured = json.loads(line[len("__VARS__:") :])
             except Exception:
-                _LOG.debug("Failed to parse captured variables from stderr line", exc_info=True)
+                _LOG.debug(
+                    "Failed to parse captured variables from stderr line", exc_info=True
+                )
         else:
             stderr_lines.append(line)
     return {
@@ -473,6 +563,11 @@ def run(payload: dict) -> dict:
         return _err(
             "python_executor.blocked_unsafe_code",
             "Blocked: code contains disallowed operations (network, file writes, shell execution).",
+        )
+    if _has_obvious_memory_bomb(code):
+        return _err(
+            "python_executor.memory_limit",
+            f"Blocked: obvious allocation exceeds {_STATIC_ALLOCATION_LIMIT_BYTES // (1024 * 1024)} MB sandbox policy.",
         )
 
     stdin_data = str(payload.get("stdin", "") or "")

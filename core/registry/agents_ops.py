@@ -85,8 +85,9 @@ _QUERY_EXPANSIONS = {
     "hardcoded": "hardcoded secret credential password",
     "passwords": "passwords secrets credentials",
     "tls": "ssl certificate https",
+    "handshake": "ssl tls certificate domain endpoint",
     "ssl": "tls certificate https",
-    "jwt": "json web token security",
+    "jwt": "json web token security token base64 decode python",
     "sbom": "software bill of materials dependency license package audit",
     "sca": "software composition analysis dependency vulnerability license",
     "owasp": "web application security vulnerability xss ssrf injection",
@@ -99,6 +100,10 @@ _QUERY_EXPANSIONS = {
     "csp": "content security policy http security headers",
     "imds": "metadata service ssrf sandbox cloud security",
     "poc": "proof of concept exploit security test",
+    "disk": "filesystem file write sandbox code execution",
+    "write": "filesystem file write sandbox code execution",
+    "screenshot": "browser playwright rendered webpage screenshot",
+    "website": "browser playwright rendered webpage url",
     "10k": "10-k sec edgar filing financial",
     "10-q": "sec edgar filing financial",
 }
@@ -161,9 +166,13 @@ def _validate_agent_scalar_params(
         return Err("status must be one of: active, suspended, banned.")
 
     _review = str(review_status or "").strip().lower()
-    normalized_review_status = _review or ("approved" if is_internal else "pending_review")
+    normalized_review_status = _review or (
+        "approved" if is_internal else "pending_review"
+    )
     if normalized_review_status not in REVIEW_STATUSES:
-        return Err("review_status must be one of: " + ", ".join(sorted(REVIEW_STATUSES)) + ".")
+        return Err(
+            "review_status must be one of: " + ", ".join(sorted(REVIEW_STATUSES)) + "."
+        )
 
     try:
         normalized_pricing_model = normalize_pricing_model(pricing_model)
@@ -173,20 +182,24 @@ def _validate_agent_scalar_params(
     pricing_config_json: str | None = None
     if normalized_pricing_model != "fixed":
         try:
-            canonical_config = validate_pricing_config(normalized_pricing_model, pricing_config)
+            canonical_config = validate_pricing_config(
+                normalized_pricing_model, pricing_config
+            )
         except VariablePricingError as exc:
             return Err(str(exc))
         if canonical_config is not None:
             pricing_config_json = json.dumps(canonical_config, sort_keys=True)
 
-    return Ok({
-        "price": price,
-        "normalized_health_status": normalized_health_status,
-        "normalized_status": normalized_status,
-        "normalized_review_status": normalized_review_status,
-        "normalized_pricing_model": normalized_pricing_model,
-        "pricing_config_json": pricing_config_json,
-    })
+    return Ok(
+        {
+            "price": price,
+            "normalized_health_status": normalized_health_status,
+            "normalized_status": normalized_status,
+            "normalized_review_status": normalized_review_status,
+            "normalized_pricing_model": normalized_pricing_model,
+            "pricing_config_json": pricing_config_json,
+        }
+    )
 
 
 def register_agent(
@@ -235,12 +248,19 @@ def register_agent(
     if not normalized_owner_id:
         raise ValueError("owner_id must be a non-empty string.")
 
-    is_internal = internal_only or str(endpoint_url or "").strip().startswith("internal://")
+    is_internal = internal_only or str(endpoint_url or "").strip().startswith(
+        "internal://"
+    )
 
     # Run all pure scalar validation before touching the DB.
     _scalars = _validate_agent_scalar_params(
-        price_per_call_usd, endpoint_health_status, status, review_status,
-        is_internal, pricing_model, pricing_config,
+        price_per_call_usd,
+        endpoint_health_status,
+        status,
+        review_status,
+        is_internal,
+        pricing_model,
+        pricing_config,
     )
     _scalars.raise_on_err()
     price = _scalars.value["price"]
@@ -1208,11 +1228,53 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
         "audit",
     }
     review_terms = {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
-    browser_terms = {"browser", "screenshot", "screenshots", "playwright", "render", "homepage"}
-    image_terms = {"image", "generate", "generation", "dall", "replicate", "picture", "render"}
+    browser_terms = {
+        "browser",
+        "screenshot",
+        "screenshots",
+        "playwright",
+        "render",
+        "homepage",
+    }
+    visual_compare_terms = {
+        "compare",
+        "diff",
+        "difference",
+        "regression",
+        "baseline",
+        "before",
+        "after",
+    }
+    image_terms = {
+        "image",
+        "generate",
+        "generation",
+        "dall",
+        "replicate",
+        "picture",
+        "render",
+    }
     finance_terms = {"edgar", "10-k", "10q", "10-q", "sec", "filing", "revenue"}
-    red_team_terms = {"red", "redteam", "red-teamer", "adversarial", "jailbreak", "prompt"}
+    red_team_terms = {
+        "red",
+        "redteam",
+        "red-teamer",
+        "adversarial",
+        "jailbreak",
+        "prompt",
+    }
     sbom_terms = {"sbom", "license", "licenses", "open", "source"}
+    execution_terms = {
+        "run",
+        "execute",
+        "python",
+        "sandbox",
+        "disk",
+        "write",
+        "filesystem",
+        "jwt",
+        "decode",
+    }
 
     if security_terms & set(terms):
         if {
@@ -1224,7 +1286,10 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
             "passwords",
             "hardcoded",
         } & set(terms):
-            if any(token in combined for token in ("secret", "credential", "password", "token")):
+            if any(
+                token in combined
+                for token in ("secret", "credential", "password", "token")
+            ):
                 bonus += 0.40
             elif any(token in combined for token in ("cve", "nvd", "osv")):
                 bonus -= 0.20
@@ -1270,15 +1335,45 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
             token in combined
             for token in ("linter", "ruff", "eslint", "type checker", "mypy")
         ):
-                bonus -= 0.05
+            bonus -= 0.05
 
     if browser_terms & set(terms):
-        if any(token in combined for token in ("browser", "playwright", "screenshot", "headless")):
+        wants_page_screenshot = bool(
+            {"screenshot", "screenshots", "homepage"} & set(terms)
+            and not (visual_compare_terms & set(terms))
+        )
+        if wants_page_screenshot and any(
+            token in combined for token in ("browser", "playwright", "headless")
+        ):
+            bonus += 0.55
+        elif wants_page_screenshot and any(
+            token in combined for token in ("visual regression", "pixel-level diff")
+        ):
+            bonus -= 0.25
+        elif any(
+            token in combined
+            for token in ("browser", "playwright", "screenshot", "headless")
+        ):
             bonus += 0.35
         elif "secret" in combined or "code review" in combined:
             bonus -= 0.20
+    if visual_compare_terms & set(terms):
+        if any(
+            token in combined
+            for token in (
+                "visual regression",
+                "pixel-level diff",
+                "compare two screenshots",
+            )
+        ):
+            bonus += 0.45
+        elif "browser" in combined:
+            bonus -= 0.10
     if image_terms & set(terms):
-        if any(token in combined for token in ("image", "generation", "replicate", "gpt-image")):
+        if any(
+            token in combined
+            for token in ("image", "generation", "replicate", "gpt-image")
+        ):
             bonus += 0.35
         elif any(token in combined for token in ("arxiv", "code review", "secret")):
             bonus -= 0.20
@@ -1289,10 +1384,35 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
         if any(token in combined for token in ("red team", "adversarial", "jailbreak")):
             bonus += 0.35
     if sbom_terms & set(terms):
-        if any(token in combined for token in ("dependency", "license", "audit", "package")):
+        if any(
+            token in combined for token in ("dependency", "license", "audit", "package")
+        ):
             bonus += 0.25
+    if execution_terms & set(terms):
+        if {"jwt", "decode"} & set(terms) and any(
+            token in combined for token in ("python", "execute", "sandbox")
+        ):
+            bonus += 0.35
+        if {"disk", "write", "filesystem"} & set(terms) and any(
+            token in combined for token in ("python", "sandbox", "execute", "code")
+        ):
+            bonus += 0.30
 
     return max(-0.35, min(0.70, bonus))
+
+
+def _price_query_mode(query: str) -> str | None:
+    terms = set(_query_terms(query))
+    if not (
+        {"cheap", "cheapest", "low", "lowest", "price", "cost", "expensive", "highest"}
+        & terms
+    ):
+        return None
+    if {"expensive", "highest", "costliest"} & terms:
+        return "most_expensive"
+    if {"cheap", "cheapest", "low", "lowest", "price", "cost"} & terms:
+        return "cheapest"
+    return None
 
 
 def _matched_phrase(query: str, haystack: str) -> str | None:
@@ -1395,6 +1515,7 @@ def search_agents(
     if caller_trust is not None:
         normalized_caller_trust = _normalize_min_trust(caller_trust)
     required_fields = _required_input_fields_set(required_input_fields)
+    price_query_mode = _price_query_mode(normalized_query)
     # Skip embedding computation when disabled; the semantic weight is
     # redistributed to trust and price in the blending step below.
     _embeddings_enabled = not _feature_flags.DISABLE_EMBEDDINGS
@@ -1524,7 +1645,20 @@ def search_agents(
             )
             inverse_price = 1.0 - normalized_price
 
-        if _embeddings_enabled:
+        price_intent_score = inverse_price
+        if price_query_mode == "most_expensive":
+            price_intent_score = 1.0 - inverse_price
+
+        if price_query_mode is not None:
+            semantic_component = candidate["similarity"] if _embeddings_enabled else 0.0
+            blended_score = (
+                0.62 * price_intent_score
+                + 0.16 * candidate["lexical_score"]
+                + 0.08 * semantic_component
+                + 0.09 * candidate["trust"]
+                + 0.05 * max(0.0, min(1.0, candidate["intent_bonus"]))
+            )
+        elif _embeddings_enabled:
             blended_score = (
                 LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
                 + SEMANTIC_SCORE_WEIGHT * candidate["similarity"]
@@ -1555,6 +1689,10 @@ def search_agents(
             normalized_caller_trust,
             candidate["caller_trust_min"],
         )
+        if price_query_mode == "cheapest":
+            candidate["match_reasons"].append("ranked by lowest caller price")
+        elif price_query_mode == "most_expensive":
+            candidate["match_reasons"].append("ranked by highest caller price")
 
     ranked = sorted(
         candidates,
