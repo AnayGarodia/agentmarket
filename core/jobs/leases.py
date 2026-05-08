@@ -100,12 +100,22 @@ def claim_job(
     now = now_dt.isoformat()
     lease_expires_at = _iso_after_seconds(lease_seconds)
 
+    from core import db as _db_kind
+
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = %s",
-            (job_id,),
-        ).fetchone()
+        # SQLite: BEGIN IMMEDIATE already serializes writers, so a plain
+        # SELECT inside the transaction is safe. Postgres ignores the
+        # IMMEDIATE keyword and otherwise allows two concurrent readers
+        # to both see the row as unclaimed and both UPDATE — caught in
+        # production logs on 2026-05-08 where job 5a87b762 was claimed
+        # twice within 150ms by two different uvicorn workers. Add an
+        # explicit row lock on Postgres so only one claimer can proceed
+        # past this point per job_id.
+        select_sql = "SELECT * FROM jobs WHERE job_id = %s"
+        if _db_kind.IS_POSTGRES:
+            select_sql += " FOR UPDATE"
+        row = conn.execute(select_sql, (job_id,)).fetchone()
         if row is None:
             return None
 
