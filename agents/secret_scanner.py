@@ -231,9 +231,15 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
         # Match postgres://user:password@host[:port]/db and friends. The
         # password segment must be present (`:<something>@`) to avoid
         # flagging credential-less local URIs like postgres:///mydb.
+        # Password may contain `@` (common in real-world creds like
+        # `p@ssw0rd`) — the regex relies on greedy backtracking to land on
+        # the LAST `@` before path / whitespace as the user/password
+        # separator. Previous version excluded `@` from the password
+        # character class and silently missed every URL with an `@` in the
+        # password.
         re.compile(
             r"\b(?:postgres|postgresql|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps)://"
-            r"[^:\s/@]+:[^@\s/]{3,}@[^\s/]+",
+            r"[^:\s/@]+:[^\s/]{3,}@[^\s/?#]+",
             re.IGNORECASE,
         ),
         "critical",
@@ -242,8 +248,9 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     (
         "http-basic-auth-url",
         "HTTP(S) URL with embedded credentials",
+        # Same fix as database-url: password may contain `@`.
         re.compile(
-            r"\bhttps?://[A-Za-z0-9._\-]+:[^@\s/]{3,}@[A-Za-z0-9.\-]+",
+            r"\bhttps?://[A-Za-z0-9._\-]+:[^\s/]{3,}@[A-Za-z0-9.\-]+",
             re.IGNORECASE,
         ),
         "high",

@@ -81,6 +81,19 @@ SEMANTIC_SCORE_WEIGHT = 0.50
 TRUST_SCORE_WEIGHT_HYBRID = 0.12
 INVERSE_PRICE_WEIGHT_HYBRID = 0.08
 
+# Confidence thresholds applied AFTER ranking. Tuned empirically against the
+# 9-agent live catalog so genuinely-on-target queries ("scan code for
+# secrets", "look up CVE") still surface results, but adversarial /
+# off-catalog queries ("image generator", "find recent papers") return
+# empty rather than weak distractors. Adjust if the catalog grows past
+# ~50 agents and the score distribution shifts.
+_SEARCH_RELEVANCE_FLOOR = 0.18
+# Within a result set, drop agents that score far below the leader. Keeps
+# tied/near-tied agents but cuts off the "long tail of trust-only matches"
+# that previously polluted every search.
+_SEARCH_KEEP_FLOOR = 0.20
+_SEARCH_DROPOFF_BAND = 0.20
+
 # Typo + acronym → canonical-term expansions ONLY. Do not list "code
 # execution", "python", "base64", or other generic terms here — every
 # expansion you add to a query is a token every candidate's lexical
@@ -1791,16 +1804,65 @@ def search_agents(
         elif price_query_mode == "most_expensive":
             candidate["match_reasons"].append("ranked by highest caller price")
 
-    ranked = sorted(
-        candidates,
-        key=lambda item: (
-            item["blended_score"],
-            item["similarity"],
-            item["trust"],
-            -item["price_cents"],
-        ),
-        reverse=True,
-    )
+    if price_query_mode == "most_expensive":
+        # Sort by price first so every agent at the maximum price surfaces as
+        # a tied #1 — a single highest-price agent winning on lexical noise
+        # was the prior bug ("most expensive" returned only one of three
+        # agents at $0.03). Within a price tier, fall back to the existing
+        # blended-score tie-break so the most relevant of the tied agents
+        # leads the group.
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                -item["price_cents"],
+                item["blended_score"],
+                item["similarity"],
+                item["trust"],
+            ),
+        )
+    elif price_query_mode == "cheapest":
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                item["price_cents"],
+                -item["blended_score"],
+                -item["similarity"],
+                -item["trust"],
+            ),
+        )
+    else:
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                item["blended_score"],
+                item["similarity"],
+                item["trust"],
+                -item["price_cents"],
+            ),
+            reverse=True,
+        )
+
+    # Confidence floor: drop low-relevance candidates so callers don't get
+    # five mediocre matches when nothing in the catalog is a real fit. The
+    # eval flagged "find recent papers", "image generator", "agents that
+    # take credit cards" all returning weak unrelated agents because there
+    # was no empty-result mode. We still keep at least the top hit if its
+    # score crosses the floor; otherwise the response signals "no match" to
+    # the caller via an empty list (callers branch on `count == 0`).
+    if price_query_mode is None and ranked:
+        top_score = ranked[0]["blended_score"]
+        if top_score >= _SEARCH_RELEVANCE_FLOOR:
+            ranked = [
+                item for item in ranked
+                if item["blended_score"] >= _SEARCH_KEEP_FLOOR
+                or item["blended_score"] >= top_score - _SEARCH_DROPOFF_BAND
+            ]
+        else:
+            # No agent matches strongly. Returning weak distractors is worse
+            # than returning empty — empty signals "use a different query"
+            # while distractors create false confidence in low-relevance
+            # results.
+            ranked = []
 
     return [
         {

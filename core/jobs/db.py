@@ -104,6 +104,14 @@ FEE_BEARER_POLICIES = {
 
 OUTPUT_VERIFICATION_STATUSES = {
     "not_required",
+    # `armed` = job was created with a non-zero output_verification_window_seconds
+    # but hasn't completed yet. Transitions to `pending` once the agent's
+    # output is signed and the caller's verification window opens. Adding
+    # this state distinguishes "verification was never requested" from
+    # "verification is configured and will activate on completion" — the
+    # eval flagged that this field looked plumbed-but-unused because every
+    # job came back as "not_required" regardless of the requested window.
+    "armed",
     "pending",
     "accepted",
     "rejected",

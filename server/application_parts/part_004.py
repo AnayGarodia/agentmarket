@@ -406,39 +406,106 @@ def _process_pending_builtin_job(job: dict) -> bool:
     return True
 
 
+_BUILTIN_WORKER_POOL_LOCK = threading.Lock()
+_BUILTIN_WORKER_POOL: Any = None  # type: ignore[assignment]
+_BUILTIN_WORKER_INFLIGHT_LOCK = threading.Lock()
+_BUILTIN_WORKER_INFLIGHT_COUNT = 0
+_BUILTIN_WORKER_INFLIGHT_IDS: set[str] = set()
+
+
+def _get_builtin_worker_pool():
+    """Return the persistent module-scoped ThreadPoolExecutor.
+
+    A NEW executor was being created and torn down on every worker tick via
+    `with ThreadPoolExecutor(...) as pool:`. The `with` block waits for ALL
+    submitted futures to complete before returning, so a slow job (e.g.
+    browser_agent at ~8s) blocked the next tick from picking up freshly-
+    submitted batches — exactly the concurrent-batch stall the eval found
+    where a 20-job batch sat at 0/20 for 5+ minutes while another batch
+    drained.
+
+    The persistent pool decouples submit from wait: each tick scans pending
+    work, submits up to (parallelism - inflight) jobs, increments the
+    inflight counter, and returns immediately. Slow jobs occupy worker
+    threads but never block scheduling.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    global _BUILTIN_WORKER_POOL
+    if _BUILTIN_WORKER_POOL is not None:
+        return _BUILTIN_WORKER_POOL
+    with _BUILTIN_WORKER_POOL_LOCK:
+        if _BUILTIN_WORKER_POOL is None:
+            _BUILTIN_WORKER_POOL = ThreadPoolExecutor(
+                max_workers=max(1, int(_BUILTIN_JOB_WORKER_PARALLELISM)),
+                thread_name_prefix="aztea-builtin",
+            )
+    return _BUILTIN_WORKER_POOL
+
+
+def _builtin_worker_inflight_snapshot() -> tuple[int, int]:
+    """(in_flight_count, capacity_remaining)."""
+    with _BUILTIN_WORKER_INFLIGHT_LOCK:
+        return (
+            _BUILTIN_WORKER_INFLIGHT_COUNT,
+            max(
+                0,
+                int(_BUILTIN_JOB_WORKER_PARALLELISM) - _BUILTIN_WORKER_INFLIGHT_COUNT,
+            ),
+        )
+
+
 def _process_pending_builtin_jobs(
     limit_per_agent: int = _BUILTIN_JOB_WORKER_BATCH_SIZE,
 ) -> dict[str, int]:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    """Submit fresh pending jobs to the persistent pool — DOES NOT wait.
 
-    # Pull a single combined batch across all built-in + hosted-skill agents.
-    # Previously this issued one DB query per agent (~21+ serial queries) and
-    # capped per-agent which throttled total throughput when the queue was
-    # dominated by a single agent. We now fetch up to MAX_BATCH_TOTAL pending
-    # jobs in one shot, then fan them out across the worker pool. The
-    # per-agent limit is preserved as a safety hint to avoid one runaway agent
-    # hogging the entire batch.
+    Returns telemetry describing what was scheduled this tick. Settlement
+    happens asynchronously inside worker threads. Called once per worker
+    tick; subsequent ticks see jobs claimed in earlier ticks transition out
+    of the `pending` set via `claim_job`'s atomic state change, so nothing
+    is double-claimed.
+    """
+    global _BUILTIN_WORKER_INFLIGHT_COUNT
+
     batch_limit = min(max(1, int(limit_per_agent)), 500)
     max_total = max(batch_limit, int(_BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL))
-    scanned = 0
-    processed = 0
 
     skill_agent_ids = set(_hosted_skills.list_pending_skill_agent_ids())
     eligible_agent_ids = set(_BUILTIN_AGENT_IDS) | skill_agent_ids
 
-    # Single combined query: pending jobs across all eligible agents, oldest first.
-    pending_jobs: list[dict] = []
-    seen_ids: set[str] = set()
-    per_agent_count: dict[str, int] = {}
+    # Reserve only the capacity that's actually free on the pool. Without
+    # this, ticks under heavy load oversubscribe the pool — futures queue
+    # internally and tick-level throughput becomes invisible because the
+    # ThreadPoolExecutor's queue is unbounded.
+    in_flight, capacity_remaining = _builtin_worker_inflight_snapshot()
+    if capacity_remaining <= 0:
+        return {
+            "scanned": 0,
+            "processed": 0,
+            "queue_depth": 0,
+            "in_flight": in_flight,
+            "max_workers": int(_BUILTIN_JOB_WORKER_PARALLELISM),
+            "configured_parallelism": int(_BUILTIN_JOB_WORKER_PARALLELISM),
+            "saturated": True,
+        }
+
+    fetch_limit = min(max_total, capacity_remaining * 4)
+
     try:
-        all_pending = jobs.list_pending_jobs(limit=max_total)
+        all_pending = jobs.list_pending_jobs(limit=fetch_limit)
     except AttributeError:
-        # Fallback for older code paths: per-agent fetch.
         all_pending = []
         for agent_id in eligible_agent_ids:
             all_pending.extend(
                 jobs.list_jobs_for_agent(agent_id, status="pending", limit=batch_limit)
             )
+
+    pending_jobs: list[dict] = []
+    seen_ids: set[str] = set()
+    per_agent_count: dict[str, int] = {}
+    with _BUILTIN_WORKER_INFLIGHT_LOCK:
+        already_inflight = set(_BUILTIN_WORKER_INFLIGHT_IDS)
     for job in all_pending:
         agent_id = str(job.get("agent_id") or "")
         if agent_id not in eligible_agent_ids:
@@ -446,58 +513,85 @@ def _process_pending_builtin_jobs(
         if per_agent_count.get(agent_id, 0) >= batch_limit:
             continue
         job_id = str(job.get("job_id") or "")
-        if job_id in seen_ids:
+        if not job_id or job_id in seen_ids:
+            continue
+        # Defensive: an in-flight ID could still be visible in `pending` for a
+        # microsecond before claim_job lands in the DB. Skip it explicitly.
+        if job_id in already_inflight:
             continue
         seen_ids.add(job_id)
         per_agent_count[agent_id] = per_agent_count.get(agent_id, 0) + 1
         pending_jobs.append(job)
-        if len(pending_jobs) >= max_total:
+        if len(pending_jobs) >= capacity_remaining:
             break
     scanned = len(pending_jobs)
 
     if not pending_jobs:
-        return {"scanned": 0, "processed": 0, "queue_depth": 0}
-
-    max_workers = min(max(1, _BUILTIN_JOB_WORKER_PARALLELISM), len(pending_jobs))
-    _set_builtin_worker_state(
-        last_run_at=_utc_now_iso(),
-        last_summary={
-            "scanned": scanned,
+        return {
+            "scanned": 0,
             "processed": 0,
-            "queue_depth": max(0, len(pending_jobs)),
-            "max_workers": max_workers,
-            "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
-            "in_progress": True,
-        },
-        last_error=None,
-    )
-    with ThreadPoolExecutor(
-        max_workers=max_workers, thread_name_prefix="aztea-builtin"
-    ) as pool:
-        futures = [
-            pool.submit(_process_pending_builtin_job, job) for job in pending_jobs
-        ]
-        for future in as_completed(futures):
+            "queue_depth": 0,
+            "in_flight": in_flight,
+            "max_workers": int(_BUILTIN_JOB_WORKER_PARALLELISM),
+            "configured_parallelism": int(_BUILTIN_JOB_WORKER_PARALLELISM),
+        }
+
+    pool = _get_builtin_worker_pool()
+    submitted = 0
+    for job in pending_jobs:
+        job_id = str(job.get("job_id") or "")
+        with _BUILTIN_WORKER_INFLIGHT_LOCK:
+            _BUILTIN_WORKER_INFLIGHT_COUNT += 1
+            _BUILTIN_WORKER_INFLIGHT_IDS.add(job_id)
+
+        def _runner(captured_job=job, captured_id=job_id) -> bool:
+            global _BUILTIN_WORKER_INFLIGHT_COUNT
             try:
-                if future.result():
-                    processed += 1
+                return _process_pending_builtin_job(captured_job)
             except Exception:
                 _LOG.exception("Built-in parallel worker task failed.")
+                return False
+            finally:
+                with _BUILTIN_WORKER_INFLIGHT_LOCK:
+                    _BUILTIN_WORKER_INFLIGHT_COUNT = max(
+                        0, _BUILTIN_WORKER_INFLIGHT_COUNT - 1
+                    )
+                    _BUILTIN_WORKER_INFLIGHT_IDS.discard(captured_id)
+                # When a slot frees up, wake the loop so the next batch starts
+                # immediately rather than waiting up to interval_seconds. This
+                # is what gets concurrent batches off the queue under load.
+                _wake_event = globals().get("_BUILTIN_WORKER_WAKE_EVENT")
+                if _wake_event is not None:
+                    try:
+                        _wake_event.set()
+                    except Exception:
+                        pass
 
-    # Snapshot the remaining queue depth so callers (batch_status, parallel
-    # hire trace) can show how many jobs still wait.
+        try:
+            pool.submit(_runner)
+            submitted += 1
+        except Exception:
+            with _BUILTIN_WORKER_INFLIGHT_LOCK:
+                _BUILTIN_WORKER_INFLIGHT_COUNT = max(
+                    0, _BUILTIN_WORKER_INFLIGHT_COUNT - 1
+                )
+                _BUILTIN_WORKER_INFLIGHT_IDS.discard(job_id)
+            _LOG.exception("Failed to submit built-in worker task to pool.")
+
     try:
         remaining = jobs.count_pending_jobs(agent_ids=list(eligible_agent_ids))
     except Exception:
         remaining = None
+    in_flight_after, _capacity_after = _builtin_worker_inflight_snapshot()
     return {
         "scanned": scanned,
-        "processed": processed,
+        "processed": submitted,  # "submitted to pool" — settlement is async
         "queue_depth": remaining
         if remaining is not None
-        else max(0, scanned - processed),
-        "max_workers": max_workers,
-        "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
+        else max(0, scanned - submitted),
+        "in_flight": in_flight_after,
+        "max_workers": int(_BUILTIN_JOB_WORKER_PARALLELISM),
+        "configured_parallelism": int(_BUILTIN_JOB_WORKER_PARALLELISM),
     }
 
 

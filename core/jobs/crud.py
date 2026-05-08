@@ -187,7 +187,17 @@ def create_job(
                 _clean_optional_text(callback_url),
                 _clean_optional_text(callback_secret),
                 parsed_output_verification_window_seconds,
-                "not_required",
+                # When the caller asked for an explicit verification window
+                # we arm the verification state at insert. Previously this
+                # column was always written as "not_required" regardless of
+                # the window arg, leaving the field "plumbed but unused" —
+                # exactly what the eval flagged. arm_output_verification_window
+                # would later transition this to "pending" once the job
+                # completes; setting "armed" here makes the contract visible
+                # from the moment the job is queued.
+                "armed"
+                if parsed_output_verification_window_seconds > 0
+                else "not_required",
                 _clean_optional_text(batch_id),
             ),
         )

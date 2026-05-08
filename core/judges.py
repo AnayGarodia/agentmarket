@@ -184,15 +184,33 @@ def _local_dispute_fallback(context: dict) -> dict:
     return {"verdict": verdict, "reasoning": fallback_reason, "confidence": confidence}
 
 
-def _judge_once(model_chain: list[str], context: dict) -> dict:
+_SYSTEM_PROMPT_DEVILS_ADVOCATE = (
+    "You are a strict second-opinion arbiter. Your job is to STRESS-TEST the "
+    "filer's claim from a different angle than the primary judge would. Read "
+    "the dispute text carefully. If the dispute reason is vague, lacks "
+    "specific contractual or factual deviation, or amounts to dissatisfaction "
+    "without proof of error, lean toward agent_wins. If the dispute cites a "
+    "specific verifiable failure of the agent's contract, lean toward "
+    'caller_wins. Return strict JSON {"verdict": "caller_wins"|"agent_wins"|'
+    '"split"|"void", "reasoning": "...", "confidence": 0.0-1.0}.'
+)
+
+
+def _judge_once(
+    model_chain: list[str],
+    context: dict,
+    *,
+    system_prompt: str = _SYSTEM_PROMPT,
+    temperature: float = 0.0,
+) -> dict:
     llm_resp = run_with_fallback(
         CompletionRequest(
             model="",
             messages=[
-                Message("system", _SYSTEM_PROMPT),
+                Message("system", system_prompt),
                 Message("user", _build_user_prompt(context)),
             ],
-            temperature=0.0,
+            temperature=temperature,
             json_mode=True,
         ),
         model_chain=model_chain,
@@ -289,8 +307,6 @@ def run_judgment(dispute_id: str) -> dict:
         }
 
     primary_chain = list(DEFAULT_CHAIN)
-    secondary_chain = DEFAULT_CHAIN[1:] + DEFAULT_CHAIN[:1]
-
     primary = _judge_once(primary_chain, context)
     disputes.record_judgment(
         dispute_id,
@@ -300,13 +316,47 @@ def run_judgment(dispute_id: str) -> dict:
         model=primary["model"],
     )
 
-    secondary = _judge_once(secondary_chain, context)
+    # Heterogeneous secondary judge: build a chain that EXCLUDES whichever
+    # model the primary actually used. The eval found both judges resolving
+    # to the same model (`groq:llama-3.3-70b-versatile`) when only one
+    # provider was configured — failure modes correlate, which means two
+    # confirming votes from the same brain aren't independent. Excluding the
+    # primary's model forces a different LLM family to weigh in. If no
+    # alternative is configured, we still vary the system prompt
+    # ("devil's-advocate" framing) and temperature so the second judgment
+    # is at least probabilistically decorrelated.
+    primary_model = str(primary.get("model") or "").strip()
+    secondary_chain_full = DEFAULT_CHAIN[1:] + DEFAULT_CHAIN[:1]
+    secondary_chain = [
+        spec for spec in secondary_chain_full if spec != primary_model
+    ]
+    fallback_to_same_model = not secondary_chain
+    if fallback_to_same_model:
+        # Only one provider available — keep the original chain order so the
+        # call still resolves, but vary the prompt+temperature.
+        secondary_chain = list(DEFAULT_CHAIN)
+    secondary = _judge_once(
+        secondary_chain,
+        context,
+        system_prompt=_SYSTEM_PROMPT_DEVILS_ADVOCATE,
+        # Slight temperature lift on the second pass so the verdict isn't a
+        # near-deterministic re-roll of the same logits when we're forced
+        # to use the same model. Keeps the verdict space the same JSON
+        # shape but introduces meaningful variance.
+        temperature=0.4 if fallback_to_same_model else 0.1,
+    )
     disputes.record_judgment(
         dispute_id,
         judge_kind="llm_secondary",
         verdict=secondary["verdict"],
         reasoning=secondary["reasoning"],
-        model=secondary["model"],
+        model=secondary["model"]
+        + (
+            " (devil's-advocate prompt; same model as primary — heterogeneous LLM unavailable)"
+            if fallback_to_same_model
+            and str(secondary.get("model") or "") == primary_model
+            else ""
+        ),
     )
 
     if primary["verdict"] == secondary["verdict"] and primary["verdict"] != "split":

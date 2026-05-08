@@ -1790,6 +1790,52 @@ def _dispute_view(dispute_row: dict) -> dict:
         )
     elif status in {"resolved", "final"}:
         payload["eta_hint"] = "Dispute is resolved."
+
+    # Deposit disposition: every filer pays a small deposit when filing a
+    # dispute. The eval flagged that the response showed `filing_deposit_cents`
+    # but never said whether the filer's deposit was kept, refunded, or split.
+    # Surface the actual disposition so callers don't have to walk the ledger:
+    #   - pending/judging  → "held"
+    #   - resolved + filer won (caller filed → caller_wins, agent filed → agent_wins)
+    #         → "refunded_to_filer" (filer prevailed; deposit returned)
+    #   - resolved + filer lost → "forfeit_to_judges_pool"
+    #         (deposit funds the LLM judges + dissuades frivolous filings)
+    #   - tied → "held_pending_admin" (admin tie-break may award either way)
+    #   - split → "refunded_to_filer" (any meritorious claim gets the deposit back)
+    deposit_cents = int(payload.get("filing_deposit_cents") or 0)
+    side = str(payload.get("side") or "").strip().lower()
+    outcome = str(payload.get("outcome") or "").strip().lower()
+    if deposit_cents <= 0:
+        deposit_disposition = "no_deposit_required"
+    elif status in {"pending", "judging"}:
+        deposit_disposition = "held"
+    elif status == "tied":
+        deposit_disposition = "held_pending_admin"
+    elif status in {"resolved", "final"}:
+        if outcome == "split":
+            deposit_disposition = "refunded_to_filer"
+        elif (side == "caller" and outcome == "caller_wins") or (
+            side == "agent" and outcome == "agent_wins"
+        ):
+            deposit_disposition = "refunded_to_filer"
+        elif outcome in {"caller_wins", "agent_wins"}:
+            deposit_disposition = "forfeit_to_judges_pool"
+        elif outcome == "void":
+            deposit_disposition = "refunded_to_filer"
+        else:
+            deposit_disposition = "unknown"
+    else:
+        deposit_disposition = "unknown"
+
+    payload["filing_deposit_disposition"] = deposit_disposition
+    payload["filing_deposit_explanation"] = {
+        "no_deposit_required": "No deposit was required for this dispute.",
+        "held": "Filer's deposit is held in escrow until judges resolve the dispute.",
+        "held_pending_admin": "Judges tied. Deposit is held until an admin resolves the dispute or the 48-hour auto-finalize window elapses.",
+        "refunded_to_filer": "The filer's deposit was returned because they prevailed (or the dispute was voided/split).",
+        "forfeit_to_judges_pool": "The filer's deposit was forfeit because they did not prevail. The deposit funds the LLM judges' compute and dissuades frivolous filings.",
+        "unknown": "Deposit disposition is indeterminate for this dispute state.",
+    }[deposit_disposition]
     return payload
 
 

@@ -22,6 +22,22 @@ if str(ROOT_DIR) not in sys.path:
 from core import feature_flags as _feature_flags
 from core import mcp_manifest
 
+
+def _canonical_slug(value: Any) -> str:
+    """Return the canonical snake_case slug for a name/slug.
+
+    The MCP catalog entries historically fell back to a tool's display name
+    (e.g. ``"Secret Scanner"``) when a snake_case ``tool_name`` was missing.
+    That string then leaked into search results as the ``slug`` field, but
+    ``aztea_call`` only accepts the snake_case form — every brand-new caller
+    tripped on the inconsistency. Slugify defensively here so search,
+    describe, and call all agree on the same key.
+    """
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
@@ -466,6 +482,16 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
                 "description": "Input payload matching the tool's input schema (from aztea_describe). Omit for tools with no required fields.",
                 "additionalProperties": True,
             },
+            "input": {
+                "type": "object",
+                "description": "Alias for `arguments`. Either field is accepted; if both are passed, `arguments` wins.",
+                "additionalProperties": True,
+            },
+            "input_payload": {
+                "type": "object",
+                "description": "Alias for `arguments`. Provided for symmetry with `aztea_workflow` job specs.",
+                "additionalProperties": True,
+            },
             "output_format": {
                 "type": "string",
                 "enum": [
@@ -478,7 +504,7 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
                 "description": "Optional. Render the result in a specific shape. The canonical JSON `output` stays intact; the rendered string is added as `rendered_output`.",
             },
         },
-        "required": ["slug", "arguments"],
+        "required": ["slug"],
     },
     "annotations": {
         "readOnlyHint": False,
@@ -1049,16 +1075,47 @@ class RegistryBridge:
         for entry in registry_entries:
             tool = dict(entry.get("tool") or {})
             meta = dict(entry.get("catalog_metadata") or {})
+            display_name = str(meta.get("name") or tool.get("name") or "").strip()
+            raw_tool_name = str(entry.get("tool_name") or tool.get("name") or "").strip()
+            # Always emit the canonical snake_case slug so search results are
+            # immediately callable. Falls back to slugified display name when
+            # the upstream registry returns an empty tool_name.
+            canonical = _canonical_slug(raw_tool_name) or _canonical_slug(display_name)
+            slug = canonical or raw_tool_name.lower()
+            agent_id = str(entry.get("agent_id") or "").strip() or None
+            # Aliases let `aztea_call(slug="Secret Scanner")` resolve too —
+            # historically that returned TOOL_NOT_FOUND because callers copied
+            # the display name straight out of the search response.
+            alias_set: list[str] = []
+            seen_aliases: set[str] = set()
+            for candidate in (
+                slug,
+                raw_tool_name,
+                raw_tool_name.lower(),
+                display_name,
+                display_name.lower(),
+                _canonical_slug(display_name),
+                agent_id or "",
+            ):
+                norm = str(candidate or "").strip()
+                if not norm or norm in seen_aliases:
+                    continue
+                seen_aliases.add(norm)
+                alias_set.append(norm)
+            try:
+                # _entry_aliases may add additional historical aliases; merge.
+                builtin_aliases = _entry_aliases(slug, display_name, agent_id)
+                for extra in builtin_aliases:
+                    norm = str(extra or "").strip()
+                    if norm and norm not in seen_aliases:
+                        seen_aliases.add(norm)
+                        alias_set.append(norm)
+            except Exception:
+                pass
             entries.append(
                 {
-                    "slug": str(
-                        entry.get("tool_name") or tool.get("name") or ""
-                    ).strip(),
-                    "aliases": _entry_aliases(
-                        str(entry.get("tool_name") or tool.get("name") or "").strip(),
-                        str(meta.get("name") or tool.get("name") or "").strip(),
-                        str(entry.get("agent_id") or "").strip() or None,
-                    ),
+                    "slug": slug,
+                    "aliases": alias_set,
                     "kind": "registry_agent",
                     "name": str(tool.get("name") or "").strip(),
                     "description": str(tool.get("description") or "").strip(),
@@ -1103,11 +1160,24 @@ class RegistryBridge:
         normalized = str(slug or "").strip()
         if not normalized:
             return None
+        # Try the input as-is, then progressively normalize. Callers commonly
+        # paste the display name ("Secret Scanner") straight from a search
+        # result — we want that to resolve, not 404.
+        candidates: list[str] = [normalized]
+        slugged = _canonical_slug(normalized)
+        if slugged and slugged not in candidates:
+            candidates.append(slugged)
+        lowered = normalized.lower()
+        if lowered and lowered not in candidates:
+            candidates.append(lowered)
         for entry in self._catalog_entries():
-            if entry["slug"] == normalized or normalized in set(
-                entry.get("aliases") or []
-            ):
-                return entry
+            entry_slug = str(entry.get("slug") or "")
+            aliases = {str(a or "").strip() for a in (entry.get("aliases") or [])}
+            aliases.add(entry_slug)
+            aliases.add(entry_slug.lower())
+            for candidate in candidates:
+                if candidate in aliases:
+                    return entry
         return None
 
     def _search_catalog(
@@ -1682,13 +1752,26 @@ class RegistryBridge:
                     "error": "INVALID_INPUT",
                     "message": "Use the lazy MCP tools directly, not via aztea_call.",
                 }
-            tool_arguments = arguments.get("arguments")
+            # Accept `arguments`, `input`, or `input_payload` as the field
+            # name — three common conventions across MCP tool surfaces. If
+            # multiple are passed we deterministically prefer the canonical
+            # `arguments`, then `input_payload`, then `input`. Returning a
+            # clear error when something other than an object is passed beats
+            # the silent-empty-payload behavior.
+            tool_arguments: Any = None
+            for field in ("arguments", "input_payload", "input"):
+                if field in arguments and arguments.get(field) is not None:
+                    tool_arguments = arguments.get(field)
+                    break
             if tool_arguments is None:
                 tool_arguments = {}
             if not isinstance(tool_arguments, dict):
                 return False, {
                     "error": "INVALID_INPUT",
-                    "message": "arguments must be an object.",
+                    "message": (
+                        "Pass the agent payload via `arguments` (canonical), "
+                        "`input`, or `input_payload`. The value must be an object."
+                    ),
                 }
             # Forward `output_format` from the lazy aztea_call wrapper into the
             # underlying call so the renderer can attach `rendered_output`.

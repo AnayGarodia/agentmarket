@@ -748,12 +748,17 @@ _TOOLS: list[dict[str, Any]] = [
                             },
                             "input_payload": {
                                 "type": "object",
-                                "description": "Task input matching the agent's input schema. `input` is also accepted.",
+                                "description": "Task input matching the agent's input schema. `input` and `arguments` are also accepted.",
                                 "additionalProperties": True,
                             },
                             "input": {
                                 "type": "object",
                                 "description": "Alias for input_payload.",
+                                "additionalProperties": True,
+                            },
+                            "arguments": {
+                                "type": "object",
+                                "description": "Alias for input_payload — matches the `aztea_call` field name so a single-call payload can be reused inside a batch job spec.",
                                 "additionalProperties": True,
                             },
                             "budget_cents": {
@@ -1294,6 +1299,29 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                 "run_id": {"type": "string", "description": "pipeline_status target."},
                 "compare_id": {"type": "string", "description": "compare_status / compare_select target."},
                 "winner_slug": {"type": "string", "description": "compare_select: chosen agent slug."},
+                "period": {
+                    "type": "string",
+                    "enum": ["1d", "7d", "30d", "90d"],
+                    "description": "session_audit: spend rollup window (default 1d).",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "session_audit: ISO-8601 lower bound on settled_at. Receipts older than this are excluded.",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "session_audit: ISO-8601 upper bound on settled_at. Receipts newer than this are excluded.",
+                },
+                "verify_all": {
+                    "type": "boolean",
+                    "description": "session_audit: when true, run Ed25519 verification on every signed receipt in the window. Returns aggregate verified/failed counts plus first-failure detail.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "session_audit: max receipts to include (default 100).",
+                },
             },
             "required": ["action"],
             "additionalProperties": True,
@@ -1711,10 +1739,22 @@ def _clean_text(value: Any) -> Any:
 
 
 def _input_arg(args: dict[str, Any], *, default: dict[str, Any] | None = None) -> Any:
-    if "input_payload" in args:
+    """Resolve the agent payload from any of the three accepted field names.
+
+    `input_payload` is canonical (HTTP API field). `input` is the friendlier
+    alias used in MCP grouped tools. `arguments` is the field name `aztea_call`
+    uses — and the eval flagged that submitting a `hire_batch` job with
+    `arguments={...}` (matching the single-call shape) was rejected with a
+    confusing schema error. Accepting all three here makes the platform
+    surface forgivingly consistent regardless of which tool the caller
+    started with.
+    """
+    if "input_payload" in args and args.get("input_payload") is not None:
         return args.get("input_payload")
-    if "input" in args:
+    if "input" in args and args.get("input") is not None:
         return args.get("input")
+    if "arguments" in args and args.get("arguments") is not None:
+        return args.get("arguments")
     return {} if default is None else default
 
 
@@ -2201,9 +2241,19 @@ def _session_audit(
 ) -> tuple[bool, dict]:
     """Aggregate spend/refund/receipt audit for a window of caller activity.
 
-    Composed from existing endpoints (wallet transactions + signed receipts)
-    so no new server endpoint is required for the v1.
+    Improvements over the v1:
+      * Receipts sorted by `settled_at` desc (most-recent-first).
+      * Optional `since` / `until` ISO-8601 timestamps narrow the window.
+      * Optional `verify_all=True` runs Ed25519 verification on every
+        signed receipt and returns counts + first-failure detail. Lets an
+        auditor confirm the entire window in one call.
+      * Aggregate `receipts_digest` — a deterministic SHA-256 over each
+        receipt's (job_id, output_hash, signature) so the audit response
+        itself is pin-able. A different digest on the next poll signals
+        that something material in the audit window changed.
     """
+    import hashlib
+    import datetime as _dt
     period = str(args.get("period") or "1d").strip().lower()
     if period not in {"1d", "7d", "30d", "90d"}:
         period = "1d"
@@ -2216,18 +2266,40 @@ def _session_audit(
     )
     if not ok:
         return ok, spend
-    # Pull recent jobs for receipt-status visibility.
+
+    # Time-window filtering. `since` / `until` parsed as ISO-8601; if either
+    # parses, jobs outside the window are excluded. Errors fall back to the
+    # whole-period view rather than returning 422 — auditors prefer "more
+    # data" to "0 data" when a timestamp is malformed.
+    def _parse_iso(value: Any) -> _dt.datetime | None:
+        if not value:
+            return None
+        try:
+            text = str(value).strip().replace("Z", "+00:00")
+            return _dt.datetime.fromisoformat(text)
+        except (TypeError, ValueError):
+            return None
+
+    since_dt = _parse_iso(args.get("since"))
+    until_dt = _parse_iso(args.get("until"))
+    job_limit = max(1, min(200, int(args.get("limit") or 100)))
+
     ok2, recent = _get(
         session,
         f"{base}/jobs",
         hdrs,
         timeout,
-        params={"limit": 50, "status": "complete"},
+        params={"limit": job_limit, "status": "complete"},
     )
-    receipts = []
+    receipts: list[dict] = []
     if ok2 and isinstance(recent, dict):
-        for job in (recent.get("jobs") or [])[:50]:
+        for job in (recent.get("jobs") or []):
             if not isinstance(job, dict):
+                continue
+            settled_dt = _parse_iso(job.get("settled_at"))
+            if since_dt is not None and settled_dt is not None and settled_dt < since_dt:
+                continue
+            if until_dt is not None and settled_dt is not None and settled_dt > until_dt:
                 continue
             receipts.append(
                 {
@@ -2237,6 +2309,8 @@ def _session_audit(
                     "charge_cents": job.get("caller_charge_cents")
                     or job.get("price_cents"),
                     "settled_at": job.get("settled_at"),
+                    "output_hash": job.get("output_hash"),
+                    "signed": bool(job.get("output_signature")),
                     "signature_endpoint": (
                         f"/jobs/{job.get('job_id')}/signature"
                         if job.get("output_signature")
@@ -2244,16 +2318,89 @@ def _session_audit(
                     ),
                 }
             )
-    return True, {
+
+    receipts.sort(
+        key=lambda r: (str(r.get("settled_at") or ""), str(r.get("job_id") or "")),
+        reverse=True,
+    )
+
+    # Aggregate digest: SHA-256 over a canonical newline-joined string
+    # (job_id|output_hash|signed). This is NOT a Merkle root — the receipts
+    # themselves are still individually signed by their agents — but it
+    # gives auditors a single fingerprint they can cache and detect
+    # tampering with without re-walking every receipt.
+    digest_lines = [
+        f"{r.get('job_id')}|{r.get('output_hash') or ''}|{1 if r.get('signed') else 0}"
+        for r in receipts
+    ]
+    receipts_digest = hashlib.sha256(
+        "\n".join(digest_lines).encode("utf-8")
+    ).hexdigest() if digest_lines else None
+
+    aggregates = {
+        "receipts_total": len(receipts),
+        "receipts_signed": sum(1 for r in receipts if r.get("signed")),
+        "receipts_unsigned": sum(1 for r in receipts if not r.get("signed")),
+        "distinct_agents": len(
+            {r.get("agent_id") for r in receipts if r.get("agent_id")}
+        ),
+        "total_settled_cents": sum(int(r.get("charge_cents") or 0) for r in receipts),
+        "earliest_settled_at": receipts[-1].get("settled_at") if receipts else None,
+        "latest_settled_at": receipts[0].get("settled_at") if receipts else None,
+    }
+
+    response: dict[str, Any] = {
         "period": period,
+        "since": since_dt.isoformat() if since_dt else None,
+        "until": until_dt.isoformat() if until_dt else None,
         "spend": spend,
         "recent_signed_receipts": receipts,
-        "audit_signature_method": "per-job Ed25519 (call aztea_job(action=verify, job_id=...) to verify each)",
-        "next_step": (
-            "For an authoritative audit log, verify each receipt individually. "
-            "v2 will return a session-level signed manifest."
-        ),
+        "receipts_aggregate": aggregates,
+        "receipts_digest": receipts_digest,
+        "receipts_digest_method": "sha256(job_id|output_hash|signed) joined by newline",
+        "audit_signature_method": "per-job Ed25519 + did:web (call aztea_job(action=verify) to confirm any single receipt)",
     }
+
+    # Optional bulk verification — auditors who want the "I verified every
+    # receipt in this window" assurance pass verify_all=true. We stop on
+    # first failure to surface the bad receipt directly.
+    if bool(args.get("verify_all")):
+        verified = 0
+        failed = 0
+        first_failure: dict | None = None
+        for r in receipts:
+            if not r.get("signed"):
+                continue
+            ok_v, vbody = _get(
+                session,
+                f"{base}/jobs/{r.get('job_id')}/signature",
+                hdrs,
+                timeout,
+            )
+            if ok_v and bool(vbody.get("verified")):
+                verified += 1
+            else:
+                failed += 1
+                if first_failure is None:
+                    first_failure = {
+                        "job_id": r.get("job_id"),
+                        "agent_id": r.get("agent_id"),
+                        "verification_error": vbody.get("verification_error")
+                        or vbody.get("error"),
+                    }
+        response["bulk_verification"] = {
+            "verified": verified,
+            "failed": failed,
+            "first_failure": first_failure,
+            "verdict": "all_verified" if failed == 0 and verified > 0 else (
+                "no_signed_receipts" if verified == 0 and failed == 0 else "verification_failed"
+            ),
+        }
+    else:
+        response["bulk_verification_hint"] = (
+            "Pass verify_all=true to bulk-verify every signed receipt in this window."
+        )
+    return True, response
 
 
 def _list_pipelines(
@@ -2765,7 +2912,14 @@ def _cancel_job(
 def _follow_job(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
-    """Poll a job until terminal, then return the final aztea_job_status result."""
+    """Poll a job until terminal, then return the final aztea_job_status result.
+
+    Uses an adaptive cadence: 1s polls for the first 10s (so a fast job
+    completes within one round-trip of the server), 2s polls for the next
+    30s, then 4s polls afterward. The previous fixed 4s cadence meant a
+    sub-second job still took 4s to surface its terminal status — and
+    misleadingly returned "still running" right after the worker finished.
+    """
     import time as _time
 
     job_id = str(args.get("job_id") or "").strip()
@@ -2775,9 +2929,10 @@ def _follow_job(
         int(args.get("timeout_seconds") or args.get("max_wait_seconds") or 180),
         300,
     )
-    poll_interval = 4  # seconds between polls
-    deadline = _time.monotonic() + timeout_secs
+    started = _time.monotonic()
+    deadline = started + timeout_secs
     _TERMINAL = {"complete", "failed", "cancelled"}
+    poll_count = 0
 
     while True:
         ok, result = _job_status(session, base, hdrs, timeout, {"job_id": job_id})
@@ -2785,6 +2940,14 @@ def _follow_job(
             return False, result
         status = str(result.get("status") or "")
         if status in _TERMINAL:
+            elapsed = _time.monotonic() - started
+            result.setdefault(
+                "follow_metadata",
+                {
+                    "polls_until_terminal": poll_count + 1,
+                    "elapsed_seconds": round(elapsed, 2),
+                },
+            )
             return True, result
         remaining = deadline - _time.monotonic()
         if remaining <= 0:
@@ -2793,7 +2956,17 @@ def _follow_job(
                 f"Timeout after {timeout_secs}s — job still running. Call aztea_follow_job again or use aztea_job_status to poll manually.",
             )
             return True, result
-        _time.sleep(min(poll_interval, remaining))
+        elapsed = _time.monotonic() - started
+        # Adaptive cadence: tight at the start (most jobs settle in a few s),
+        # loosens over time so long-runners don't burn HTTP roundtrips.
+        if elapsed < 10:
+            interval = 1.0
+        elif elapsed < 40:
+            interval = 2.0
+        else:
+            interval = 4.0
+        _time.sleep(min(interval, remaining))
+        poll_count += 1
 
 
 def _clarify(
@@ -3034,10 +3207,24 @@ def _discover(
             )
         result["results"] = compact
         result["count"] = len(compact)
-        if intent and not compact:
-            result["note"] = (
-                f"No high-confidence {intent.replace('_', ' ')} agent was returned by discovery. "
-                "Use aztea_search with a direct slug query or try a narrower task description; no low-relevance toy matches were returned."
+        if not compact:
+            # Empty-result mode — same message whether the registry returned
+            # zero rows or the relevance floor culled all of them. Better to
+            # tell the caller "no agent matches" than to surface 4 mediocre
+            # distractors and let them waste a charge on the wrong agent.
+            if intent:
+                result["note"] = (
+                    f"No high-confidence {intent.replace('_', ' ')} agent was returned by discovery. "
+                    "Try a narrower task description, or call aztea_workflow(action='list_agents') to browse the full catalog."
+                )
+            else:
+                result["note"] = (
+                    "No agent in the live catalog matches this query strongly enough. "
+                    "Try a different phrasing, a direct slug, or aztea_workflow(action='list_agents') to browse all 9 live agents."
+                )
+            result["next_step"] = (
+                "If you believe an agent should match, paste the exact slug from "
+                "aztea_workflow(action='list_agents') and call aztea_describe directly."
             )
     return ok, result
 
@@ -3064,17 +3251,50 @@ def _get_examples(
                     "output": raw.get("output"),
                 }
             )
+
+    # Privacy-aware aggregate fallback. Sensitive agents (Security category,
+    # explicit `examples_sensitive` flag, or hardcoded sensitive list) have
+    # `output_examples` deliberately empty by policy. The eval scored this
+    # surface D+ because there was nothing to show — even though the same
+    # agent had been called 911 times that day. Aggregate stats give an
+    # auditing buyer a non-empty trust signal without leaking the inputs of
+    # other callers (which would be the whole reason to hire that agent).
+    privacy_gated = bool(agent.get("examples_sensitive")) or str(
+        agent.get("category") or ""
+    ).strip().lower() == "security"
+    aggregates = {
+        "total_call_count": agent.get("call_count"),
+        "success_rate": agent.get("success_rate"),
+        "avg_latency_ms": agent.get("avg_latency_ms"),
+        "trust_score": agent.get("trust_score"),
+        "stability_tier": agent.get("stability_tier"),
+        "category": agent.get("category"),
+        "tags": list(agent.get("tags") or []),
+    }
+    note: str
+    if examples:
+        note = (
+            "These are real inputs and outputs from past jobs. "
+            "Review them to verify the agent's quality before hiring."
+        )
+    elif privacy_gated:
+        note = (
+            "This agent is in a privacy-sensitive category — caller inputs "
+            "and outputs are never published as work examples. The "
+            "`reputation_summary` block below shows aggregate quality "
+            "signals computed from real traffic instead."
+        )
+    else:
+        note = "No public work examples are available for this agent yet."
+
     return True, {
         "agent_id": agent_id,
         "name": agent.get("name"),
         "example_count": len(agent.get("output_examples") or []),
         "examples": examples,
-        "note": (
-            "These are real inputs and outputs from past jobs. "
-            "Review them to verify the agent's quality before hiring."
-        )
-        if examples
-        else "No public work examples are available for this agent yet.",
+        "privacy_gated": privacy_gated,
+        "reputation_summary": aggregates,
+        "note": note,
     }
 
 

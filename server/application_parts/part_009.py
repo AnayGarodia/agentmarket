@@ -129,7 +129,11 @@ def _batch_parallel_trace(
     terminal_count = counts["complete"] + counts["failed"]
 
     # Surface worker-pool depth so callers can diagnose stuck batches:
-    # "12 concurrent slots, 8 queued ahead of you".
+    # "12 concurrent slots, 8 queued ahead of you". The numbers below come
+    # from a live snapshot of the persistent pool — historically this read
+    # a tick-cached `last_summary` that was already stale by the time the
+    # status response built, which is why callers saw `max_workers`
+    # oscillate 1 → 11 → 1 → 24 across successive polls.
     worker_pool: dict | None = None
     if counts["pending"] > 0 or counts["running"] > 0:
         try:
@@ -141,17 +145,33 @@ def _batch_parallel_trace(
             if isinstance(_BUILTIN_WORKER_STATE, dict)
             else {}
         )
+        # Live snapshot of pool occupancy. Falls back gracefully if the
+        # helper is unavailable (e.g. mid-deploy when part_004 hasn't loaded
+        # yet); callers still get sane numbers from worker_state_summary.
+        try:
+            from server.application_parts.part_004 import (
+                _builtin_worker_inflight_snapshot,
+            )
+            in_flight_now, capacity_remaining_now = _builtin_worker_inflight_snapshot()
+        except Exception:
+            in_flight_now = None
+            capacity_remaining_now = None
         worker_pool = {
             "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
             "interval_seconds": _BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
             "platform_queue_depth": queue_total,
             "this_batch_pending": counts["pending"],
             "this_batch_running": counts["running"],
+            "in_flight_global": in_flight_now,
+            "capacity_remaining": capacity_remaining_now,
             "last_worker_summary": worker_state_summary,
             "hint": (
-                "Jobs run on a shared worker pool. If platform_queue_depth is "
-                "much larger than this_batch_pending, other batches are ahead "
-                "of yours."
+                "Jobs run on a shared worker pool with persistent threads. "
+                "platform_queue_depth = total pending across all callers; "
+                "capacity_remaining = free worker slots right now. If "
+                "platform_queue_depth > capacity_remaining + in_flight, "
+                "your jobs are queued behind other callers and will start "
+                "as soon as a slot frees."
             ),
         }
     return {
