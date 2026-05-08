@@ -519,21 +519,32 @@ def update_call_stats(
     a read-modify-write race.
     """
     with _conn() as conn:
-        conn.execute(
-            """
-            UPDATE agents
-            SET total_calls    = total_calls + 1,
-                avg_latency_ms = (avg_latency_ms * total_calls + %s) / (total_calls + 1),
-                successful_calls = successful_calls + %s
-            WHERE agent_id = %s
-            """,
-            (latency_ms, 1 if success else 0, agent_id),
-        )
+        # Only update avg_latency_ms for successful calls. Failed/timed-out
+        # calls carry artificially high latencies (e.g. full timeout duration)
+        # that inflate the displayed average by orders of magnitude.
+        if success:
+            conn.execute(
+                """
+                UPDATE agents
+                SET total_calls      = total_calls + 1,
+                    avg_latency_ms   = (avg_latency_ms * successful_calls + %s) / (successful_calls + 1),
+                    successful_calls = successful_calls + 1
+                WHERE agent_id = %s
+                """,
+                (latency_ms, agent_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE agents SET total_calls = total_calls + 1 WHERE agent_id = %s",
+                (agent_id,),
+            )
         row = conn.execute(
             "SELECT price_per_call_cents, price_per_call_usd, call_latency_ring FROM agents WHERE agent_id = %s",
             (agent_id,),
         ).fetchone()
         if row is None:
+            return
+        if not success:
             return
         effective_price_cents = price_cents
         if effective_price_cents is None:

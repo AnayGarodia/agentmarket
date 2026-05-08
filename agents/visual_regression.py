@@ -39,6 +39,10 @@ import requests
 from core.url_security import validate_outbound_url
 
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
+# Allow up to N SSRF-validated HTTP redirects (e.g. CDN images redirect to S3).
+# Each Location header is re-validated by validate_outbound_url before following,
+# so SSRF via open redirects is blocked even when the initial host is trusted.
+_MAX_REDIRECTS = 5
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -66,31 +70,40 @@ def _load_image_bytes(source: str, field_name: str) -> bytes:
         if len(data) > _MAX_IMAGE_BYTES:
             raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
         return data
-    safe_url = validate_outbound_url(source, field_name)
-    with requests.get(
-        safe_url,
-        timeout=10,
-        headers={"User-Agent": "aztea-visual-regression/1.0"},
-        allow_redirects=False,
-        stream=True,
-    ) as response:
-        if 300 <= response.status_code < 400:
-            raise ValueError(f"{field_name} redirects are not allowed.")
-        response.raise_for_status()
-        # Reject by Content-Length up front when present.
-        declared = response.headers.get("Content-Length")
-        if declared and declared.isdigit() and int(declared) > _MAX_IMAGE_BYTES:
-            raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
-        # Stream with a running cap so a server lying about Content-Length
-        # cannot OOM us by sending more bytes than we asked for.
-        buf = bytearray()
-        for chunk in response.iter_content(chunk_size=64 * 1024):
-            if not chunk:
+    url = validate_outbound_url(source, field_name)
+    # Follow redirects manually, re-validating each Location with the SSRF
+    # guard. This allows legitimate CDN/S3 redirect chains while blocking
+    # redirects that point to private IPs or loopback addresses.
+    for _ in range(_MAX_REDIRECTS + 1):
+        with requests.get(
+            url,
+            timeout=10,
+            headers={"User-Agent": "aztea-visual-regression/1.0"},
+            allow_redirects=False,
+            stream=True,
+        ) as response:
+            if 300 <= response.status_code < 400:
+                location = str(response.headers.get("Location") or "").strip()
+                if not location:
+                    raise ValueError(f"{field_name} redirect has no Location header.")
+                url = validate_outbound_url(location, field_name)
                 continue
-            buf.extend(chunk)
-            if len(buf) > _MAX_IMAGE_BYTES:
+            response.raise_for_status()
+            # Reject by Content-Length up front when present.
+            declared = response.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > _MAX_IMAGE_BYTES:
                 raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
-        return bytes(buf)
+            # Stream with a running cap so a server lying about Content-Length
+            # cannot OOM us by sending more bytes than we asked for.
+            buf = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                if len(buf) > _MAX_IMAGE_BYTES:
+                    raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
+            return bytes(buf)
+    raise ValueError(f"{field_name} exceeded {_MAX_REDIRECTS} redirects.")
 
 
 def _image_source(payload: dict[str, Any], prefix: str) -> str:
