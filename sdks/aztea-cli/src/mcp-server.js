@@ -66,11 +66,12 @@ const LAZY_CALL_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      slug: { type: 'string', description: 'Tool slug returned by aztea_search.' },
-      arguments: { type: 'object', description: 'Arguments matching the schema from aztea_describe.' },
+      slug: { type: 'string', description: 'Tool slug returned by aztea_search. Accepts both canonical snake_case slugs ("cve_lookup_agent") and display names from search results ("CVE Lookup Agent") — the server normalizes both.' },
+      arguments: { type: 'object', description: 'Arguments matching the schema from aztea_describe. The "input" key is also accepted as an alias for parity with hire_batch.' },
+      input: { type: 'object', description: 'Alias for arguments. Use whichever you prefer.' },
       output_format: { type: 'string', enum: ['json', 'markdown', 'github_pr_comment', 'slack_blocks', 'text'], description: 'Optional. Render the result in a specific shape. The canonical JSON `output` stays intact; the rendered string is added as `rendered_output`.' },
     },
-    required: ['slug', 'arguments'],
+    required: ['slug'],
   },
 }
 
@@ -221,7 +222,8 @@ const AZTEA_WORKFLOW_TOOL = {
   description:
     'Marketplace workflow rails: async hires, parallel batch hires, compare, pipelines, recipes. Pick action:\n' +
     '  • hire_async(slug, input, ...) — fire-and-poll an agent for long jobs.\n' +
-    '  • hire_batch(intent, max_total_cents, jobs[]) — hire independent specialists in parallel with escrow per job.\n' +
+    '  • hire_batch(intent, max_total_cents, jobs[]) — hire independent specialists in parallel with escrow per job. ' +
+    'Each job in jobs[] is {slug|agent_id, input, ...}. The "input" key is canonical; "input_payload" and "arguments" are also accepted as aliases for compatibility with aztea_call. Bad slugs reject only that job; the rest of the batch proceeds.\n' +
     '  • batch_status(batch_id) — progress, settlement, and receipt state for a parallel hire.\n' +
     '  • run_pipeline(pipeline_id, input_payload, ...) — execute a saved pipeline.\n' +
     '  • pipeline_status(run_id) — pipeline run progress.\n' +
@@ -275,6 +277,15 @@ const SERVER_INSTRUCTIONS = [
 const SESSION_STATE = {
   budgetCents: null,
   spentCents: 0,
+  // P3 fix: the eval found that the first ~14¢ of session spending wasn't
+  // reflected in session_summary. Root cause: `spentCents` is a local counter
+  // that only increments through `accumulate()`. Calls that bypassed it (or
+  // happened before the budget was set) were lost. Snapshot the server-side
+  // "today" total when the session starts, so session_spent can be derived
+  // as `(server_today_now - serverTodaySnapshotCents) + spentCents` if the
+  // local counter undercounts.
+  serverTodaySnapshotCents: null,
+  startedAt: new Date().toISOString(),
 }
 
 const META_TOOL_NAMES = new Set([
@@ -443,8 +454,17 @@ async function resolveAgentId(agentIdOrSlug) {
   const val = String(agentIdOrSlug || '').trim()
   if (!val) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) return { ok: true, id: val }
-  // Local catalog hit — already exact match by slug.
-  const entry = _catalog.find(item => item.slug === val)
+  // P1: accept display names ("CVE Lookup Agent") in addition to canonical
+  // slugs. The eval found that registry_search results sometimes contain
+  // human-readable names that broke direct calls. Normalize once and match
+  // both forms against the catalog.
+  const valNormalized = canonicalSlug(val)
+  // Local catalog hit — exact slug, normalized slug, or display-name slug.
+  const entry = _catalog.find(item =>
+    item.slug === val
+    || item.slug === valNormalized
+    || canonicalSlug(item.name) === valNormalized
+  )
   if (entry && entry.agent_id) return { ok: true, id: entry.agent_id }
   // STRICT exact-slug match only. Previous version took results[0] from a
   // semantic search, which silently routed money to a similarly-named agent
@@ -643,8 +663,11 @@ function backendSearchItem(item) {
     ? agent.input_schema
     : {}
   const hint = schemaInputHint(inputSchema)
+  // P1 fix: agent.name is a human-readable display name with spaces ("CVE Lookup Agent")
+  // and is uncallable. When the registry returns no explicit slug column, derive the
+  // canonical snake_case slug from the name so search results are always callable.
   return {
-    slug: agent.slug || agent.agent_slug || agent.name,
+    slug: agent.slug || agent.agent_slug || canonicalSlug(agent.name),
     kind: agent.kind || 'registry_agent',
     agent_id: agent.agent_id,
     name: agent.name,
@@ -789,11 +812,28 @@ async function sessionSummary() {
     walletBalance(),
     parseApiResponse(await getJson('/wallets/spend-summary?period=1d')),
   ])
+  // P3 fix: reconcile the local session counter against the server-side
+  // "today" total. If we see the server has more spend than our local counter
+  // recorded since session start, take the larger number — never undercount.
+  let sessionSpent = SESSION_STATE.spentCents
+  if (spend.ok && typeof spend.body.total_cents === 'number') {
+    if (SESSION_STATE.serverTodaySnapshotCents == null) {
+      SESSION_STATE.serverTodaySnapshotCents = spend.body.total_cents - SESSION_STATE.spentCents
+      if (SESSION_STATE.serverTodaySnapshotCents < 0) SESSION_STATE.serverTodaySnapshotCents = 0
+    }
+    const reconciled = Math.max(0, spend.body.total_cents - SESSION_STATE.serverTodaySnapshotCents)
+    if (reconciled > sessionSpent) {
+      // Server saw spending we missed locally — sync up.
+      SESSION_STATE.spentCents = reconciled
+      sessionSpent = reconciled
+    }
+  }
   const result = {
-    session_spent_cents: SESSION_STATE.spentCents,
-    session_spent_usd: Number((SESSION_STATE.spentCents / 100).toFixed(4)),
+    session_spent_cents: sessionSpent,
+    session_spent_usd: Number((sessionSpent / 100).toFixed(4)),
     session_budget_cents: SESSION_STATE.budgetCents,
     session_budget_usd: SESSION_STATE.budgetCents == null ? null : Number((SESSION_STATE.budgetCents / 100).toFixed(4)),
+    session_started_at: SESSION_STATE.startedAt,
   }
   if (bal.ok) {
     result.balance_cents = bal.body.balance_cents
@@ -1039,27 +1079,72 @@ async function getExamples(args) {
   }
 }
 
+// Pull a job's input payload from any of the accepted aliases. The eval
+// flagged that hire_batch silently rejected jobs that used `arguments` (the
+// key aztea_call uses) instead of `input`. Accept all three forms here so
+// callers don't have to discover the difference through schema errors.
+function batchJobInput(spec) {
+  if (spec == null) return null
+  if (spec.input_payload != null) return spec.input_payload
+  if (spec.input != null) return spec.input
+  if (spec.arguments != null) return spec.arguments
+  return {}
+}
+
 async function hireBatch(args) {
   const jobs = args.jobs
   if (!Array.isArray(jobs) || !jobs.length) return { ok: false, body: { error: 'INVALID_INPUT', message: 'jobs must be a non-empty array.' } }
   if (jobs.length > 250) return { ok: false, body: { error: 'INVALID_INPUT', message: 'Batch size is limited to 250 jobs.' } }
   const resolvedIds = await Promise.all(jobs.map(spec => resolveAgentId(spec.agent_id || spec.slug || '')))
-  for (let i = 0; i < resolvedIds.length; i++) {
-    if (!resolvedIds[i].ok) return { ok: false, body: { ...resolvedIds[i].body, job_index: i } }
-  }
+  // P1 fix: treat unresolved slugs as per-job rejections, not a whole-batch
+  // 502. Previously a single typo killed the entire submission and refunded
+  // nothing was charged — but the caller had to retry from scratch. Now bad
+  // slugs land in invalid_jobs and the rest of the batch proceeds.
+  const localInvalid = []
+  const validIndices = []
   for (let i = 0; i < jobs.length; i++) {
-    const input = jobs[i].input_payload == null ? (jobs[i].input == null ? {} : jobs[i].input) : jobs[i].input_payload
-    if (typeof input !== 'object' || Array.isArray(input)) {
-      return { ok: false, body: { error: 'INVALID_INPUT', message: 'jobs[].input/input_payload must be an object.', job_index: i } }
+    if (!resolvedIds[i].ok) {
+      localInvalid.push({
+        index: i,
+        agent_id: jobs[i] && (jobs[i].agent_id || jobs[i].slug || null),
+        status_code: 404,
+        detail: { ...resolvedIds[i].body },
+      })
+      continue
+    }
+    const input = batchJobInput(jobs[i])
+    if (typeof input !== 'object' || Array.isArray(input) || input === null) {
+      localInvalid.push({
+        index: i,
+        agent_id: resolvedIds[i].id,
+        status_code: 422,
+        detail: {
+          error: 'INVALID_INPUT',
+          message: 'jobs[].input must be an object. Accepted keys: input, input_payload, arguments.',
+        },
+      })
+      continue
+    }
+    validIndices.push(i)
+  }
+  if (!validIndices.length) {
+    return {
+      ok: false,
+      body: {
+        error: 'request.input_schema_violation',
+        message: 'No valid jobs in batch; no charge was applied.',
+        invalid_job_count: localInvalid.length,
+        invalid_jobs: localInvalid,
+      },
     }
   }
   const body = {
-    jobs: jobs.map((spec, i) => ({
+    jobs: validIndices.map(i => ({
       agent_id: resolvedIds[i].id,
-      input_payload: spec.input_payload == null ? (spec.input == null ? {} : spec.input) : spec.input_payload,
-      ...(spec.budget_cents != null ? { budget_cents: Number(spec.budget_cents) } : {}),
-      ...(spec.max_price_cents != null ? { max_price_cents: Number(spec.max_price_cents) } : {}),
-      ...(spec.private_task != null ? { private_task: Boolean(spec.private_task) } : {}),
+      input_payload: batchJobInput(jobs[i]),
+      ...(jobs[i].budget_cents != null ? { budget_cents: Number(jobs[i].budget_cents) } : {}),
+      ...(jobs[i].max_price_cents != null ? { max_price_cents: Number(jobs[i].max_price_cents) } : {}),
+      ...(jobs[i].private_task != null ? { private_task: Boolean(jobs[i].private_task) } : {}),
     })),
   }
   const intent = String(args.intent || '').trim()
@@ -1070,7 +1155,22 @@ async function hireBatch(args) {
   if (res.ok) {
     accumulate(res.body.total_price_cents)
     if (!res.body.job_ids) res.body.job_ids = (res.body.jobs || []).map(j => j && j.job_id).filter(Boolean)
-    if (!res.body.note) res.body.note = `Parallel marketplace hire submitted: ${jobs.length} specialists. Poll batch_id with aztea_batch_status.`
+    // Merge locally-detected invalid jobs (bad slug, wrong shape) with any the
+    // backend reported (schema violation). Re-index server invalid_jobs so the
+    // caller sees the original job index from their submission.
+    const serverInvalid = Array.isArray(res.body.invalid_jobs) ? res.body.invalid_jobs : []
+    const remappedServerInvalid = serverInvalid.map(item => {
+      const localIdx = typeof item.index === 'number' ? item.index : -1
+      const originalIdx = (localIdx >= 0 && localIdx < validIndices.length) ? validIndices[localIdx] : localIdx
+      return { ...item, index: originalIdx }
+    })
+    const allInvalid = localInvalid.concat(remappedServerInvalid)
+    if (allInvalid.length) {
+      res.body.invalid_job_count = allInvalid.length
+      res.body.invalid_jobs = allInvalid
+    }
+    res.body.submitted_count = jobs.length
+    if (!res.body.note) res.body.note = `Parallel marketplace hire submitted: ${validIndices.length} of ${jobs.length} specialists${allInvalid.length ? ` (${allInvalid.length} rejected)` : ''}. Poll batch_id with aztea_batch_status.`
   }
   return res
 }
@@ -1631,18 +1731,28 @@ async function callTool(name, args) {
     return { ok, payload: res.body }
   }
   if (name === LAZY_CALL_TOOL.name) {
-    const slug = String(args.slug || '').trim()
-    if (!slug) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'slug is required.' } }
-    if (LAZY_TOOL_NAMES.has(slug)) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'Use the lazy MCP tools directly, not via aztea_call.' } }
-    if (args.arguments == null || typeof args.arguments !== 'object' || Array.isArray(args.arguments)) {
-      return { ok: false, payload: { error: 'INVALID_INPUT', message: 'arguments must be an object.' } }
+    const rawSlug = String(args.slug || '').trim()
+    if (!rawSlug) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'slug is required.' } }
+    if (LAZY_TOOL_NAMES.has(rawSlug)) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'Use the lazy MCP tools directly, not via aztea_call.' } }
+    // Accept both arguments (canonical) and input (alias) — eval found that
+    // hire_batch uses 'input' while aztea_call uses 'arguments', and the
+    // mismatch broke first-time callers. Normalize here so either works.
+    const argObject = (args.arguments != null && typeof args.arguments === 'object' && !Array.isArray(args.arguments))
+      ? args.arguments
+      : ((args.input != null && typeof args.input === 'object' && !Array.isArray(args.input)) ? args.input : null)
+    if (!argObject) {
+      return { ok: false, payload: { error: 'INVALID_INPUT', message: 'arguments must be an object (input is also accepted as an alias).' } }
     }
     if (!_catalog.length) await refreshCatalog()
-    const entry = _catalog.find(item => item.slug === slug)
+    // P1 fix: accept display names ("CVE Lookup Agent") and canonical slugs
+    // ("cve_lookup_agent") interchangeably. The eval found that registry_search
+    // can return display names with spaces; this normalization closes the loop.
+    const slug = canonicalSlug(rawSlug) || rawSlug
+    const entry = _catalog.find(item => item.slug === slug || item.slug === rawSlug || canonicalSlug(item.name) === slug)
     // Forward `output_format` from the lazy aztea_call wrapper into the
     // registry call body so the renderer attaches `rendered_output`. Without
     // this merge the field is silently dropped.
-    const callArgs = { ...args.arguments }
+    const callArgs = { ...argObject }
     if (typeof args.output_format === 'string' && args.output_format.trim() && !('output_format' in callArgs)) {
       callArgs.output_format = args.output_format.trim()
     }
@@ -1677,7 +1787,7 @@ async function callTool(name, args) {
       return { ok: parsed.ok, payload: parsed.body }
     }
     if (META_TOOL_NAMES.has(entry.slug)) {
-      const res = await callMetaTool(entry.slug, args.arguments)
+      const res = await callMetaTool(entry.slug, argObject)
       return { ok: res.ok, payload: res.body }
     }
     if (!entry.agent_id) return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Tool '${slug}' has no agent_id.` } }

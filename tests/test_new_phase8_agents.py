@@ -50,14 +50,30 @@ def test_shell_executor_allows_python_dash_c_with_quoted_semicolon() -> None:
 # ---------- secret_scanner ----------------------------------------------
 
 def test_secret_scanner_finds_aws_key() -> None:
+    # AKIAIOSFODNN7EXAMPLE is the documented AWS example credential. The
+    # scanner detects the AWS access key shape but downgrades severity to
+    # `info` and tags the rule_id with `-known-example` so callers can still
+    # see the finding without a critical false positive (the dominant issue
+    # in the platform eval).
     out = secret_scanner.run({"content": "AWS_KEY=AKIAIOSFODNN7EXAMPLE\n", "filename": ".env"})
     assert out["total_findings"] >= 1
     rule_ids = [f["rule_id"] for f in out["findings"]]
-    assert "aws-access-key-id" in rule_ids
-    assert out["findings_by_severity"]["critical"] >= 1
+    assert "aws-access-key-id-known-example" in rule_ids
+    assert out["findings"][0]["is_known_example"] is True
+    assert out["findings_by_severity"]["info"] >= 1
     # never echo the full secret back
     for f in out["findings"]:
         assert "AKIAIOSFODNN7EXAMPLE" not in f["redacted_preview"]
+
+
+def test_secret_scanner_real_aws_key_still_critical() -> None:
+    # A non-example AKID with the same shape must still be flagged critical.
+    out = secret_scanner.run({"content": "AWS_KEY=AKIA1234567890ABCDEF\n", "filename": ".env"})
+    assert out["total_findings"] >= 1
+    rule_ids = [f["rule_id"] for f in out["findings"]]
+    assert "aws-access-key-id" in rule_ids
+    assert not out["findings"][0].get("is_known_example", False)
+    assert out["findings_by_severity"]["critical"] >= 1
 
 
 def test_secret_scanner_clean_input() -> None:

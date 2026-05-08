@@ -307,7 +307,14 @@ def run_judgment(dispute_id: str) -> dict:
         }
 
     primary_chain = list(DEFAULT_CHAIN)
-    primary = _judge_once(primary_chain, context)
+    try:
+        primary = _judge_once(primary_chain, context)
+    except Exception:
+        # LLM call failed (no provider configured, network error, rate limit).
+        # Reset status to 'pending' so the next sweeper pass retries instead of
+        # leaving the dispute stuck at 'judging' forever (P0 bug from the eval).
+        disputes.set_dispute_status(dispute_id, "pending")
+        raise
     disputes.record_judgment(
         dispute_id,
         judge_kind="llm_primary",
@@ -335,16 +342,37 @@ def run_judgment(dispute_id: str) -> dict:
         # Only one provider available — keep the original chain order so the
         # call still resolves, but vary the prompt+temperature.
         secondary_chain = list(DEFAULT_CHAIN)
-    secondary = _judge_once(
-        secondary_chain,
-        context,
-        system_prompt=_SYSTEM_PROMPT_DEVILS_ADVOCATE,
+    try:
+        secondary = _judge_once(
+            secondary_chain,
+            context,
+            system_prompt=_SYSTEM_PROMPT_DEVILS_ADVOCATE,
         # Slight temperature lift on the second pass so the verdict isn't a
         # near-deterministic re-roll of the same logits when we're forced
         # to use the same model. Keeps the verdict space the same JSON
         # shape but introduces meaningful variance.
         temperature=0.4 if fallback_to_same_model else 0.1,
-    )
+        )
+    except Exception:
+        # Secondary LLM failed after primary already recorded. Promote primary
+        # to consensus via the deterministic tiebreaker so we don't strand the
+        # dispute at 'judging' with one orphan judgment.
+        tiebreaker = _local_dispute_fallback(context)
+        tiebreaker_verdict = tiebreaker["verdict"]
+        disputes.record_judgment(
+            dispute_id,
+            judge_kind="llm_secondary",
+            verdict=tiebreaker_verdict,
+            reasoning="Secondary LLM unavailable; deterministic fallback used: "
+            + tiebreaker["reasoning"],
+            model="fallback",
+        )
+        disputes.set_dispute_consensus(dispute_id, tiebreaker_verdict)
+        return {
+            "status": "consensus",
+            "outcome": tiebreaker_verdict,
+            "judgments": disputes.get_judgments(dispute_id),
+        }
     disputes.record_judgment(
         dispute_id,
         judge_kind="llm_secondary",

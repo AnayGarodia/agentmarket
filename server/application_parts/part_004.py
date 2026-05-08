@@ -691,7 +691,12 @@ def _run_pending_dispute_judgments(
     limit: int = 100, actor_owner_id: str = "system:dispute-judge"
 ) -> dict:
     capped = min(max(1, int(limit)), 500)
+    # Pick up both 'pending' (never judged) and 'judging' (started but failed —
+    # e.g., LLM exception left status at 'judging' with no recorded judgments).
+    # Without this retry, a single transient LLM failure would strand disputes
+    # forever (the eval-flagged P0 bug).
     pending = disputes.list_disputes(status="pending", limit=capped)
+    pending += disputes.list_disputes(status="judging", limit=capped)
     judged_count = 0
     resolved_count = 0
     tied_count = 0

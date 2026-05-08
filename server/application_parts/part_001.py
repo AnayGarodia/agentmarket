@@ -852,6 +852,13 @@ async def security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    # P3 fix: HSTS. The DNS Inspector flagged aztea.ai as missing the
+    # Strict-Transport-Security header. Add it here so it's enforced
+    # consistently regardless of whether traffic comes through Caddy or hits
+    # uvicorn directly. 1 year, all subdomains, eligible for browser preload.
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains; preload"
+    )
     return response
 
 

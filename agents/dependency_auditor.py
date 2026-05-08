@@ -88,18 +88,42 @@ def _parse_pypi_manifest(manifest: str) -> list[tuple[str, str]]:
 
 
 def _parse_npm_manifest(manifest: str) -> list[tuple[str, str]]:
-    try:
-        data = json.loads(manifest)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, dict):
-        return []
-    packages = []
-    for key in ("dependencies", "devDependencies", "peerDependencies"):
-        for name, ver_spec in (data.get(key) or {}).items():
-            ver = re.sub(r"[^0-9\.]", "", str(ver_spec)).strip(".") if ver_spec else ""
-            packages.append((name, ver))
-    return packages
+    # P2 fix: accept several common snippet shapes in addition to a full
+    # package.json. The eval flagged that the agent silently failed on
+    # `"dependencies": {"express": "4.17.1", ...}` — a copy-paste from a
+    # tutorial. Try the strictest form first, then progressively wrap looser
+    # inputs into a parseable JSON object before giving up.
+    text = manifest.strip()
+    candidates = [text]
+    # `"dependencies": { ... }` → wrap with `{}` to make it a valid object.
+    if text and not text.startswith("{") and '"dependencies"' in text:
+        candidates.append("{" + text.rstrip(",") + "}")
+    # `{"express": "4.17.1", ...}` → treat as a bare deps dict.
+    if text.startswith("{") and '"dependencies"' not in text and '"name"' not in text:
+        candidates.append('{"dependencies": ' + text + "}")
+
+    def _extract(data: Any) -> list[tuple[str, str]]:
+        if not isinstance(data, dict):
+            return []
+        out = []
+        for key in ("dependencies", "devDependencies", "peerDependencies"):
+            for name, ver_spec in (data.get(key) or {}).items():
+                ver = re.sub(r"[^0-9\.]", "", str(ver_spec)).strip(".") if ver_spec else ""
+                out.append((name, ver))
+        return out
+
+    # Try each candidate in order; pick the first that yields packages so a
+    # bare `{"express": "4.17.1"}` falls through to the wrapped form when the
+    # raw parse produces an empty deps tree.
+    for cand in candidates:
+        try:
+            parsed = json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+        packages = _extract(parsed)
+        if packages:
+            return packages
+    return []
 
 
 def _cvss_to_severity(score: float) -> str:
@@ -345,9 +369,28 @@ def run(payload: dict) -> dict:
 
     raw_packages = raw_packages[:_MAX_PACKAGES]
     if not raw_packages:
+        # P2: clear, format-specific guidance. Tells the caller exactly what
+        # shape is accepted instead of a generic "no dependencies" message.
         return _err(
             "dependency_auditor.invalid_manifest",
-            "No dependencies found. Pass a valid package.json, requirements.txt, or pyproject-style dependency list.",
+            "No dependencies found in manifest.",
+            details={
+                "ecosystem": ecosystem,
+                "expected_formats": (
+                    {
+                        "npm": [
+                            "Full package.json: {\"dependencies\": {\"express\": \"4.17.1\"}, ...}",
+                            "Snippet: \"dependencies\": {\"express\": \"4.17.1\"}",
+                            "Bare deps dict: {\"express\": \"4.17.1\"}",
+                        ],
+                        "pypi": [
+                            "requirements.txt: one package==version per line",
+                            "pyproject.toml [tool.poetry.dependencies] block (paste the full block)",
+                        ],
+                    }
+                ).get(ecosystem, ["See npm/pypi formats above."]),
+                "received_first_120_chars": manifest[:120],
+            },
         )
 
     # Fetch the latest published version + license for both ecosystems whenever
