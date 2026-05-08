@@ -1514,13 +1514,17 @@ class RegistryBridge:
             if http_result:
                 return http_result
 
-        # Price-mode: re-sort by price ignoring the lexical score so
-        # "most expensive agent" always puts the highest-price entry first.
-        if price_mode == "most_expensive":
+        # Price-mode: re-sort by price ONLY when no entry has a strong content
+        # match (score < 20). If something scores 20+ the query has real content
+        # intent ("scan expensive secrets" → secret_scanner) and relevance wins.
+        # Below that floor the query is primarily a price probe and price sort wins.
+        _max_content_score = max((s for s, _ in matches), default=0)
+        _effective_price_mode = price_mode if _max_content_score < 20 else None
+        if _effective_price_mode == "most_expensive":
             matches.sort(
                 key=lambda item: -float(item[1].get("price_per_call_usd") or 0),
             )
-        elif price_mode == "cheapest":
+        elif _effective_price_mode == "cheapest":
             matches.sort(
                 key=lambda item: float(item[1].get("price_per_call_usd") or 0),
             )

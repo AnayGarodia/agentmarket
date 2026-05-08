@@ -1318,6 +1318,9 @@ def registry_call(
                     ".url_too_long",
                     ".too_many_",
                     ".url_blocked",
+                    # Dimension mismatch is a caller-input error (caller provided
+                    # two images with different sizes) — should be 422, not 502.
+                    ".dimension_mismatch",
                 )
                 lowered_code = (failure_code or "").lower()
                 http_status = 502

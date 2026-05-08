@@ -2107,9 +2107,13 @@ def _resolve_agent_id(
     candidates_seen = []
     for item in payload.get("results") or []:
         agent = item.get("agent") or {}
+        # Agents in the DB have no `slug` column — derive the canonical slug
+        # from the name when the field is absent, so "secret_scanner" resolves
+        # to the "Secret Scanner" agent without requiring the field to exist.
         candidate_slug = (
             str(agent.get("slug") or "").strip().lower()
             or str(agent.get("agent_slug") or "").strip().lower()
+            or _canonical_slug(agent.get("name"))
         )
         candidates_seen.append(candidate_slug)
         if candidate_slug and candidate_slug == slug_lower:
@@ -2129,6 +2133,7 @@ def _resolve_agent_id(
             cand = (
                 str(agent.get("slug") or "").strip().lower()
                 or str(agent.get("agent_slug") or "").strip().lower()
+                or _canonical_slug(agent.get("name"))
             )
             if cand == slug_lower:
                 resolved = str(agent.get("agent_id") or "").strip()
@@ -3197,7 +3202,7 @@ def _discover(
             compact.append(
                 {
                     "agent_id": agent.get("agent_id"),
-                    "slug": agent.get("slug") or agent.get("agent_slug"),
+                    "slug": agent.get("slug") or agent.get("agent_slug") or _canonical_slug(agent.get("name")),
                     "name": agent.get("name"),
                     "description": _word_truncate(agent.get("description") or "", 240),
                     "category": agent.get("category"),
