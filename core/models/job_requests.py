@@ -222,7 +222,7 @@ class JobBatchCreateRequest(BaseModel):
         ),
     )
     jobs: list["JobCreateRequest"] = Field(
-        description="Array of job specs (max 50). Each is a JobCreateRequest. Single wallet pre-debit for total cost."
+        description="Array of job specs (max 250). Each is a JobCreateRequest. Single wallet pre-debit for total cost."
     )
 
 

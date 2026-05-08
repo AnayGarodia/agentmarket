@@ -642,7 +642,7 @@ def jobs_compare_select(
     status_code=201,
     responses=_error_responses(400, 401, 402, 403, 422, 429, 500),
     tags=["Jobs"],
-    summary="Create up to 50 jobs atomically. Single wallet pre-debit for total cost.",
+    summary="Create up to 250 jobs atomically. Single wallet pre-debit for total cost.",
 )
 @limiter.limit(_JOBS_CREATE_RATE_LIMIT)
 def jobs_batch_create(
@@ -653,8 +653,15 @@ def jobs_batch_create(
     _require_scope(caller, "caller")
     if not body.jobs:
         raise HTTPException(status_code=400, detail="jobs array must not be empty.")
-    if len(body.jobs) > 50:
-        raise HTTPException(status_code=400, detail="Batch size limited to 50 jobs.")
+    # Cap raised from 50 → 250 alongside the worker parallelism bump
+    # (BUILTIN_JOB_WORKER_PARALLELISM=64, MAX_BATCH_TOTAL=800). The cap
+    # exists to bound the wallet pre-debit + DB insert burst, not to limit
+    # marketplace fan-out — and 250 stays well under the worker's per-tick
+    # max_total so a 250-job batch drains in ~4 worker ticks.
+    if len(body.jobs) > 250:
+        raise HTTPException(
+            status_code=400, detail="Batch size limited to 250 jobs."
+        )
 
     # Defense-in-depth: accept ?dry_run=true as a query param so older
     # MCP/SDK clients that don't yet forward the body field can still ask
