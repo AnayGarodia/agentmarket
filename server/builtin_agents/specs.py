@@ -12,10 +12,12 @@ from server.builtin_agents.constants import (
     BROWSER_AGENT_ID,
     CI_FAILURE_REPRODUCER_AGENT_ID,
     COVERAGE_RUNNER_AGENT_ID,
+    CRON_EXPRESSION_PARSER_AGENT_ID,
     CURATED_BUILTIN_AGENT_IDS,
     CVELOOKUP_AGENT_ID,
     DB_SANDBOX_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
+    DIFF_ANALYZER_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
     DOCKERFILE_ANALYZER_AGENT_ID,
     DOCS_GROUNDER_AGENT_ID,
@@ -24,6 +26,7 @@ from server.builtin_agents.constants import (
     HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID,
     JWT_DEBUGGER_AGENT_ID,
+    K8S_MANIFEST_VALIDATOR_AGENT_ID,
     LIGHTHOUSE_AUDITOR_AGENT_ID,
     LINTER_AGENT_ID,
     LIVE_ENDPOINT_TESTER_AGENT_ID,
@@ -34,12 +37,14 @@ from server.builtin_agents.constants import (
     PDF_DOCUMENT_PARSER_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
     QUALITY_JUDGE_AGENT_ID,
+    REGEX_TESTER_AGENT_ID,
     SAST_SCANNER_AGENT_ID,
     SECRET_SCANNER_AGENT_ID,
     SECURITY_HEADERS_GRADER_AGENT_ID,
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
     SHELL_EXECUTOR_AGENT_ID,
     SQL_EXPLAINER_AGENT_ID,
+    SSL_CERTIFICATE_DECODER_AGENT_ID,
     STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID,
@@ -53,6 +58,7 @@ from server.builtin_agents.specs_part4 import load_builtin_specs_part4
 from server.builtin_agents.specs_part5 import load_builtin_specs_part5
 from server.builtin_agents.specs_part6 import load_builtin_specs_part6
 from server.builtin_agents.specs_part7 import load_builtin_specs_part7
+from server.builtin_agents.specs_part8 import load_builtin_specs_part8
 
 _DEFAULT_CATEGORY_BY_AGENT_ID = {
     FINANCIAL_AGENT_ID: "Finance",
@@ -88,6 +94,11 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     OPENAPI_VALIDATOR_AGENT_ID: "Developer Tools",
     COVERAGE_RUNNER_AGENT_ID: "Code Execution",
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: "Developer Tools",
+    REGEX_TESTER_AGENT_ID: "Developer Tools",
+    CRON_EXPRESSION_PARSER_AGENT_ID: "Developer Tools",
+    SSL_CERTIFICATE_DECODER_AGENT_ID: "Security",
+    DIFF_ANALYZER_AGENT_ID: "Code",
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: "Developer Tools",
 }
 
 _DEFAULT_CACHEABLE_BY_AGENT_ID = {
@@ -123,6 +134,11 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     OPENAPI_VALIDATOR_AGENT_ID: True,
     COVERAGE_RUNNER_AGENT_ID: False,
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: False,
+    REGEX_TESTER_AGENT_ID: True,
+    CRON_EXPRESSION_PARSER_AGENT_ID: True,
+    SSL_CERTIFICATE_DECODER_AGENT_ID: True,
+    DIFF_ANALYZER_AGENT_ID: True,
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: False,
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
@@ -158,6 +174,11 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     OPENAPI_VALIDATOR_AGENT_ID: ["openapi-spec-validator (optional)", "PyYAML"],
     COVERAGE_RUNNER_AGENT_ID: ["python3", "pytest", "coverage"],
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: ["dnspython"],
+    REGEX_TESTER_AGENT_ID: [],
+    CRON_EXPRESSION_PARSER_AGENT_ID: ["croniter (optional)"],
+    SSL_CERTIFICATE_DECODER_AGENT_ID: ["cryptography"],
+    DIFF_ANALYZER_AGENT_ID: [],
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: ["kubectl (optional)", "PyYAML"],
 }
 
 _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
@@ -197,6 +218,11 @@ _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
     OPENAPI_VALIDATOR_AGENT_ID: "tool_execution",
     COVERAGE_RUNNER_AGENT_ID: "sandbox_execution",
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: "live_network_checks",
+    REGEX_TESTER_AGENT_ID: "sandbox_execution",
+    CRON_EXPRESSION_PARSER_AGENT_ID: "tool_execution",
+    SSL_CERTIFICATE_DECODER_AGENT_ID: "tool_execution",
+    DIFF_ANALYZER_AGENT_ID: "tool_execution",
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: "tool_execution",
 }
 
 _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
@@ -236,6 +262,11 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     OPENAPI_VALIDATOR_AGENT_ID: "stable",
     COVERAGE_RUNNER_AGENT_ID: "stable",
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: "stable",
+    REGEX_TESTER_AGENT_ID: "stable",
+    CRON_EXPRESSION_PARSER_AGENT_ID: "stable",
+    SSL_CERTIFICATE_DECODER_AGENT_ID: "stable",
+    DIFF_ANALYZER_AGENT_ID: "stable",
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: "beta",
 }
 
 _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
@@ -275,6 +306,11 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
     OPENAPI_VALIDATOR_AGENT_ID: True,
     COVERAGE_RUNNER_AGENT_ID: True,
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: True,
+    REGEX_TESTER_AGENT_ID: True,
+    CRON_EXPRESSION_PARSER_AGENT_ID: True,
+    SSL_CERTIFICATE_DECODER_AGENT_ID: True,
+    DIFF_ANALYZER_AGENT_ID: True,
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: True,
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
@@ -369,6 +405,11 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
     OPENAPI_VALIDATOR_AGENT_ID: ["validate an OpenAPI spec", "find breaking API changes", "check spec structure"],
     COVERAGE_RUNNER_AGENT_ID: ["measure test coverage", "find uncovered lines", "check coverage threshold"],
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: ["check SPF/DKIM/DMARC", "debug email deliverability", "pre-launch email config audit"],
+    REGEX_TESTER_AGENT_ID: ["test a regex pattern", "extract named groups", "validate all matches with spans"],
+    CRON_EXPRESSION_PARSER_AGENT_ID: ["compute next cron run times", "detect high-frequency schedule", "parse cron expression"],
+    SSL_CERTIFICATE_DECODER_AGENT_ID: ["decode a PEM certificate", "extract SANs and expiry", "check certificate chain order"],
+    DIFF_ANALYZER_AGENT_ID: ["analyze PR risk", "detect migration in diff", "find secret additions in diff"],
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: ["validate k8s YAML", "find unpinned images", "check resource limits"],
 }
 
 
@@ -441,6 +482,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
     specs.extend(load_builtin_specs_part5())
     specs.extend(load_builtin_specs_part6())
     specs.extend(load_builtin_specs_part7())
+    specs.extend(load_builtin_specs_part8())
     normalized = [_normalize_builtin_spec(spec) for spec in specs]
     seen_ids: set[str] = set()
     seen_endpoints: set[str] = set()

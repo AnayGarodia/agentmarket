@@ -102,6 +102,11 @@ from agents import dockerfile_analyzer as agent_dockerfile_analyzer
 from agents import openapi_validator as agent_openapi_validator
 from agents import coverage_runner as agent_coverage_runner
 from agents import email_deliverability_checker as agent_email_deliverability_checker
+from agents import regex_tester as agent_regex_tester
+from agents import cron_expression_parser as agent_cron_expression_parser
+from agents import ssl_certificate_decoder as agent_ssl_certificate_decoder
+from agents import diff_analyzer as agent_diff_analyzer
+from agents import k8s_manifest_validator as agent_k8s_manifest_validator
 from core import auth as _auth
 from core import cache as _cache
 from core import (
@@ -312,6 +317,11 @@ _DOCKERFILE_ANALYZER_AGENT_ID = _builtin_constants.DOCKERFILE_ANALYZER_AGENT_ID
 _OPENAPI_VALIDATOR_AGENT_ID = _builtin_constants.OPENAPI_VALIDATOR_AGENT_ID
 _COVERAGE_RUNNER_AGENT_ID = _builtin_constants.COVERAGE_RUNNER_AGENT_ID
 _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID = _builtin_constants.EMAIL_DELIVERABILITY_CHECKER_AGENT_ID
+_REGEX_TESTER_AGENT_ID = _builtin_constants.REGEX_TESTER_AGENT_ID
+_CRON_EXPRESSION_PARSER_AGENT_ID = _builtin_constants.CRON_EXPRESSION_PARSER_AGENT_ID
+_SSL_CERTIFICATE_DECODER_AGENT_ID = _builtin_constants.SSL_CERTIFICATE_DECODER_AGENT_ID
+_DIFF_ANALYZER_AGENT_ID = _builtin_constants.DIFF_ANALYZER_AGENT_ID
+_K8S_MANIFEST_VALIDATOR_AGENT_ID = _builtin_constants.K8S_MANIFEST_VALIDATOR_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS

@@ -56,6 +56,10 @@ DOCKERFILE_ANALYZER_AGENT_ID = "e91f9b2f-f695-5890-b1f5-a9156c1b9a54"
 OPENAPI_VALIDATOR_AGENT_ID = "ce4230c8-1f16-5820-9852-7511b34603d7"
 COVERAGE_RUNNER_AGENT_ID = "20e5454b-5953-5b20-a993-1dfc92c20cfb"
 EMAIL_DELIVERABILITY_CHECKER_AGENT_ID = "37d58c2f-7624-529c-9bcd-f0f5e44f1e12"
+CRON_EXPRESSION_PARSER_AGENT_ID = "b45063e4-ecbe-591d-b81a-5240c71cd5fd"
+SSL_CERTIFICATE_DECODER_AGENT_ID = "fefbff0b-8343-5a58-8aec-9d1579188919"
+DIFF_ANALYZER_AGENT_ID = "8b980edd-6583-51d2-b351-d2afe1d57ff2"
+K8S_MANIFEST_VALIDATOR_AGENT_ID = "6086b2ad-0a55-58e5-b504-49968379b623"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -84,6 +88,11 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     OPENAPI_VALIDATOR_AGENT_ID: "internal://openapi_validator",
     COVERAGE_RUNNER_AGENT_ID: "internal://coverage_runner",
     EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: "internal://email_deliverability_checker",
+    REGEX_TESTER_AGENT_ID: "internal://regex_tester",
+    CRON_EXPRESSION_PARSER_AGENT_ID: "internal://cron_expression_parser",
+    SSL_CERTIFICATE_DECODER_AGENT_ID: "internal://ssl_certificate_decoder",
+    DIFF_ANALYZER_AGENT_ID: "internal://diff_analyzer",
+    K8S_MANIFEST_VALIDATOR_AGENT_ID: "internal://k8s_manifest_validator",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -159,6 +168,11 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         OPENAPI_VALIDATOR_AGENT_ID,
         COVERAGE_RUNNER_AGENT_ID,
         EMAIL_DELIVERABILITY_CHECKER_AGENT_ID,
+        REGEX_TESTER_AGENT_ID,
+        CRON_EXPRESSION_PARSER_AGENT_ID,
+        SSL_CERTIFICATE_DECODER_AGENT_ID,
+        DIFF_ANALYZER_AGENT_ID,
+        K8S_MANIFEST_VALIDATOR_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.
