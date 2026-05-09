@@ -445,7 +445,11 @@ def test_global_trust_hosted_failure_502(monkeypatch, hosted_app):
 def test_migration_0039_columns_present(oss_app):
     """J1: published_to_public_at and published_to_public_listing_id exist
     and are nullable on a fresh DB after migrations."""
-    with core_db.get_db_connection() as conn:
+    # Use the isolated DB that the oss_app fixture monkeypatched onto
+    # registry — core_db.get_db_connection() defaults to the original
+    # process-wide DB_PATH (captured at module load), which on a fresh
+    # CI runner has no agents table at all.
+    with core_db.get_db_connection(registry.DB_PATH) as conn:
         rows = conn.execute("PRAGMA table_info(agents)").fetchall()
     cols = {r["name"]: r for r in rows}
     assert "published_to_public_at" in cols
