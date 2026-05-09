@@ -20,9 +20,16 @@ Python package:
   aztea --help
 `
 
+// Await async commands so post-success steps (e.g. maybeInstallClaudeMdSnippet)
+// always finish before the process exits, and so unhandled rejections surface.
+function fail(err) {
+  console.error(err && err.stack ? err.stack : String(err))
+  process.exit(1)
+}
+
 switch (cmd) {
   case 'init':
-    require('../src/init.js').run(rest)
+    Promise.resolve(require('../src/init.js').run(rest)).catch(fail)
     break
   case 'login': {
     // aztea login --api-key az_xxx  — non-interactive setup for Claude Code.
@@ -38,14 +45,14 @@ switch (cmd) {
       console.error('Usage: aztea login --api-key az_...')
       process.exit(1)
     }
-    require('../src/init.js').loginWithKey(apiKey)
+    Promise.resolve(require('../src/init.js').loginWithKey(apiKey)).catch(fail)
     break
   }
   case 'mcp':
     require('../src/mcp-server.js').run()
     break
   case 'whoami':
-    require('../src/init.js').whoami()
+    Promise.resolve(require('../src/init.js').whoami()).catch(fail)
     break
   case 'hire':
   case 'jobs':

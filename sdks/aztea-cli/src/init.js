@@ -572,6 +572,11 @@ async function loginWithKey(apiKey) {
   console.log('\nRestart Claude Code to apply the new key.')
   console.log(`Browse agents: ${BASE_URL}/agents`)
   console.log()
+
+  // Same opt-in CLAUDE.md install as the interactive `run()` flow, so the
+  // --api-key entry point is symmetric. Default no, never touches the
+  // global ~/.claude/CLAUDE.md, idempotent on the "## Aztea" marker.
+  await maybeInstallClaudeMdSnippet()
 }
 
 async function whoami() {
