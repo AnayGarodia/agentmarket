@@ -49,15 +49,12 @@ WEB_SEARCH_AGENT_ID = "7d5f4e06-60b5-5950-a885-eaef04cf0b33"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: "internal://financial",
-    CODEREVIEW_AGENT_ID: "internal://code-review",
-    WIKI_AGENT_ID: "internal://wiki",
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
     CVELOOKUP_AGENT_ID: "internal://cve-lookup",
     IMAGE_GENERATOR_AGENT_ID: "internal://image-generator",
     VIDEO_STORYBOARD_AGENT_ID: "internal://video-storyboard-generator",
     ARXIV_RESEARCH_AGENT_ID: "internal://arxiv-research",
     PYTHON_EXECUTOR_AGENT_ID: "internal://python-executor",
-    WEB_RESEARCHER_AGENT_ID: "internal://web-researcher",
     HN_DIGEST_AGENT_ID: "internal://hn_digest",
     DNS_INSPECTOR_AGENT_ID: "internal://dns_inspector",
     DEPENDENCY_AUDITOR_AGENT_ID: "internal://dependency_auditor",
@@ -71,12 +68,8 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     BROWSER_AGENT_ID: "internal://browser_agent",
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "internal://semantic_codebase_search",
-    AI_RED_TEAMER_AGENT_ID: "internal://ai_red_teamer",
     SECRET_SCANNER_AGENT_ID: "internal://secret_scanner",
-    JSON_SCHEMA_VALIDATOR_AGENT_ID: "internal://json_schema_validator",
-    REGEX_TESTER_AGENT_ID: "internal://regex_tester",
     SQL_EXPLAINER_AGENT_ID: "internal://sql_explainer",
-    GIT_DIFF_ANALYZER_AGENT_ID: "internal://git_diff_analyzer",
     LIGHTHOUSE_AUDITOR_AGENT_ID: "internal://lighthouse_auditor",
     ACCESSIBILITY_AUDITOR_AGENT_ID: "internal://accessibility_auditor",
     SECURITY_HEADERS_GRADER_AGENT_ID: "internal://security_headers_grader",
@@ -87,15 +80,12 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: f"{SERVER_BASE_URL}/agents/financial",
-    CODEREVIEW_AGENT_ID: f"{SERVER_BASE_URL}/agents/code-review",
-    WIKI_AGENT_ID: f"{SERVER_BASE_URL}/agents/wiki",
     QUALITY_JUDGE_AGENT_ID: f"{SERVER_BASE_URL}/agents/quality-judge",
     CVELOOKUP_AGENT_ID: f"{SERVER_BASE_URL}/agents/cve-lookup",
     IMAGE_GENERATOR_AGENT_ID: f"{SERVER_BASE_URL}/agents/image-generator",
     VIDEO_STORYBOARD_AGENT_ID: f"{SERVER_BASE_URL}/agents/video-storyboard-generator",
     ARXIV_RESEARCH_AGENT_ID: f"{SERVER_BASE_URL}/agents/arxiv-research",
     PYTHON_EXECUTOR_AGENT_ID: f"{SERVER_BASE_URL}/agents/python-executor",
-    WEB_RESEARCHER_AGENT_ID: f"{SERVER_BASE_URL}/agents/web-researcher",
 }
 
 BUILTIN_ENDPOINT_TO_AGENT_ID: dict[str, str] = {}
@@ -124,20 +114,13 @@ BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 SUNSET_DEPRECATED_AGENT_IDS = frozenset(
     {
         ARXIV_RESEARCH_AGENT_ID,
-        WEB_RESEARCHER_AGENT_ID,
-        CODEREVIEW_AGENT_ID,
         MULTI_FILE_EXECUTOR_AGENT_ID,
         LINTER_AGENT_ID,
         SHELL_EXECUTOR_AGENT_ID,
         TYPE_CHECKER_AGENT_ID,
         SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
-        AI_RED_TEAMER_AGENT_ID,
         IMAGE_GENERATOR_AGENT_ID,
         FINANCIAL_AGENT_ID,
-        WIKI_AGENT_ID,
-        JSON_SCHEMA_VALIDATOR_AGENT_ID,
-        REGEX_TESTER_AGENT_ID,
-        GIT_DIFF_ANALYZER_AGENT_ID,
         # Suspended in prod DB; treated as sunset so every surface
         # (list_agents, /health, session_audit, search) agrees.
         LIVE_ENDPOINT_TESTER_AGENT_ID,

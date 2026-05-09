@@ -18,37 +18,6 @@ def test_builtin_dispatch_adds_default_success_contract(monkeypatch):
     assert result["agent_contract_version"] == "builtin-v2"
 
 
-def test_builtin_dispatch_infers_llm_usage_for_llm_backed_builtin(monkeypatch):
-    _refresh_builtin_spec_cache()
-    monkeypatch.setattr(
-        server.agent_web_researcher,
-        "run",
-        lambda payload: {"summary": "Found content.", "results": [], "billing_units_actual": 1, "llm_used": True},
-    )
-    result = server._execute_builtin_agent(server._WEB_RESEARCHER_AGENT_ID, {"urls": ["https://example.com"]})
-    assert result["billing_units_actual"] == 1
-    assert result["degraded_mode"] is False
-    assert result["llm_used"] is True
-    assert result["agent_contract_version"] == "builtin-v2"
-
-
-def test_builtin_dispatch_preserves_explicit_degraded_metadata(monkeypatch):
-    _refresh_builtin_spec_cache()
-    monkeypatch.setattr(
-        server.agent_web_researcher,
-        "run",
-        lambda payload: {
-            "summary": "Fetched content without synthesis.",
-            "billing_units_actual": 1,
-            "llm_used": False,
-            "degraded_mode": True,
-        },
-    )
-    result = server._execute_builtin_agent(server._WEB_RESEARCHER_AGENT_ID, {})
-    assert result["billing_units_actual"] == 1
-    assert result["degraded_mode"] is True
-    assert result["llm_used"] is False
-
 
 def test_builtin_dispatch_leaves_structured_errors_untouched(monkeypatch):
     _refresh_builtin_spec_cache()

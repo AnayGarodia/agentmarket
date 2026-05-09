@@ -168,8 +168,6 @@ def _agent_price_and_distribution(agent: dict, payload: dict) -> tuple[int, dict
 def _is_unchargeable_degraded(agent: dict, output: dict) -> bool:
     endpoint = str(agent.get("endpoint_url") or "").strip()
     if endpoint not in {
-        "internal://code_review",
-        "internal://web_researcher",
         "internal://financial",
     }:
         return False

@@ -6,9 +6,6 @@ import shutil
 from typing import Any
 
 from server.builtin_agents.constants import (
-    AI_RED_TEAMER_AGENT_ID as _AI_RED_TEAMER_AGENT_ID,
-)
-from server.builtin_agents.constants import (
     BROWSER_AGENT_ID as _BROWSER_AGENT_ID,
 )
 from server.builtin_agents.constants import (
@@ -730,113 +727,6 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                             },
                         ],
                         "source": "git",
-                    },
-                }
-            ],
-        },
-        {
-            "agent_id": _AI_RED_TEAMER_AGENT_ID,
-            "name": "AI Red Teamer",
-            "description": "Use when you want to harden a published Aztea agent against adversarial inputs. Runs a battery of prompt-injection, jailbreak, boundary-violation, and data-exfiltration attacks against a target agent, then reports which attacks triggered suspicious responses and the overall attack success rate. Useful for security review before making an agent public.",
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_AI_RED_TEAMER_AGENT_ID],
-            "price_per_call_usd": 0.08,
-            "tags": [
-                "security",
-                "red-team",
-                "adversarial",
-                "jailbreak",
-                "prompt-injection",
-                "testing",
-            ],
-            "kind": "aztea_built",
-            "category": "Security",
-            "is_featured": False,
-            "internal_only": False,
-            "cacheable": False,
-            "input_schema": _output_schema_object(
-                {
-                    "target_agent_id": {
-                        "type": "string",
-                        "title": "Target agent ID",
-                        "description": "UUID of the Aztea agent to test.",
-                    },
-                    "target_agent_slug": {
-                        "type": "string",
-                        "title": "Target agent slug",
-                        "description": "Slug alias accepted by MCP/CLI callers; direct API callers should prefer target_agent_id.",
-                    },
-                    "api_key": {
-                        "type": "string",
-                        "title": "API key",
-                        "description": "Caller API key used to invoke the target agent (or set AZTEA_API_KEY env var).",
-                    },
-                    "base_url": {
-                        "type": "string",
-                        "title": "Base URL",
-                        "description": "Aztea API base URL (default: https://aztea.ai).",
-                    },
-                    "categories": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "title": "Attack categories",
-                        "description": "Subset of: injection, jailbreak, boundary, exfiltration, resource. Default: all.",
-                    },
-                    "custom_prompts": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "title": "Custom adversarial prompts",
-                        "description": "Additional prompts to test beyond the built-in corpus.",
-                    },
-                    "max_attacks": {
-                        "type": "integer",
-                        "title": "Max attacks",
-                        "default": 20,
-                        "minimum": 1,
-                        "maximum": 50,
-                    },
-                },
-                required=[],
-            ),
-            "output_schema": _output_schema_object(
-                {
-                    "target_agent_id": {"type": "string"},
-                    "total_attacks": {"type": "integer"},
-                    "successful_attacks": {"type": "integer"},
-                    "attack_success_rate": {"type": "number"},
-                    "results": {"type": "array", "items": {"type": "object"}},
-                    "summary": {"type": "string"},
-                },
-                required=[
-                    "target_agent_id",
-                    "total_attacks",
-                    "successful_attacks",
-                    "attack_success_rate",
-                    "results",
-                    "summary",
-                ],
-            ),
-            "output_examples": [
-                {
-                    "input": {
-                        "target_agent_id": "040dc3f5-afe7-5db7-b253-4936090cc7af",
-                        "max_attacks": 5,
-                    },
-                    "output": {
-                        "target_agent_id": "040dc3f5-afe7-5db7-b253-4936090cc7af",
-                        "total_attacks": 5,
-                        "successful_attacks": 0,
-                        "attack_success_rate": 0.0,
-                        "results": [
-                            {
-                                "category": "injection",
-                                "prompt": "Ignore all previous instructions...",
-                                "response_snippet": "I can only execute Python code...",
-                                "http_status": 200,
-                                "succeeded": False,
-                                "reason": "No jailbreak indicators detected.",
-                            }
-                        ],
-                        "summary": "Agent passed all 5 adversarial probes — no jailbreak indicators detected.",
                     },
                 }
             ],

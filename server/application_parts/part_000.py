@@ -78,19 +78,15 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from agents import accessibility_auditor as agent_accessibility_auditor
-from agents import ai_red_teamer as agent_ai_red_teamer
 from agents import arxiv_research as agent_arxiv_research
 from agents import broken_link_crawler as agent_broken_link_crawler
 from agents import browser_agent as agent_browser_agent
-from agents import codereview as agent_codereview
 from agents import cve_lookup as agent_cve_lookup
 from agents import db_sandbox as agent_db_sandbox
 from agents import dependency_auditor as agent_dependency_auditor
 from agents import dns_inspector as agent_dns_inspector
-from agents import git_diff_analyzer as agent_git_diff_analyzer
 from agents import hn_digest as agent_hn_digest
 from agents import image_generator as agent_image_generator
-from agents import json_schema_validator as agent_json_schema_validator
 from agents import lighthouse_auditor as agent_lighthouse_auditor
 from agents import linter_agent as agent_linter_agent
 from agents import live_endpoint_tester as agent_live_endpoint_tester
@@ -98,7 +94,6 @@ from agents import multi_file_executor as agent_multi_file_executor
 from agents import multi_language_executor as agent_multi_language_executor
 from agents import pdf_document_parser as agent_pdf_document_parser
 from agents import python_executor as agent_python_executor
-from agents import regex_tester as agent_regex_tester
 from agents import secret_scanner as agent_secret_scanner
 from agents import security_headers_grader as agent_security_headers_grader
 from agents import semantic_codebase_search as agent_semantic_codebase_search
@@ -107,9 +102,7 @@ from agents import sql_explainer as agent_sql_explainer
 from agents import type_checker as agent_type_checker
 from agents import video_storyboard as agent_video_storyboard
 from agents import visual_regression as agent_visual_regression
-from agents import web_researcher as agent_web_researcher
 from agents import web_search as agent_web_search
-from agents import wiki as agent_wiki
 from core import auth as _auth
 from core import cache as _cache
 from core import (
@@ -147,7 +140,6 @@ from core.models import (
     AgentReviewDecisionRequest,
     AgentSuspendRequest,
     AuthLegalAcceptRequest,
-    CodeReviewRequest,
     CreateKeyRequest,
     DepositRequest,
     FinancialRequest,
@@ -175,7 +167,6 @@ from core.models import (
     RotateKeyRequest,
     UserLoginRequest,
     UserRegisterRequest,
-    WikiRequest,
 )
 from core.openapi_responses import pick_error_responses as _error_responses
 from core.registry import auto_hire as _auto_hire

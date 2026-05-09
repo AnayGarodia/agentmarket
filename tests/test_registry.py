@@ -325,31 +325,6 @@ def test_search_uses_output_examples_as_lexical_signal(isolated_db, monkeypatch)
     assert any("work examples" in reason for reason in top["match_reasons"])
 
 
-def test_registry_search_endpoint_returns_ranked_results(isolated_db):
-    with TestClient(server.app) as client:
-        response = client.post(
-            "/registry/search",
-            headers=_auth_headers(TEST_MASTER_KEY),
-            json={"query": "review code for security bugs", "limit": 5},
-        )
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["count"] > 0
-    result_ids = [r["agent"]["agent_id"] for r in body["results"]]
-    assert server._CODEREVIEW_AGENT_ID in result_ids, (
-        f"Code review agent not found in top results: {result_ids}"
-    )
-    review_result = next(
-        r
-        for r in body["results"]
-        if r["agent"]["agent_id"] == server._CODEREVIEW_AGENT_ID
-    )
-    assert (
-        isinstance(review_result["match_reasons"], list)
-        and review_result["match_reasons"]
-    )
-
 
 def test_security_queries_prefer_dependency_audit_over_package_finder(isolated_db):
     registry.init_db()

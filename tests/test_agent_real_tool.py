@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from agents import browser_agent
-from agents import codereview
 from agents import cve_lookup
 from agents import dependency_auditor
 from agents import db_sandbox
@@ -22,8 +21,6 @@ from agents import type_checker
 from agents import video_storyboard
 from agents import visual_regression
 from agents import arxiv_research
-from agents import web_researcher
-from agents import wiki
 from agents.financial import synthesizer as financial_synthesizer
 
 
@@ -190,95 +187,6 @@ def test_type_checker_parses_mypy_json(monkeypatch):
     assert result["tool_version"] == "mypy 1.11.2"
     assert result["error_count"] == 1
     assert result["diagnostics"][0]["code"] == "arg-type"
-
-
-def test_code_review_accepts_diff_and_normalizes_output(monkeypatch):
-    monkeypatch.setattr(
-        codereview,
-        "run_with_fallback",
-        lambda req: SimpleNamespace(
-            text=json.dumps(
-                {
-                    "language_detected": "python",
-                    "score": 7,
-                    "security_critical": False,
-                    "complexity_score": 3,
-                    "issues": [
-                        {
-                            "line_hint": "@@ ... return a / b",
-                            "severity": "medium",
-                            "category": "correctness",
-                            "description": "Missing zero guard",
-                            "fix": "Handle b == 0 before division.",
-                        }
-                    ],
-                    "positive_aspects": ["Small focused change."],
-                    "test_recommendations": ["Cover b == 0."],
-                    "summary": "One correctness issue found.",
-                }
-            )
-        ),
-    )
-    result = codereview.run(diff="@@ -1 +1 @@\n-return a / b\n+return a / b\n", language="python", filename="math_utils.py")
-    assert result["review_target"] == "diff"
-    assert result["filename"] == "math_utils.py"
-    assert result["issue_count"] == 1
-    assert result["severity_counts"]["medium"] == 1
-    assert result["issues"][0]["category"] == "correctness"
-
-
-def test_code_review_requires_code_or_diff():
-    result = codereview.run()
-    assert result["error"]["code"] == "code_review_agent.missing_input"
-
-
-def test_code_review_downgrades_plain_divide_by_zero_from_security(monkeypatch):
-    monkeypatch.setattr(
-        codereview,
-        "run_with_fallback",
-        lambda req: SimpleNamespace(
-            text=json.dumps(
-                {
-                    "language_detected": "python",
-                    "score": 3,
-                    "complexity_score": 2,
-                    "issues": [
-                        {
-                            "line_hint": "return a / b",
-                            "severity": "critical",
-                            "category": "security",
-                            "cwe_id": "CWE-369",
-                            "owasp_category": "A03 Injection",
-                            "description": "Potential divide-by-zero if b is 0.",
-                            "fix": "Validate b before division.",
-                        }
-                    ],
-                    "summary": "One critical security issue found.",
-                }
-            )
-        ),
-    )
-    result = codereview.run(code="def divide(a, b):\n    return a / b\n", language="python")
-    issue = result["issues"][0]
-    assert issue["severity"] == "medium"
-    assert issue["category"] == "correctness"
-    assert issue["cwe_id"] is None
-    assert issue["owasp_category"] is None
-    assert result["security_critical"] is False
-
-
-def test_code_review_falls_back_to_rule_based_review_when_llm_unavailable(monkeypatch):
-    monkeypatch.setattr(codereview, "run_with_fallback", lambda req: (_ for _ in ()).throw(RuntimeError("no llm")))
-    result = codereview.run(
-        diff="@@ -1 +1 @@\n- console.log('[redacted]')\n+ console.log(token)\n",
-        language="javascript",
-        filename="auth.js",
-        focus="security",
-    )
-    assert result["llm_used"] is False
-    assert result["degraded_mode"] is True
-    assert result["issue_count"] >= 1
-    assert result["issues"][0]["cwe_id"] == "CWE-532"
 
 
 def test_type_checker_returns_structured_error_for_missing_code():
@@ -562,62 +470,6 @@ def test_arxiv_research_flags_low_confidence_for_nonsense_query(monkeypatch):
     )
 
 
-def test_web_researcher_degrades_gracefully_without_llm(monkeypatch):
-    monkeypatch.setattr(
-        web_researcher,
-        "_fetch_one",
-        lambda url: {
-            "url": url,
-            "content": "Example article body with useful details.",
-            "status": "ok",
-            "links": [],
-            "html_title": "Example",
-            "word_count": 6,
-        },
-    )
-    monkeypatch.setattr(web_researcher, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
-    result = web_researcher.run({"url": "https://example.com/article"})
-    assert result["title"] == "Example"
-    assert result["summary"]
-    assert result["billing_units_actual"] == 1
-
-
-def test_web_researcher_returns_structured_error_when_all_fetches_fail(monkeypatch):
-    monkeypatch.setattr(
-        web_researcher,
-        "_fetch_one",
-        lambda url: {
-            "url": url,
-            "content": None,
-            "status": "error",
-            "error": "fetch failed",
-        },
-    )
-    result = web_researcher.run({"urls": ["https://example.com/one", "https://example.com/two"]})
-    assert result["error"]["code"] == "web_researcher.all_fetches_failed"
-
-
-def test_wiki_degrades_gracefully_without_llm(monkeypatch):
-    class _FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "title": "Example Topic",
-                "extract": "Example Topic is a notable thing with a history worth reading.",
-                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Example_Topic"}},
-            }
-
-    monkeypatch.setattr(wiki.requests, "get", lambda *args, **kwargs: _FakeResponse())
-    monkeypatch.setattr(wiki, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
-    result = wiki.run("Example Topic")
-    assert result["title"] == "Example Topic"
-    assert "Example Topic is a notable thing" in result["summary"]
-    assert result["key_facts"]
-    assert result["llm_used"] is False
-
-
 def test_financial_synthesizer_returns_grounded_fallback_without_llm(monkeypatch):
     monkeypatch.setattr(
         financial_synthesizer,
@@ -723,31 +575,6 @@ def test_multi_file_executor_accepts_mapping_files_shape():
     assert result["exit_code"] == 0
     assert result["files_written"] == 1
     assert "hi" in result["stdout"]
-
-
-def test_web_researcher_blocks_redirects_to_private_targets(monkeypatch):
-    """Redirects to public URLs are followed; redirects to private/internal
-    targets are blocked at the SSRF gate. Pre-2026-05-03 we blocked all
-    redirects, which broke fetches against major sites that 301 to www.
-    Now we follow safe hops and only refuse when the redirect target is
-    itself unsafe (localhost, RFC1918, link-local, etc.)."""
-
-    class _FakeRedirect:
-        status_code = 302
-        headers = {"Location": "http://127.0.0.1/internal"}
-
-        def raise_for_status(self) -> None:
-            return None
-
-    def fake_get(url, timeout=None, headers=None, allow_redirects=None, stream=None):
-        del timeout, headers, stream
-        assert allow_redirects is False
-        return _FakeRedirect()
-
-    monkeypatch.setattr(web_researcher.requests, "get", fake_get)
-    result = web_researcher.run({"url": "https://example.com/article"})
-    assert result["error"]["code"] == "web_researcher.fetch_failed"
-    assert "redirect_blocked" in result["error"]["message"]
 
 
 def test_browser_agent_request_guard_aborts_private_subrequests():
@@ -909,27 +736,3 @@ def test_shell_executor_blocks_multiple_c_flags_in_python3():
         assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
 
 
-def test_git_diff_analyzer_detects_test_function_removal():
-    from agents import git_diff_analyzer
-
-    diff = (
-        "diff --git a/tests/test_auth.py b/tests/test_auth.py\n"
-        "index abc..def 100644\n"
-        "--- a/tests/test_auth.py\n"
-        "+++ b/tests/test_auth.py\n"
-        "@@ -1,6 +1,1 @@\n"
-        "-def test_login_with_valid_credentials():\n"
-        "-    assert auth.login('user', 'pass') is True\n"
-        "-\n"
-        "-def test_login_rejects_wrong_password():\n"
-        "-    assert auth.login('user', 'bad') is False\n"
-        "-\n"
-        " # remaining test file content\n"
-    )
-
-    result = git_diff_analyzer.run({"diff": diff})
-    assert "error" not in result
-    risk = result.get("risk_summary", {})
-    assert risk.get("tests_removed") is True, "should detect removed test functions"
-    all_warnings = [w for f in result.get("files", []) for w in f.get("warnings", [])]
-    assert any("test function" in w.lower() or "test case" in w.lower() for w in all_warnings)

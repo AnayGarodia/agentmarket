@@ -31,10 +31,6 @@ def _validate_builtin_agent_payload(
     payload = input_payload or {}
     if agent_id == _FINANCIAL_AGENT_ID:
         FinancialRequest.model_validate(payload)
-    elif agent_id == _CODEREVIEW_AGENT_ID:
-        CodeReviewRequest.model_validate(payload)
-    elif agent_id == _WIKI_AGENT_ID:
-        WikiRequest.model_validate(payload)
 
 
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
@@ -63,12 +59,6 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
     if agent_id == _FINANCIAL_AGENT_ID:
         body = FinancialRequest.model_validate(payload)
         return _finalize(_invoke_financial_agent(body))
-    if agent_id == _CODEREVIEW_AGENT_ID:
-        body = CodeReviewRequest.model_validate(payload)
-        return _finalize(_invoke_code_review_agent(body))
-    if agent_id == _WIKI_AGENT_ID:
-        body = WikiRequest.model_validate(payload)
-        return _finalize(_invoke_wiki_agent(body))
     if agent_id == _QUALITY_JUDGE_AGENT_ID:
         return _finalize(
             judges.run_quality_judgment(
@@ -93,8 +83,6 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return _finalize(agent_arxiv_research.run(payload))
     if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
         return _finalize(agent_python_executor.run(payload))
-    if agent_id == _WEB_RESEARCHER_AGENT_ID:
-        return _finalize(agent_web_researcher.run(payload))
     if agent_id == _HN_DIGEST_AGENT_ID:
         return _finalize(agent_hn_digest.run(payload))
     if agent_id == _DNS_INSPECTOR_AGENT_ID:
@@ -121,18 +109,10 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return _finalize(agent_multi_language_executor.run(payload))
     if agent_id == _SEMANTIC_CODEBASE_SEARCH_AGENT_ID:
         return _finalize(agent_semantic_codebase_search.run(payload))
-    if agent_id == _AI_RED_TEAMER_AGENT_ID:
-        return _finalize(agent_ai_red_teamer.run(payload))
     if agent_id == _SECRET_SCANNER_AGENT_ID:
         return _finalize(agent_secret_scanner.run(payload))
-    if agent_id == _JSON_SCHEMA_VALIDATOR_AGENT_ID:
-        return _finalize(agent_json_schema_validator.run(payload))
-    if agent_id == _REGEX_TESTER_AGENT_ID:
-        return _finalize(agent_regex_tester.run(payload))
     if agent_id == _SQL_EXPLAINER_AGENT_ID:
         return _finalize(agent_sql_explainer.run(payload))
-    if agent_id == _GIT_DIFF_ANALYZER_AGENT_ID:
-        return _finalize(agent_git_diff_analyzer.run(payload))
     if agent_id == _LIGHTHOUSE_AUDITOR_AGENT_ID:
         return _finalize(agent_lighthouse_auditor.run(payload))
     if agent_id == _ACCESSIBILITY_AUDITOR_AGENT_ID:
@@ -149,8 +129,6 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
 
 
 _DEGRADED_UNCHARGEABLE_AGENT_IDS = {
-    _CODEREVIEW_AGENT_ID,
-    _WEB_RESEARCHER_AGENT_ID,
     _FINANCIAL_AGENT_ID,
 }
 

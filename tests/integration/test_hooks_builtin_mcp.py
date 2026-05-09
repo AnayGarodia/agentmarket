@@ -201,26 +201,6 @@ def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(
             },
         ),
         (
-            server._WEB_RESEARCHER_AGENT_ID,
-            {
-                "url": "https://example.com/docs",
-                "per_url_findings": [
-                    {"url": "https://example.com/docs", "status": "ok", "content_length": 128}
-                ],
-                "billing_units_actual": 1,
-                "summary": "Found docs.",
-                "synthesis": "Found docs.",
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "per_url_findings": {"type": "array"},
-                    "billing_units_actual": {"type": "integer"},
-                },
-                "required": ["per_url_findings", "billing_units_actual"],
-            },
-        ),
-        (
             server._SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
             {
                 "query": "CVE-2023-50447 pillow fix",
@@ -273,38 +253,6 @@ def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(
             },
         ),
         (
-            server._JSON_SCHEMA_VALIDATOR_AGENT_ID,
-            {
-                "valid": False,
-                "draft": "2020-12",
-                "error_count": 1,
-                "errors": [
-                    {
-                        "path": "/age",
-                        "json_path": "$.age",
-                        "message": "'thirty' is not of type 'integer'",
-                        "validator": "type",
-                        "validator_value": "integer",
-                        "schema_path": "/properties/age/type",
-                    }
-                ],
-                "truncated": False,
-                "summary": "1 validation error: 'thirty' is not of type 'integer'",
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "valid": {"type": "boolean"},
-                    "draft": {"type": "string"},
-                    "error_count": {"type": "integer"},
-                    "errors": {"type": "array"},
-                    "truncated": {"type": "boolean"},
-                    "summary": {"type": "string"},
-                },
-                "required": ["valid", "draft", "error_count", "errors", "truncated", "summary"],
-            },
-        ),
-        (
             server._SQL_EXPLAINER_AGENT_ID,
             {
                 "queries": [
@@ -327,52 +275,6 @@ def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(
                     "summary": {"type": "string"},
                 },
                 "required": ["queries", "total_issues", "summary"],
-            },
-        ),
-        (
-            server._GIT_DIFF_ANALYZER_AGENT_ID,
-            {
-                "file_count": 1,
-                "hunk_count": 1,
-                "added_lines": 2,
-                "removed_lines": 1,
-                "binary_files": 0,
-                "files": [
-                    {
-                        "path": "auth/login.py",
-                        "added": 2,
-                        "removed": 1,
-                        "hunks": 1,
-                        "is_binary": False,
-                    }
-                ],
-                "risk_summary": {
-                    "auth_changes": 1,
-                    "money_changes": 0,
-                    "migration_changes": 0,
-                    "public_api_changes": 0,
-                    "test_files": 0,
-                    "tests_removed": False,
-                    "error_handling_removed": False,
-                    "secret_pattern_added": False,
-                    "todos_added": 1,
-                    "custom_risk_path_matches": 0,
-                },
-                "summary": "1 file(s), 1 hunk(s), +2/-1 lines.",
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "file_count": {"type": "integer"},
-                    "hunk_count": {"type": "integer"},
-                    "added_lines": {"type": "integer"},
-                    "removed_lines": {"type": "integer"},
-                    "binary_files": {"type": "integer"},
-                    "files": {"type": "array"},
-                    "risk_summary": {"type": "object"},
-                    "summary": {"type": "string"},
-                },
-                "required": ["file_count", "hunk_count", "added_lines", "removed_lines", "binary_files", "files", "risk_summary", "summary"],
             },
         ),
     ],
@@ -470,25 +372,6 @@ def _wait_for_job_terminal(client, api_key: str, job_id: str, *, attempts: int =
 @pytest.mark.parametrize(
     ("agent_id_attr", "runner_attr", "payload", "stub_output"),
     [
-        (
-            "_WEB_RESEARCHER_AGENT_ID",
-            "agent_web_researcher",
-            {"url": "https://example.com/docs"},
-            {
-                "url": "https://example.com/docs",
-                "title": "Docs",
-                "summary": "Found docs.",
-                "key_points": ["one"],
-                "answer": "",
-                "quotes": [],
-                "links": [],
-                "content_type": "documentation",
-                "per_url_findings": [{"url": "https://example.com/docs", "status": "ok", "content_length": 128}],
-                "synthesis": "Found docs.",
-                "cross_source_consensus": None,
-                "billing_units_actual": 1,
-            },
-        ),
         (
             "_PYTHON_EXECUTOR_AGENT_ID",
             "agent_python_executor",
@@ -633,7 +516,6 @@ def test_registry_lists_new_builtin_agents(client):
     assert {
         "arXiv Research Agent",
         "Python Code Executor",
-        "Web Researcher Agent",
         "CVE Lookup Agent",
         "DB Sandbox",
         "Live Endpoint Tester",
@@ -641,7 +523,6 @@ def test_registry_lists_new_builtin_agents(client):
         "Visual Regression",
         "Multi-Language Executor",
         "Semantic Codebase Search",
-        "AI Red Teamer",
         "Image Generator Agent",
         # YC launch-audit demo agents (added 2026-05-09):
         "Lighthouse Auditor",
@@ -682,10 +563,8 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
     system_owner = f"user:{system_row['user_id']}"
 
     for builtin_id in (
-        server._CODEREVIEW_AGENT_ID,
         server._CVELOOKUP_AGENT_ID,
         server._PYTHON_EXECUTOR_AGENT_ID,
-        server._WEB_RESEARCHER_AGENT_ID,
         server._DEPENDENCY_AUDITOR_AGENT_ID,
         server._MULTI_FILE_EXECUTOR_AGENT_ID,
         server._LINTER_AGENT_ID,
@@ -743,14 +622,14 @@ def test_registry_call_rejects_wrong_type_before_charge(client):
 
 def test_suspended_internal_builtin_is_reactivated_at_call_gate(client):
     _ = client
-    registry.set_agent_status(server._CODEREVIEW_AGENT_ID, "suspended")
-    builtin = registry.get_agent(server._CODEREVIEW_AGENT_ID, include_unapproved=True)
+    registry.set_agent_status(server._CVELOOKUP_AGENT_ID, "suspended")
+    builtin = registry.get_agent(server._CVELOOKUP_AGENT_ID, include_unapproved=True)
     assert builtin is not None
     assert builtin["status"] == "suspended"
 
-    server._assert_agent_callable(server._CODEREVIEW_AGENT_ID, builtin)
+    server._assert_agent_callable(server._CVELOOKUP_AGENT_ID, builtin)
 
-    refreshed = registry.get_agent(server._CODEREVIEW_AGENT_ID, include_unapproved=True)
+    refreshed = registry.get_agent(server._CVELOOKUP_AGENT_ID, include_unapproved=True)
     assert refreshed is not None
     assert refreshed["status"] == "active"
 
