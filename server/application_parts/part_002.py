@@ -607,7 +607,8 @@ def _assert_worker_claim(
     stored_token = (job.get("claim_token") or "").strip()
     if not stored_token:
         raise HTTPException(status_code=409, detail="Job claim token is missing.")
-    if not claim_token or claim_token != stored_token:
+    # Constant-time comparison to avoid leaking the token via timing.
+    if not claim_token or not hmac.compare_digest(claim_token, stored_token):
         raise HTTPException(status_code=403, detail="Invalid or missing claim_token.")
 
 

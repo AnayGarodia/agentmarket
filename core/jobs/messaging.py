@@ -405,20 +405,22 @@ def count_job_messages(job_id: str) -> int:
 
 
 def count_open_clarification_requests(job_id: str) -> int:
-    """Count unanswered clarification_request messages on a job."""
+    """Count unanswered clarification_request messages on a job.
+
+    Both queries must run inside one connection context — the prior version
+    closed the conn after the first query and then re-used the closed
+    handle, which blew up on Postgres and silently returned wrong counts
+    on SQLite.
+    """
     with _conn() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = %s AND type = 'clarification_request'",
             (job_id,),
         ).fetchone()
-    answered = (
-        conn.execute(
+        answered = conn.execute(
             "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = %s AND type = 'clarification_response'",
             (job_id,),
         ).fetchone()
-        if conn
-        else None
-    )
     requests = int(row["n"]) if row else 0
     responses = int(answered["n"]) if answered else 0
     return max(0, requests - responses)

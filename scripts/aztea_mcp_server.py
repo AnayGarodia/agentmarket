@@ -66,7 +66,7 @@ _META_TOOL_DISCOVERY: dict[str, tuple[list[str], list[str]]] = {
         ["wallet", "limit", "cap", "budget", "spend"],
         ["set daily spend cap"],
     ),
-    "aztea_topup_wallet": (
+    "aztea_topup_url": (
         ["wallet", "topup", "fund", "stripe", "checkout"],
         ["add credits via Stripe"],
     ),
@@ -796,9 +796,9 @@ def _verb_rule_score(slug: str, terms: list[str]) -> int:
         if not (topic_hit and verb_hit):
             continue
         weight = int(rule.get("weight") or 10)
-        if slug_lc in rule.get("promote_slugs") or set():
+        if slug_lc in (rule.get("promote_slugs") or set()):
             score += weight
-        elif slug_lc in rule.get("demote_slugs") or set():
+        elif slug_lc in (rule.get("demote_slugs") or set()):
             score -= weight
     return score
 

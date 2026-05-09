@@ -847,74 +847,6 @@ def auth_me(
     )
 
 
-@app.post(
-    "/auth/legal/accept",
-    status_code=200,
-    responses=_error_responses(401, 403, 422, 429, 500),
-    tags=["Auth"],
-    summary="Record acceptance of the platform Terms of Service and Privacy Policy.",
-)
-@limiter.limit("10/minute")
-def auth_legal_accept(
-    request: Request,
-    body: dict = Body(default_factory=dict),
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> dict:
-    """Mark the authenticated user as having accepted the current legal docs.
-
-    Body fields are optional — when omitted the platform-current versions
-    (`terms_version_current` / `privacy_version_current` from `/auth/me`) are
-    used. Callers may pass explicit versions to record historical acceptance.
-    """
-    if caller["type"] != "user":
-        raise HTTPException(
-            status_code=403,
-            detail="Legal acceptance is only available for end-user accounts.",
-        )
-    body = body or {}
-    terms_version = str(body.get("terms_version") or "").strip() or None
-    privacy_version = str(body.get("privacy_version") or "").strip() or None
-    # If a caller passes explicit versions they must match the platform's
-    # current versions — accepting an outdated version is the same as not
-    # accepting at all. Returning a typed error here lets the SDK redirect
-    # the user to re-read the latest legal docs.
-    if terms_version is not None and terms_version != _auth.LEGAL_TERMS_VERSION:
-        raise HTTPException(
-            status_code=400,
-            detail=error_codes.make_error(
-                "auth.legal_version_mismatch",
-                "terms_version does not match the current platform version.",
-                {
-                    "submitted": terms_version,
-                    "current": _auth.LEGAL_TERMS_VERSION,
-                    "field": "terms_version",
-                },
-            ),
-        )
-    if privacy_version is not None and privacy_version != _auth.LEGAL_PRIVACY_VERSION:
-        raise HTTPException(
-            status_code=400,
-            detail=error_codes.make_error(
-                "auth.legal_version_mismatch",
-                "privacy_version does not match the current platform version.",
-                {
-                    "submitted": privacy_version,
-                    "current": _auth.LEGAL_PRIVACY_VERSION,
-                    "field": "privacy_version",
-                },
-            ),
-        )
-    user_id = caller["user"]["user_id"]
-    legal_state = _auth.record_legal_acceptance(
-        user_id,
-        terms_version=terms_version,
-        privacy_version=privacy_version,
-    )
-    if legal_state is None:
-        raise HTTPException(status_code=404, detail="User not found.")
-    return JSONResponse(content={"ok": True, **legal_state})
-
-
 @app.patch(
     "/auth/role",
     responses=_error_responses(400, 401, 403, 429),
@@ -1270,38 +1202,6 @@ def auth_reset_password(request: Request, body: dict) -> JSONResponse:
     except _auth.PasswordResetError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return JSONResponse(content={"reset": True})
-
-
-# ---------------------------------------------------------------------------
-# Built-in agent handlers (invoked via registry/internal routing)
-# ---------------------------------------------------------------------------
-
-
-def _invoke_financial_agent(body: FinancialRequest) -> dict:
-    ticker = body.ticker.strip().upper()
-    if not ticker.isalpha() or len(ticker) > 5:
-        raise ValueError(f"Invalid ticker symbol: '{ticker}'")
-    return _run_financial(ticker)
-
-
-
-@app.post(
-    "/analyze",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500, 502, 503),
-)
-@limiter.limit("10/minute")
-def analyze_alias(
-    request: Request,
-    body: FinancialRequest,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> Response:
-    return registry_call(
-        request=request,
-        agent_id=_FINANCIAL_AGENT_ID,
-        body=core_models.RegistryCallRequest(root=body.model_dump()),
-        caller=caller,
-    )
 
 
 # ---------------------------------------------------------------------------

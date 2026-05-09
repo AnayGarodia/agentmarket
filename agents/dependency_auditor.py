@@ -34,10 +34,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import quote
 
 import requests
+from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
@@ -47,16 +49,19 @@ _NPM_API = "https://registry.npmjs.org/{name}"
 _TIMEOUT = 10
 _MAX_PACKAGES = 20
 _MAX_MANIFEST_CHARS = 10_000
+_AUDIT_WORKERS = 8
 
 _COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl"}
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+_VER_SPLIT_RE = re.compile(r"[.\-]")
+_OSV_SCORE_TAIL_RE = re.compile(r"\b(\d+(?:\.\d+)?)$")
 
 
-def _err(code: str, message: str, details: dict | None = None) -> dict[str, Any]:
-    err: dict[str, Any] = {"code": code, "message": message}
-    if details:
-        err["details"] = details
-    return {"error": err}
+def _ver_tuple(v: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in _VER_SPLIT_RE.split(v.strip())[:3])
+    except (ValueError, TypeError):
+        return (0, 0, 0)
 
 
 def _detect_ecosystem(manifest: str) -> str:
@@ -163,9 +168,11 @@ def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
             headers={"User-Agent": "aztea-dependency-auditor/1.0"},
         )
         if resp.status_code != 200:
+            _LOG.info("OSV non-200 for %s: status=%s", pkg_name, resp.status_code)
             return []
         data = resp.json()
     except Exception:
+        _LOG.warning("OSV query failed for %s/%s", ecosystem, pkg_name, exc_info=True)
         return []
 
     results = []
@@ -195,7 +202,7 @@ def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
                 break
             except ValueError:
                 pass
-            m = re.search(r"\b(\d+(?:\.\d+)?)$", score_field)
+            m = _OSV_SCORE_TAIL_RE.search(score_field)
             if m:
                 try:
                     cvss = float(m.group(1))
@@ -401,68 +408,55 @@ def run(payload: dict) -> dict:
     fetch_latest = "outdated" in checks
     fetch_license = "license" in checks
 
-    packages_out = []
-    vulnerable_count = 0
-    outdated_count = 0
-    critical_count = 0
-    top_priorities: list[str] = []
-
-    for name, current_ver in raw_packages:
+    def _audit_one(item: tuple[str, str | None]) -> dict[str, Any]:
+        name, current_ver = item
         cves: list[dict] = []
         latest_version: str | None = None
         license_str: str | None = None
 
-        # Fetch latest + license from the appropriate registry for *both*
-        # ecosystems. We always make the registry call when either outdated or
-        # license is requested; the helper returns a tuple for both fields, so
-        # this is a single round-trip per package.
+        # Single round-trip per package per registry — helper returns both fields.
         if fetch_latest or fetch_license:
             if ecosystem == "pypi":
                 latest_version, license_str = _fetch_pypi_latest(name)
             elif ecosystem == "npm":
                 latest_version, license_str = _fetch_npm_latest(name)
 
-        # CVE lookup via OSV.dev (package-specific, no false positives)
         if "cve" in checks:
             cves = _query_osv(name, current_ver, ecosystem)
 
-        is_outdated = False
-        if "outdated" in checks and current_ver and latest_version:
-
-            def _ver_tuple(v: str) -> tuple:
-                try:
-                    return tuple(int(x) for x in re.split(r"[.\-]", v.strip())[:3])
-                except (ValueError, TypeError):
-                    return (0, 0, 0)
-
-            is_outdated = _ver_tuple(current_ver) < _ver_tuple(latest_version)
-
+        is_outdated = bool(
+            "outdated" in checks
+            and current_ver
+            and latest_version
+            and _ver_tuple(current_ver) < _ver_tuple(latest_version)
+        )
         l_risk = _license_risk(license_str) if fetch_license else "none"
 
-        # ``outdated_count`` is incremented exactly once per package per scan.
-        # The previous version had two branches that could both fire on an
-        # is_outdated && !cves package, double-counting the entry.
         if cves:
-            vulnerable_count += 1
             max_cvss = max(c["cvss"] for c in cves)
-            if max_cvss >= 9.0:
-                critical_count += 1
             action = "upgrade" if any(c["fixed_in"] for c in cves) else "replace"
             top_cve = max(cves, key=lambda c: c["cvss"])
-            top_priorities.append(
-                f"{'CRITICAL' if max_cvss >= 9.0 else 'HIGH' if max_cvss >= 7.0 else 'MEDIUM'}: "
-                f"{name}@{current_ver or '?'} — {top_cve['id']} (CVSS {top_cve['cvss']})"
+            severity_label = (
+                "CRITICAL" if max_cvss >= 9.0
+                else "HIGH" if max_cvss >= 7.0
+                else "MEDIUM"
+            )
+            priority = (
+                f"{severity_label}: {name}@{current_ver or '?'} — "
+                f"{top_cve['id']} (CVSS {top_cve['cvss']})"
             )
         elif is_outdated:
-            outdated_count += 1
             action = "upgrade"
+            priority = None
         elif l_risk in ("high", "medium"):
             action = "review"
+            priority = None
         else:
             action = "ok"
+            priority = None
 
-        packages_out.append(
-            {
+        return {
+            "package": {
                 "name": name,
                 "current_version": current_ver or "unknown",
                 "latest_version": latest_version,
@@ -470,8 +464,29 @@ def run(payload: dict) -> dict:
                 "license": license_str,
                 "license_risk": l_risk,
                 "action": action,
-            }
-        )
+            },
+            "is_outdated": is_outdated,
+            "priority": priority,
+        }
+
+    # WHY: per-package work is 2-3 independent HTTP calls; with up to _MAX_PACKAGES
+    # items this serial loop dominated wall-time. Order is restored by sort below.
+    workers = min(_AUDIT_WORKERS, max(1, len(raw_packages)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        audits = list(pool.map(_audit_one, raw_packages))
+
+    packages_out = [a["package"] for a in audits]
+    vulnerable_count = sum(1 for p in packages_out if p["cves"])
+    critical_count = sum(
+        1 for p in packages_out
+        if p["cves"] and max(c["cvss"] for c in p["cves"]) >= 9.0
+    )
+    # Each package contributes to outdated_count only when it has no CVEs;
+    # CVE-bearing packages already count toward vulnerable_count.
+    outdated_count = sum(
+        1 for a in audits if a["is_outdated"] and not a["package"]["cves"]
+    )
+    top_priorities = [a["priority"] for a in audits if a["priority"]]
 
     # Sort: vulnerable first, then by severity
     def _sort_key(p: dict) -> tuple:

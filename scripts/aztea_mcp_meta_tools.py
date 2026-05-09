@@ -741,8 +741,8 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "jobs": {
                     "type": "array",
-                    "description": "List of job specs (max 50). Each spec must include agent_id or slug, plus input_payload.",
-                    "maxItems": 50,
+                    "description": "List of job specs (max 250). Each spec must include agent_id or slug, plus input_payload.",
+                    "maxItems": 250,
                     "items": {
                         "type": "object",
                         "properties": {
