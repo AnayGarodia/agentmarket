@@ -263,7 +263,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "slug": {
                     "type": "string",
-                    "description": "Slug / tool name (e.g. 'linter_agent'). Use this when you only have the slug from aztea_search.",
+                    "description": "Slug / tool name (e.g. 'linter_agent'). Use this when you only have the slug from search_specialists.",
                 },
                 "input_payload": {
                     "type": "object",
@@ -311,7 +311,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "List every public Aztea agent in one shot — slug, name, short "
             "description, category, price, trust score. Use this when a "
-            "single aztea_search query won't surface what you need (e.g. "
+            "single search_specialists query won't surface what you need (e.g. "
             "browsing the marketplace, building a tool index, picking "
             "agents for a batch). Optionally filter by category."
         ),
@@ -338,7 +338,7 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "aztea_hire_async",
         "description": (
             "Submit an async job to an Aztea marketplace agent and return immediately with a job_id. "
-            "The agent works in the background; poll with aztea_job_status to get progress and results. "
+            "The agent works in the background; poll with manage_job(action='status') to get progress and results. "
             "Use this by default for long-running tasks, for work that may need clarification, or whenever you want to manage several agents without blocking on each call."
         ),
         "input_schema": {
@@ -350,7 +350,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "slug": {
                     "type": "string",
-                    "description": "Agent slug returned by aztea_search. Prefer this when available.",
+                    "description": "Agent slug returned by search_specialists. Prefer this when available.",
                 },
                 "input_payload": {
                     "type": "object",
@@ -359,7 +359,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "input": {
                     "type": "object",
-                    "description": "Alias for input_payload. Prefer this in grouped aztea_workflow calls.",
+                    "description": "Alias for input_payload. Prefer this in grouped manage_workflow calls.",
                     "additionalProperties": True,
                 },
                 "callback_url": {
@@ -475,7 +475,7 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "aztea_follow_job",
         "description": (
             "Poll an async job until it reaches a terminal state (complete/failed/cancelled), "
-            "then return the final result. Saves round-trips compared to calling aztea_job_status "
+            "then return the final result. Saves round-trips compared to calling manage_job(action='status') "
             "in a loop. Use this right after aztea_hire_async when you want to wait for the "
             "result inline. If the job is already terminal the call returns immediately. "
             "Maximum wait is 3 minutes (timeout_seconds default=180, max=300)."
@@ -503,7 +503,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Send a clarification response to an agent whose job is awaiting_clarification. "
             "The agent will resume running after receiving this message. "
-            "Read the clarification_request from aztea_job_status first to know what to respond."
+            "Read the clarification_request from manage_job(action='status') first to know what to respond."
         ),
         "input_schema": {
             "type": "object",
@@ -612,7 +612,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Filtered registry discovery for Aztea agents by task description. "
             "Returns ranked candidates with trust scores, pricing, and match explanations, "
-            "and suppresses low-relevance demo/toy agents. Prefer aztea_search for Claude routing; "
+            "and suppresses low-relevance demo/toy agents. Prefer search_specialists for Claude routing; "
             "use this when you need trust or price filters."
         ),
         "input_schema": {
@@ -710,7 +710,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "slug": {
                     "type": "string",
-                    "description": "Slug / tool name (e.g. 'linter_agent'). Use when you only have the slug from aztea_search.",
+                    "description": "Slug / tool name (e.g. 'linter_agent'). Use when you only have the slug from search_specialists.",
                 },
             },
             "anyOf": [
@@ -752,7 +752,7 @@ _TOOLS: list[dict[str, Any]] = [
                             },
                             "slug": {
                                 "type": "string",
-                                "description": "Agent slug returned by aztea_search.",
+                                "description": "Agent slug returned by search_specialists.",
                             },
                             "input_payload": {
                                 "type": "object",
@@ -766,7 +766,7 @@ _TOOLS: list[dict[str, Any]] = [
                             },
                             "arguments": {
                                 "type": "object",
-                                "description": "Alias for input_payload — matches the `aztea_call` field name so a single-call payload can be reused inside a batch job spec.",
+                                "description": "Alias for input_payload — matches the `call_specialist` field name so a single-call payload can be reused inside a batch job spec.",
                                 "additionalProperties": True,
                             },
                             "budget_cents": {
@@ -997,36 +997,39 @@ _TOOLS: list[dict[str, Any]] = [
 # exposing 22 distinct tools, while every capability stays reachable.
 #
 # Mapping (grouped → underlying):
-#   aztea_job(action=rate)           → aztea_rate_job
-#   aztea_job(action=dispute)        → aztea_dispute_job
-#   aztea_job(action=verify)         → aztea_verify_job
-#   aztea_job(action=verify_output)  → aztea_verify_output
-#   aztea_job(action=cancel)         → aztea_cancel_job
-#   aztea_job(action=status)         → aztea_job_status
-#   aztea_job(action=follow)         → aztea_follow_job
-#   aztea_job(action=clarify)        → aztea_clarify
-#   aztea_job(action=examples)       → aztea_get_examples
+#   manage_job(action=rate)           → aztea_rate_job
+#   manage_job(action=dispute)        → aztea_dispute_job
+#   manage_job(action=verify)         → aztea_verify_job
+#   manage_job(action=verify_output)  → aztea_verify_output
+#   manage_job(action=cancel)         → aztea_cancel_job
+#   manage_job(action=status)         → aztea_job_status
+#   manage_job(action=follow)         → aztea_follow_job
+#   manage_job(action=clarify)        → aztea_clarify
+#   manage_job(action=examples)       → aztea_get_examples
 #
-#   aztea_budget(action=balance)        → aztea_wallet_balance
-#   aztea_budget(action=estimate)       → aztea_estimate_cost
-#   aztea_budget(action=topup_url)      → aztea_topup_url
-#   aztea_budget(action=set_daily_limit)→ aztea_set_daily_limit
-#   aztea_budget(action=set_session_budget) → aztea_set_session_budget
-#   aztea_budget(action=session_summary)→ aztea_session_summary
-#   aztea_budget(action=spend_summary)  → aztea_spend_summary
-#   aztea_budget(action=retention)      → aztea_data_retention_policy
+#   manage_budget(action=balance)        → aztea_wallet_balance
+#   manage_budget(action=estimate)       → aztea_estimate_cost
+#   manage_budget(action=topup_url)      → aztea_topup_url
+#   manage_budget(action=set_daily_limit)→ aztea_set_daily_limit
+#   manage_budget(action=set_session_budget) → aztea_set_session_budget
+#   manage_budget(action=session_summary)→ aztea_session_summary
+#   manage_budget(action=spend_summary)  → aztea_spend_summary
+#   manage_budget(action=retention)      → aztea_data_retention_policy
 #
-#   aztea_workflow(action=hire_async)   → aztea_hire_async
-#   aztea_workflow(action=hire_batch)   → aztea_hire_batch
-#   aztea_workflow(action=batch_status) → aztea_batch_status
-#   aztea_workflow(action=run_pipeline) → aztea_run_pipeline
-#   aztea_workflow(action=pipeline_status)→ aztea_pipeline_status
-#   aztea_workflow(action=run_recipe)   → aztea_run_recipe
-#   aztea_workflow(action=list_pipelines)→ aztea_list_pipelines
-#   aztea_workflow(action=list_recipes) → aztea_list_recipes
-#   aztea_workflow(action=compare)      → aztea_compare_agents
-#   aztea_workflow(action=compare_status)→ aztea_compare_status
-#   aztea_workflow(action=compare_select)→ aztea_select_compare_winner
+#   manage_workflow(action=hire_async)   → aztea_hire_async
+#   manage_workflow(action=hire_batch)   → aztea_hire_batch
+#   manage_workflow(action=batch_status) → aztea_batch_status
+#   manage_workflow(action=run_pipeline) → aztea_run_pipeline
+#   manage_workflow(action=pipeline_status)→ aztea_pipeline_status
+#   manage_workflow(action=run_recipe)   → aztea_run_recipe
+#   manage_workflow(action=list_pipelines)→ aztea_list_pipelines
+#   manage_workflow(action=list_recipes) → aztea_list_recipes
+#   manage_workflow(action=compare)      → aztea_compare_agents
+#   manage_workflow(action=compare_status)→ aztea_compare_status
+#   manage_workflow(action=compare_select)→ aztea_select_compare_winner
+#
+# Old names (`aztea_job` / `aztea_budget` / `aztea_workflow`) remain valid
+# via the dispatch-time alias in scripts/aztea_mcp_server.py.
 
 def _validate_grouped_action_inputs(
     tool_name: str, action: str, sub_args: dict[str, Any]
@@ -1034,30 +1037,30 @@ def _validate_grouped_action_inputs(
     """Reject grouped-tool actions that the JSON schema can't constrain.
 
     Some grouped tools have actions that require fields the top-level schema
-    can't enforce (e.g. `aztea_budget(action="estimate")` needs a slug or
+    can't enforce (e.g. `manage_budget(action="estimate")` needs a slug or
     agent_id). Without this check the request reaches the server, which
     returns a terse 400. Catching it here lets us return a structured,
     Claude-readable hint that points to discovery.
     """
-    if tool_name == "aztea_budget" and action == "estimate":
+    if tool_name == "manage_budget" and action == "estimate":
         if not str(sub_args.get("slug") or sub_args.get("agent_id") or "").strip():
             return False, {
                 "error": "INVALID_INPUT",
                 "message": (
-                    "aztea_budget(action='estimate') requires `slug` or `agent_id`. "
+                    "manage_budget(action='estimate') requires `slug` or `agent_id`. "
                     "Estimate is per-agent so the platform can apply variable pricing."
                 ),
                 "required_one_of": ["slug", "agent_id"],
                 "next_step": (
-                    "Call aztea_search(query='...') to find the slug, then "
-                    "aztea_budget(action='estimate', slug='<slug>', input={...})."
+                    "Call search_specialists(query='...') to find the slug, then "
+                    "manage_budget(action='estimate', slug='<slug>', input={...})."
                 ),
             }
     return True, None
 
 
 _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
-    "aztea_job": {
+    "manage_job": {
         "rate": "aztea_rate_job",
         "dispute": "aztea_dispute_job",
         "dispute_status": "aztea_dispute_status",
@@ -1070,7 +1073,7 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         "clarify": "aztea_clarify",
         "examples": "aztea_get_examples",
     },
-    "aztea_budget": {
+    "manage_budget": {
         "balance": "aztea_wallet_balance",
         "estimate": "aztea_estimate_cost",
         "topup_url": "aztea_topup_url",
@@ -1080,7 +1083,7 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         "spend_summary": "aztea_spend_summary",
         "retention": "aztea_data_retention_policy",
     },
-    "aztea_workflow": {
+    "manage_workflow": {
         "hire_async": "aztea_hire_async",
         "hire_batch": "aztea_hire_batch",
         "batch_status": "aztea_batch_status",
@@ -1102,7 +1105,7 @@ GROUPED_TOOL_NAMES: frozenset[str] = frozenset(_GROUPED_DISPATCH.keys())
 
 _GROUPED_TOOLS: list[dict[str, Any]] = [
     {
-        "name": "aztea_job",
+        "name": "manage_job",
         "description": (
             "Post-call operations on an Aztea job. Pick action by what you need:\n"
             "  • rate(job_id, rating[1-5], comment?) — rate the agent's output, feeds trust signals.\n"
@@ -1178,7 +1181,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "aztea_budget",
+        "name": "manage_budget",
         "description": (
             "Wallet, spend, and budget operations. Pick action by what you need:\n"
             "  • balance — current wallet balance + recent transactions.\n"
@@ -1242,7 +1245,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "aztea_workflow",
+        "name": "manage_workflow",
         "description": (
             "Multi-call orchestration: async, batch, compare, pipelines, recipes. Pick action:\n"
             "  • hire_async(slug, input, ...) — fire-and-poll an agent for long jobs.\n"
@@ -1379,16 +1382,16 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_pipeline_status": _annotations(read_only=True, idempotent=False),
     "aztea_run_recipe": _annotations(read_only=False, idempotent=False),
     # Grouped tools dispatch to varied actions; mark as non-read-only.
-    "aztea_job": _annotations(read_only=False, idempotent=False),
-    "aztea_budget": _annotations(read_only=False, idempotent=True),
-    "aztea_workflow": _annotations(read_only=False, idempotent=False),
+    "manage_job": _annotations(read_only=False, idempotent=False),
+    "manage_budget": _annotations(read_only=False, idempotent=True),
+    "manage_workflow": _annotations(read_only=False, idempotent=False),
 }
 
 
 def get_meta_tools() -> list[dict[str, Any]]:
     """All meta-tools surfaced to the MCP client.
 
-    Grouped tools (aztea_job/budget/workflow) come first because they are the
+    Grouped tools (manage_job/budget/workflow) come first because they are the
     expected entry point; the underlying singular tools remain reachable for
     callers that already know the exact name.
     """
@@ -1407,7 +1410,7 @@ def always_visible_tools() -> list[dict[str, Any]]:
 
     Returns the three grouped resource dispatchers — they cover 22 of the 28
     underlying singular tools at low token cost. The remaining singular tools
-    stay discoverable through aztea_search.
+    stay discoverable through search_specialists.
     """
     enriched: list[dict[str, Any]] = []
     for tool in _GROUPED_TOOLS:
@@ -1469,7 +1472,7 @@ def call_meta_tool(
             }
         sub_args = {k: v for k, v in arguments.items() if k != "action"}
         # Per-action input contract checks for grouped tools. Catches the
-        # schema/server drift where aztea_budget(action="estimate") needed a
+        # schema/server drift where manage_budget(action="estimate") needed a
         # slug or agent_id but the JSON schema only marked `action` required.
         ok_action, action_error = _validate_grouped_action_inputs(
             tool_name, action, sub_args
@@ -1750,7 +1753,7 @@ def _input_arg(args: dict[str, Any], *, default: dict[str, Any] | None = None) -
     """Resolve the agent payload from any of the three accepted field names.
 
     `input_payload` is canonical (HTTP API field). `input` is the friendlier
-    alias used in MCP grouped tools. `arguments` is the field name `aztea_call`
+    alias used in MCP grouped tools. `arguments` is the field name `call_specialist`
     uses — and the eval flagged that submitting a `hire_batch` job with
     `arguments={...}` (matching the single-call shape) was rejected with a
     confusing schema error. Accepting all three here makes the platform
@@ -1804,7 +1807,7 @@ def _compact_job_submission(result: dict[str, Any]) -> dict[str, Any]:
     )
     if omitted:
         compact["omitted_fields"] = omitted[:20]
-        compact.setdefault("full_status_available_via", "aztea_job_status")
+        compact.setdefault("full_status_available_via", "manage_job(action='status')")
     return compact or result
 
 
@@ -2145,7 +2148,7 @@ def _resolve_agent_id(
             f"No agent has the exact slug {slug!r}. "
             "Slug matching is strict (no fuzzy fallback) to prevent "
             "money-routing to a similarly-named agent. "
-            "Use aztea_search to find the right slug, then retry."
+            "Use search_specialists to find the right slug, then retry."
         ),
         "search_returned_candidates": candidates_seen[:10],
     }
@@ -2219,8 +2222,8 @@ def _list_agents(
         rows.append(
             {
                 # Prefer an explicit slug field; fall back to canonicalising
-                # the display name so aztea_call works without a separate
-                # aztea_describe step (fixes "Secret Scanner" → "secret_scanner").
+                # the display name so call_specialist works without a separate
+                # describe_specialist step (fixes "Secret Scanner" → "secret_scanner").
                 "slug": agent.get("slug") or agent.get("agent_slug") or _canonical_slug(agent.get("name")),
                 "agent_id": agent.get("agent_id"),
                 "name": agent.get("name"),
@@ -2243,7 +2246,7 @@ def _list_agents(
         "agents": rows,
         "note": (
             "All public Aztea agents in one shot. Filter further with category. "
-            "Pick a slug and call aztea_describe(slug=...) for the full schema."
+            "Pick a slug and call describe_specialist(slug=...) for the full schema."
         ),
     }
 
@@ -2404,7 +2407,7 @@ def _session_audit_legacy(
         "receipts_aggregate": aggregates,
         "receipts_digest": receipts_digest,
         "receipts_digest_method": "sha256(job_id|output_hash|signed) joined by newline",
-        "audit_signature_method": "per-job Ed25519 + did:web (call aztea_job(action=verify) to confirm any single receipt)",
+        "audit_signature_method": "per-job Ed25519 + did:web (call manage_job(action=verify) to confirm any single receipt)",
         # Self-discovery: every filter / mode this tool supports surfaced in
         # one place so callers don't have to read docs to find them. Caught
         # in the 2026-05-08 eval where the auditor scored this surface a C+
@@ -2479,7 +2482,7 @@ def _list_pipelines(
         if not pipeline_rows:
             result["note"] = (
                 "No user-created pipelines yet. Curated public workflows live "
-                "under recipes — call aztea_workflow(action='list_recipes')."
+                "under recipes — call manage_workflow(action='list_recipes')."
             )
         else:
             result.setdefault(
@@ -2519,7 +2522,7 @@ def _hire_async(
         result.setdefault(
             "note",
             (
-                f"Job submitted. Poll with aztea_job(action='status', job_id='{result.get('job_id', '')}') "
+                f"Job submitted. Poll with manage_job(action='status', job_id='{result.get('job_id', '')}') "
                 "to track progress and retrieve results."
             ),
         )
@@ -2978,7 +2981,7 @@ def _cancel_job(
 def _follow_job(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
-    """Poll a job until terminal, then return the final aztea_job_status result.
+    """Poll a job until terminal, then return the final manage_job(action='status') result.
 
     Uses an adaptive cadence: 1s polls for the first 10s (so a fast job
     completes within one round-trip of the server), 2s polls for the next
@@ -3111,7 +3114,7 @@ def _dispute_job(
         result.setdefault(
             "note",
             "Dispute filed. An LLM judge will review the evidence and determine the outcome. "
-            "Poll with aztea_job(action='dispute_status', dispute_id=...) to track resolution.",
+            "Poll with manage_job(action='dispute_status', dispute_id=...) to track resolution.",
         )
     return ok, result
 
@@ -3124,7 +3127,7 @@ def _dispute_status(
     if not dispute_id:
         return False, {
             "error": "INVALID_INPUT",
-            "message": "dispute_id is required (returned by aztea_job(action='dispute', ...)).",
+            "message": "dispute_id is required (returned by manage_job(action='dispute', ...)).",
         }
     ok, result = _get(session, f"{base}/disputes/{dispute_id}", hdrs, timeout)
     if not ok:
@@ -3281,16 +3284,16 @@ def _discover(
             if intent:
                 result["note"] = (
                     f"No high-confidence {intent.replace('_', ' ')} agent was returned by discovery. "
-                    "Try a narrower task description, or call aztea_workflow(action='list_agents') to browse the full catalog."
+                    "Try a narrower task description, or call manage_workflow(action='list_agents') to browse the full catalog."
                 )
             else:
                 result["note"] = (
                     "No agent in the live catalog matches this query strongly enough. "
-                    "Try a different phrasing, a direct slug, or aztea_workflow(action='list_agents') to browse all 9 live agents."
+                    "Try a different phrasing, a direct slug, or manage_workflow(action='list_agents') to browse all 9 live agents."
                 )
             result["next_step"] = (
                 "If you believe an agent should match, paste the exact slug from "
-                "aztea_workflow(action='list_agents') and call aztea_describe directly."
+                "manage_workflow(action='list_agents') and call describe_specialist directly."
             )
     return ok, result
 
@@ -3432,7 +3435,7 @@ def _compare_agents(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
     # Accept either `agent_ids` (UUIDs) or `slugs` (human names from
-    # aztea_search). The grouped tool surface documents `slugs`, so when
+    # search_specialists). The grouped tool surface documents `slugs`, so when
     # callers pass them we resolve client-side instead of 422-ing.
     raw_agent_ids = args.get("agent_ids")
     raw_slugs = args.get("slugs")

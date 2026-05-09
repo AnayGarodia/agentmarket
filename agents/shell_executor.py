@@ -189,7 +189,7 @@ def run(payload: dict) -> dict:
         if chain_match:
             why = (
                 f"Command not permitted — shell metacharacter {chain_match!r} is not allowed. "
-                "Each call must run a single command. Split into multiple aztea_call invocations."
+                "Each call must run a single command. Split into multiple call_specialist invocations."
             )
         else:
             why = (

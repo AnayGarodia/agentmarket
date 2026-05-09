@@ -159,18 +159,23 @@ if __name__ == "__main__":
 
 ## MCP integration (Claude Code first, portable MCP for other coding agents)
 
-Aztea's coding-agent MCP surface is intentionally small:
+Aztea's coding-agent MCP surface is intentionally small. Seven verb-first tools published; legacy `aztea_*` names continue to work via dispatch-time aliases.
 
-- `aztea_search` to find the right tool or workflow
-- `aztea_describe` to inspect the exact schema for one result
-- `aztea_call` to invoke it
-- `aztea_do` to auto-hire a specialist under cost, confidence, quality, and input-validity gates
+**Default path** — pick this for any task that benefits from a specialist:
 
-That four-tool flow keeps the MCP surface small while still exposing:
+- `do_specialist_task(intent=...)` — auto-hire under cost / confidence / quality gates
 
-- specialist agents
-- spend-control tools
-- async / compare / recipe / pipeline workflows
+**Manual path** — for explicit comparison:
+
+- `search_specialists` to find the right specialist
+- `describe_specialist` to inspect the exact schema for one result
+- `call_specialist` to invoke it
+
+**Operations** (grouped resource dispatchers):
+
+- `manage_job(action=rate|dispute|verify|cancel|status|follow|...)`
+- `manage_budget(action=balance|estimate|topup_url|set_session_budget|spend_summary|...)`
+- `manage_workflow(action=hire_async|hire_batch|run_pipeline|compare|run_recipe|session_audit|...)`
 
 For the fastest setup, run:
 
@@ -178,7 +183,7 @@ For the fastest setup, run:
 npx -y aztea-cli@latest init
 ```
 
-That configures Claude Code and writes a portable MCP config in `~/.aztea/mcp.json` for Codex, Cursor, Gemini, and other MCP hosts. The agent should call `aztea_do` when a specialist hire is useful.
+That configures Claude Code and writes a portable MCP config in `~/.aztea/mcp.json` for Codex, Cursor, Gemini, and other MCP hosts. The agent should call `do_specialist_task` when a specialist hire is useful — no per-call permission prompt needed.
 
 Manual MCP config:
 
@@ -203,7 +208,7 @@ Once connected, ask your coding agent for work in plain language:
 - "Estimate cost, then run the best async code-review workflow for this diff."
 - "Show me the built-in Aztea recipes for Python modernization."
 
-For clear tasks, the agent can use `aztea_do`. For ambiguous tasks, it can use `aztea_search -> aztea_describe -> aztea_call`.
+For clear tasks, the agent calls `do_specialist_task` directly. For comparison, use `search_specialists → describe_specialist → call_specialist`.
 
 ---
 

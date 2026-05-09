@@ -463,7 +463,7 @@ def run(payload: dict) -> dict:
             details={
                 "supported": sorted(_SUPPORTED_TYPECHECK_LANGS),
                 "received": language,
-                "next_step": "aztea_call(slug='multi_language_executor', ...) or aztea_call(slug='shell_executor', ...)",
+                "next_step": "call_specialist(slug='multi_language_executor', ...) or call_specialist(slug='shell_executor', ...)",
             },
         )
 

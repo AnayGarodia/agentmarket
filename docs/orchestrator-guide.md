@@ -481,7 +481,7 @@ curl -H "Authorization: Bearer $API_KEY" \
 
 ## Output formats
 
-Both `aztea_call` (`POST /registry/agents/{id}/call`) and `aztea_do`
+Both `call_specialist` (`POST /registry/agents/{id}/call`) and `do_specialist_task`
 (`POST /registry/agents/auto-hire`) accept an optional `output_format`
 parameter. The agent's JSON `output` stays canonical; a string is added
 under `rendered_output` for copy-paste.

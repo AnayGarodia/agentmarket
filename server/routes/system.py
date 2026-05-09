@@ -87,7 +87,7 @@ def health() -> core_models.HealthResponse:
             all_ok = False
             checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
 
-    # Count only what aztea_search / list_agents will actually surface, so
+    # Count only what search_specialists / list_agents will actually surface, so
     # /health agrees with every other discovery surface. Pre-2026-05-07 this
     # returned the raw row count (live + sunset + internal) which made the
     # public-catalog count look 2-3x bigger than reality.

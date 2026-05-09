@@ -291,7 +291,7 @@ def run(payload: dict) -> dict:
             details={
                 "supported": sorted(_SUPPORTED_LINTER_LANGS),
                 "received": language,
-                "next_step": "aztea_search('lint <language>') or aztea_call(slug='multi_language_executor', ...)",
+                "next_step": "search_specialists('lint <language>') or call_specialist(slug='multi_language_executor', ...)",
             },
         )
     if language == "auto":

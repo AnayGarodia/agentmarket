@@ -375,7 +375,7 @@ def run(payload: dict) -> dict:
             if "js_rendered" in str(err_msg).lower() or "spa" in str(err_msg).lower():
                 details["fallback_recommended"] = "browser_agent"
                 details["fallback_intent"] = (
-                    "aztea_call(slug='browser_agent', arguments={'url': '...', 'action': 'scrape'}) "
+                    "call_specialist(slug='browser_agent', arguments={'url': '...', 'action': 'scrape'}) "
                     "renders the page with headless Chromium, then returns the rendered HTML/text."
                 )
                 details["why_not_auto_retry"] = (

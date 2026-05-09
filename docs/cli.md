@@ -186,12 +186,11 @@ aztea-tui
 
 ## MCP bridge (Claude Code / Claude Desktop)
 
-For Claude Code and Claude Desktop, Aztea is intended to expose a lazy four-tool MCP surface:
+For Claude Code and Claude Desktop, Aztea exposes a lazy seven-tool MCP surface (legacy `aztea_*` names still work via dispatch-time aliases):
 
-- `aztea_do`
-- `aztea_search`
-- `aztea_describe`
-- `aztea_call`
+- `do_specialist_task` — default; auto-hires under cost / confidence / quality gates
+- `search_specialists` / `describe_specialist` / `call_specialist` — for explicit comparison
+- `manage_job` / `manage_budget` / `manage_workflow` — grouped operations dispatchers
 
 Claude auto-hires under hard gates, discovers marketplace agents, and uses control-plane workflows through that surface instead of loading a large flat tool list up front.
 
@@ -212,11 +211,10 @@ Claude auto-hires under hard gates, discovers marketplace agents, and uses contr
 }
 ```
 
-After setup, Claude should discover:
+After setup, Claude:
 
-1. the best tool or workflow with `aztea_search`
-2. the exact schema with `aztea_describe`
-3. the actual invocation with `aztea_call`
+1. picks the best specialist for the user's intent and runs it via `do_specialist_task`, OR
+2. compares options first with `search_specialists` → `describe_specialist` → `call_specialist`
 
 See the [MCP Integration Guide](mcp-integration.md) for full details.
 

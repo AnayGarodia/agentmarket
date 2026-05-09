@@ -781,28 +781,28 @@ def test_cancel_job_is_in_meta_tool_names_and_schema():
     assert schema["required"] == ["job_id"]
 
 
-# ── Resource-grouped tools (aztea_job / aztea_budget / aztea_workflow) ─────
+# ── Resource-grouped tools (manage_job / manage_budget / manage_workflow) ─
 
 
 def test_grouped_tools_listed_first_in_get_meta_tools():
     tools = meta_tools.get_meta_tools()
     first_three_names = [t["name"] for t in tools[:3]]
-    assert set(first_three_names) == {"aztea_job", "aztea_budget", "aztea_workflow"}
+    assert set(first_three_names) == {"manage_job", "manage_budget", "manage_workflow"}
 
 
 def test_always_visible_returns_only_three_grouped_tools():
     visible = meta_tools.always_visible_tools()
     names = sorted(t["name"] for t in visible)
-    assert names == ["aztea_budget", "aztea_job", "aztea_workflow"]
+    assert names == ["manage_budget", "manage_job", "manage_workflow"]
 
 
 def test_grouped_tool_names_in_meta_tool_names():
-    for name in ("aztea_job", "aztea_budget", "aztea_workflow"):
+    for name in ("manage_job", "manage_budget", "manage_workflow"):
         assert name in meta_tools.META_TOOL_NAMES
 
 
 def test_grouped_dispatch_routes_rate_action_to_underlying(monkeypatch):
-    """aztea_job(action='rate', ...) must dispatch to aztea_rate_job and strip
+    """manage_job(action='rate', ...) must dispatch to aztea_rate_job and strip
     `action` from the args before invoking it."""
     captured: dict[str, object] = {}
 
@@ -819,7 +819,7 @@ def test_grouped_dispatch_routes_rate_action_to_underlying(monkeypatch):
 
     monkeypatch.setattr(meta_tools, "call_meta_tool", _spy)
     ok, _ = meta_tools.call_meta_tool(
-        "aztea_job",
+        "manage_job",
         {"action": "rate", "job_id": "job_42", "rating": 5, "comment": "great"},
         base_url="https://aztea.test",
         api_key="key",
@@ -838,7 +838,7 @@ def test_grouped_dispatch_routes_rate_action_to_underlying(monkeypatch):
 
 def test_grouped_dispatch_rejects_unknown_action():
     ok, result = meta_tools.call_meta_tool(
-        "aztea_workflow",
+        "manage_workflow",
         {"action": "teleport"},
         base_url="https://aztea.test",
         api_key="key",
@@ -854,7 +854,7 @@ def test_grouped_dispatch_rejects_unknown_action():
 
 def test_grouped_dispatch_requires_action():
     ok, result = meta_tools.call_meta_tool(
-        "aztea_budget",
+        "manage_budget",
         {},
         base_url="https://aztea.test",
         api_key="key",
@@ -1036,7 +1036,7 @@ def test_clarify_accepts_response_alias(monkeypatch):
 
 def test_budget_estimate_requires_slug_or_agent_id_with_helpful_error():
     ok, result = meta_tools.call_meta_tool(
-        "aztea_budget",
+        "manage_budget",
         {"action": "estimate", "input": {"task": "x"}},
         base_url="https://aztea.test",
         api_key="key",
@@ -1048,7 +1048,10 @@ def test_budget_estimate_requires_slug_or_agent_id_with_helpful_error():
     assert result["error"] == "INVALID_INPUT"
     assert "slug" in result["message"]
     assert result["required_one_of"] == ["slug", "agent_id"]
-    assert "aztea_search" in result["next_step"]
+    # Accept either the verb-first canonical name or the legacy alias —
+    # the rename ships in v0.2.0 but the dispatch keeps both working.
+    assert ("search_specialists" in result["next_step"]
+            or "aztea_search" in result["next_step"])
 
 
 def test_discover_includes_input_and_pricing_metadata(monkeypatch):
