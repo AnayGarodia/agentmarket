@@ -192,6 +192,16 @@ def _execute_builtin_agent_inner(
         return _finalize(agent_coverage_runner.run(payload))
     if agent_id == _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID:
         return _finalize(agent_email_deliverability_checker.run(payload))
+    if agent_id == _REGEX_TESTER_AGENT_ID:
+        return _finalize(agent_regex_tester.run(payload))
+    if agent_id == _CRON_EXPRESSION_PARSER_AGENT_ID:
+        return _finalize(agent_cron_expression_parser.run(payload))
+    if agent_id == _SSL_CERTIFICATE_DECODER_AGENT_ID:
+        return _finalize(agent_ssl_certificate_decoder.run(payload))
+    if agent_id == _DIFF_ANALYZER_AGENT_ID:
+        return _finalize(agent_diff_analyzer.run(payload))
+    if agent_id == _K8S_MANIFEST_VALIDATOR_AGENT_ID:
+        return _finalize(agent_k8s_manifest_validator.run(payload))
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

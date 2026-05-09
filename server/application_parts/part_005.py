@@ -515,6 +515,38 @@ def _deterministic_quality_result(
                 return {"verdict": "fail", "score": 2, "reason": f"Email deliverability checker output must include '{key}'."}
         return {"verdict": "pass", "score": 8, "reason": "Structured email deliverability checker output is internally consistent."}
 
+    if agent_id == _REGEX_TESTER_AGENT_ID:
+        for key in ["results", "total_matches", "patterns_tested", "strings_tested"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Regex tester output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured regex tester output is internally consistent."}
+
+    if agent_id == _CRON_EXPRESSION_PARSER_AGENT_ID:
+        for key in ["expression", "valid", "next_runs", "timezone"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Cron expression parser output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured cron expression parser output is internally consistent."}
+
+    if agent_id == _SSL_CERTIFICATE_DECODER_AGENT_ID:
+        # Single cert returns subject/valid_from; batch returns certificates list
+        has_single = "subject" in payload and "valid_from" in payload
+        has_batch = "certificates" in payload
+        if not has_single and not has_batch:
+            return {"verdict": "fail", "score": 2, "reason": "SSL certificate decoder output must include subject+valid_from or certificates list."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured SSL certificate decoder output is internally consistent."}
+
+    if agent_id == _DIFF_ANALYZER_AGENT_ID:
+        for key in ["files_changed", "total_additions", "total_deletions", "risk_summary"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Diff analyzer output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured diff analyzer output is internally consistent."}
+
+    if agent_id == _K8S_MANIFEST_VALIDATOR_AGENT_ID:
+        for key in ["valid", "resources_parsed", "total_findings", "by_severity"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"K8s manifest validator output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured k8s manifest validator output is internally consistent."}
+
     return None
 
 
