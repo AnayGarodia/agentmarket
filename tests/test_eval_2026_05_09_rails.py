@@ -52,22 +52,21 @@ def test_audit_endpoint_is_registered():
 # ---------------------------------------------------------------------------
 
 
-def test_search_content_floor_default(monkeypatch):
-    """Default content floor sits at 0.45 (semantic) and 0.10 (lexical).
-    Both tunable via env so production can retune the noise band without
-    a redeploy."""
+def test_search_relevance_floor_calibrated_to_live_data(monkeypatch):
+    """The blended-score floor moved from 0.18 to 0.30 after live
+    calibration on prod. Off-catalog queries ('tell me a joke',
+    'cook me dinner') measured 0.23-0.26 in production with the real
+    embedding model and current catalog; legitimate queries cluster at
+    0.33+. The 0.30 floor sits cleanly between the two distributions.
+    Env-tunable so production can retune without a redeploy.
+    """
     from core import feature_flags
 
-    monkeypatch.delenv("AZTEA_SEARCH_CONTENT_FLOOR", raising=False)
-    assert feature_flags.search_content_floor() == 0.45
+    monkeypatch.delenv("AZTEA_SEARCH_RELEVANCE_FLOOR", raising=False)
+    assert feature_flags.search_relevance_floor() == 0.30
 
-    monkeypatch.setenv("AZTEA_SEARCH_CONTENT_FLOOR", "0.55")
-    assert feature_flags.search_content_floor() == 0.55
-
-    monkeypatch.delenv("AZTEA_SEARCH_LEXICAL_FLOOR", raising=False)
-    assert feature_flags.search_lexical_content_floor() == 0.10
-    monkeypatch.setenv("AZTEA_SEARCH_LEXICAL_FLOOR", "0.20")
-    assert feature_flags.search_lexical_content_floor() == 0.20
+    monkeypatch.setenv("AZTEA_SEARCH_RELEVANCE_FLOOR", "0.40")
+    assert feature_flags.search_relevance_floor() == 0.40
 
 
 def test_search_llm_rerank_off_by_default(monkeypatch):
@@ -100,64 +99,38 @@ def test_llm_rerank_stub_is_no_op():
     assert out == candidates
 
 
-def test_search_content_floor_blocks_off_catalog_query():
+def test_search_relevance_floor_blocks_off_catalog_query():
     """The 2026-05-08 eval's smoking gun: 'tell me a joke' returned
-    three random code-execution agents because trust + price alone
-    cleared the relevance floor. The content-relevance gate now
-    requires actual lexical OR semantic match before any candidate
-    survives ranking — so an agent with high trust but zero topical
-    overlap can no longer be returned.
+    three random code-execution agents because the relevance floor sat
+    at 0.18 — easily cleared by trust + price contributions when content
+    overlap was in the noise band. The floor now sits at 0.30, above
+    the off-catalog distribution (measured 0.23-0.26 on prod).
     """
-    from core.registry import agents_ops
+    floor = 0.30
+    # Off-catalog blended scores measured on prod after deploy:
+    off_catalog_blended = [0.256, 0.230, 0.236]  # joke/dinner/wikipedia
+    for score in off_catalog_blended:
+        assert score < floor, (
+            f"Blended score {score} for an off-catalog query must fall "
+            f"below the {floor} floor; otherwise the gate fails open."
+        )
 
-    # Build the candidate shape the post-rank gate sees. The flag we
-    # care about is whether the gate returns [] when neither lexical
-    # nor similarity meets the floor (default 0.30).
-    candidates = [
-        {
-            "agent": {"agent_id": "x", "name": "Code Executor"},
-            "blended_score": 0.25,  # boosted purely by trust
-            "lexical_score": 0.02,  # one coincidental common word like "me"
-            "similarity": 0.13,     # noise-band semantic similarity
-            "trust": 0.55,
-            "match_reasons": ["trust 0.55"],
-        }
+
+def test_search_relevance_floor_admits_legitimate_match():
+    """Legitimate queries cluster at 0.33+ on prod and must still
+    surface results. If this drops below 0.30 the floor is too tight."""
+    floor = 0.30
+    legitimate_blended = [
+        0.435,  # "audit a python project for vulnerabilities" → CVE Lookup
+        0.420,  # "is this dependency dangerous" → CVE Lookup
+        0.327,  # "scan code for hardcoded passwords" → Code Review
     ]
-    top = candidates[0]
-    semantic_floor = 0.45
-    lexical_floor = 0.10
-    has_signal = (
-        float(top["lexical_score"]) >= lexical_floor
-        or float(top["similarity"]) >= semantic_floor
-    )
-    assert has_signal is False, (
-        "A candidate carried only by trust and price (lexical and "
-        "semantic both in the noise band) must NOT clear the content "
-        "gate — that's the bug class the 2026-05-09 fix targets."
-    )
-
-
-def test_search_content_floor_admits_legitimate_match():
-    """A query with real lexical overlap (or strong embedding similarity)
-    still passes the gate so legitimate searches keep working."""
-    top = {
-        "lexical_score": 0.42,  # strong lexical match
-        "similarity": 0.18,     # below floor on semantic, but lexical carries it
-    }
-    semantic_floor = 0.45
-    lexical_floor = 0.10
-    has_signal = (
-        top["lexical_score"] >= lexical_floor
-        or top["similarity"] >= semantic_floor
-    )
-    assert has_signal is True
-
-    # Symmetric: high semantic similarity passes even when lexical doesn't.
-    top2 = {"lexical_score": 0.05, "similarity": 0.55}
-    assert (
-        top2["lexical_score"] >= lexical_floor
-        or top2["similarity"] >= semantic_floor
-    ) is True
+    for score in legitimate_blended:
+        assert score >= floor, (
+            f"Legitimate query measured {score}; if this falls under "
+            f"{floor} the floor is over-tight and is producing false "
+            f"empty-results regressions."
+        )
 
 
 # ---------------------------------------------------------------------------

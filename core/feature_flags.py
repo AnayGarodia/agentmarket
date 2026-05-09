@@ -95,10 +95,17 @@ RESULT_CACHE_V2: bool = flag("AZTEA_RESULT_CACHE_V2", default=True)
 def search_relevance_floor() -> float:
     """Top blended score below which the search returns an empty list.
 
-    Rationale: returning weak distractors creates false confidence in low-
-    relevance results. Empty signals "use a different query".
+    Rationale: returning weak distractors creates false confidence in
+    low-relevance results. Empty signals "use a different query".
+
+    Default sized against live production data (2026-05-09 calibration):
+    measured blended_score for off-catalog queries like "tell me a joke"
+    or "cook me dinner" lands at 0.23–0.26 (carried by trust + price
+    contributions when content overlap is in the noise band). Legitimate
+    queries cluster at 0.33+. The 0.30 floor sits cleanly between the
+    two distributions.
     """
-    return flag_float("AZTEA_SEARCH_RELEVANCE_FLOOR", default=0.18)
+    return flag_float("AZTEA_SEARCH_RELEVANCE_FLOOR", default=0.30)
 
 
 def search_keep_floor() -> float:
@@ -111,38 +118,6 @@ def search_dropoff_band() -> float:
     """Score band relative to top hit; results within it survive even when
     they fall under the keep floor."""
     return flag_float("AZTEA_SEARCH_DROPOFF_BAND", default=0.20)
-
-
-def search_content_floor() -> float:
-    """Minimum semantic similarity for a candidate to count as a real
-    content match when its lexical score is below the lexical floor.
-
-    Sized against sentence-transformers MiniLM (the default embedding
-    model): unrelated short queries cosine ~0.10–0.20 against arbitrary
-    agent descriptions; vaguely related ~0.30–0.45; truly relevant
-    queries score 0.50+. The 0.45 default sits just above the noise
-    band — any candidate that clears it has real semantic relation to
-    the query. Lower values let off-catalog queries through (the eval's
-    "tell me a joke" returning code agents); higher values block
-    legitimate matches when the agent description doesn't share many
-    surface words with the query.
-    """
-    return flag_float("AZTEA_SEARCH_CONTENT_FLOOR", default=0.45)
-
-
-def search_lexical_content_floor() -> float:
-    """Minimum lexical match score for a candidate to count as a real
-    content match when its semantic similarity is below the content floor.
-
-    Rationale: the lexical scorer awards small weights for any token
-    overlap. A query like "tell me a joke" against an agent description
-    containing "me" (e.g. "use me for X") produces lexical_score ~0.02 —
-    technically nonzero, but functionally noise. Requiring >= 0.10 here
-    means at least one substantive match (a content word, not a
-    one-letter coincidence). Tunable so production can adjust if the
-    underlying lexical scorer is retuned.
-    """
-    return flag_float("AZTEA_SEARCH_LEXICAL_FLOOR", default=0.10)
 
 
 def search_llm_rerank_enabled() -> bool:

@@ -276,7 +276,12 @@ def test_search_falls_back_to_lexical_scoring_when_embeddings_disabled(
     assert results[0]["lexical_score"] > 0.5
 
 
-def test_search_uses_output_examples_as_lexical_signal(isolated_db):
+def test_search_uses_output_examples_as_lexical_signal(isolated_db, monkeypatch):
+    # Single-agent fixture: blended_score lands ~0.22 because the catalog
+    # has no peers to normalise against. Lower the relevance floor for
+    # this test so we still verify the ranking signal we care about
+    # (output_examples lifting an agent into the top spot).
+    monkeypatch.setenv("AZTEA_SEARCH_RELEVANCE_FLOOR", "0.10")
     registry.init_db()
     reputation.init_reputation_db()
     agent_id = registry.register_agent(
