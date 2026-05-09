@@ -4,7 +4,7 @@
 > Current priorities, status, and launch blockers live in `.agents/TODO.md`.
 > Operational reference (deploy, nginx, prod env, packaging, Stripe webhook) lives in `docs/runbooks/deploy.md`.
 
-Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.**
+Architecture in one sentence: **FastAPI monolith with dual-backend persistence (Postgres in prod, SQLite WAL for dev/tests), provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.**
 
 Live at **[https://aztea.ai](https://aztea.ai)**
 
@@ -64,7 +64,7 @@ These rules apply to every change in this repo, no exceptions. Some are CI-enfor
 
 - **Never delete migrations.** Add new ones with the next sequence number.
 - **Never force-push main.** Always create a new commit.
-- **Never open raw `sqlite3.connect()`.** Use `core/db.py` exclusively.
+- **Never open raw `sqlite3.connect()` or `psycopg2.connect()`.** Use `core/db.py` exclusively — it owns backend selection and exception exports for both.
 - **Frontend errors must be inline.** Toasts for success only; inline error state for failures.
 - **Keep operational runbooks current.** When you add a feature that touches money, runtime dependencies, or a buyer surface, update the relevant runbook in `docs/runbooks/` in the same commit.
 
@@ -119,7 +119,10 @@ agents/                          Built-in agent implementations (one module each
    spec_writer, changelog_agent, package_finder)
 
 core/
-  db.py                          SQLite connection manager — WAL, thread-local pool, PRAGMAs
+  db.py                          Dual-backend connection manager (Postgres + SQLite); thread-local pool;
+                                 normalises %s placeholders to ? for SQLite. Owns IntegrityError /
+                                 OperationalError / ProgrammingError exports so callers never import
+                                 from sqlite3 or psycopg2 directly. Backend chosen by DATABASE_URL.
   migrate.py                     Idempotent migration runner (apply_migrations)
   auth/                          Users + scoped keys (schema.py, users.py)
   registry/                      Agent listings + auto-hire decision logic + embeddings cache
@@ -219,14 +222,15 @@ Makefile                         Dev shortcuts: make dev / test / docker / migra
 - **Integer cents only.** Never store or pass floats for money. `price_per_call_usd` in specs is float for display only; the ledger always uses `*_cents INTEGER`.
 - **Insert-only ledger.** `transactions` gets only INSERT, never UPDATE or DELETE. Corrections are compensating entries.
 - **Double-settlement guard.** `pre_call_charge`, `post_call_payout`, and `post_call_refund` each have race guards (rowcount checks on wallet UPDATE). Every new settlement path must replicate the guard.
-- **Dispute atomicity.** Dispute insert + escrow clawback MUST happen in one SQLite transaction. Lock failure rolls back the dispute row — see `core/disputes.py`.
+- **Dispute atomicity.** Dispute insert + escrow clawback MUST happen in one DB transaction. Lock failure rolls back the dispute row — see `core/disputes.py`.
 - **Payout-curve clawbacks** use `charge`/`refund` ledger types only — never custom transaction types. Idempotency key: `payout_curve:{job_id}`. See `core/payout_curve.py`.
 - **`wallets.balance_cents` is a cache.** It must be updated in the same SQL transaction as the ledger row that changes it. Validated by reconciliation runs (`POST /ops/payments/reconcile`).
 
 ### Database
 
-- **Single connection manager.** All modules use `core/db.py`. Never open a raw `sqlite3.connect()` anywhere.
-- **WAL mode + thread-local pool.** `DB_MAX_CONNECTIONS` (default 32) caps connections. Network I/O happens **between** transactions — never hold a write lock during an HTTP call.
+- **Single connection manager.** All modules use `core/db.py`. Never open a raw `sqlite3.connect()` or `psycopg2.connect()` anywhere. The module exports `IntegrityError` / `OperationalError` / `ProgrammingError` so callers stay backend-agnostic.
+- **Backend selection.** `DATABASE_URL=postgresql://...` selects Postgres (prod). Anything else (or unset) falls back to SQLite (dev/tests/CI). All SQL is written with `%s` placeholders; `core/db.py` rewrites them to `?` for SQLite. Tests must pass on both backends.
+- **Thread-local pool, network I/O between transactions.** `DB_MAX_CONNECTIONS` (default 32) caps connections. Never hold a write lock during an HTTP call. SQLite gets WAL mode automatically; Postgres uses default isolation.
 - **`caller_ratings` lives only in `reputation.py`.** `disputes.py` does not declare it. Do not re-declare or migrate this table elsewhere.
 - **Migrations are idempotent.** Each `.sql` file is applied once via a `schema_migrations` table. Never re-use a migration filename; always add a new one.
 
