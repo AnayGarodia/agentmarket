@@ -130,6 +130,17 @@ pip install -q aztea
 aztea hire $TEST_AGENT_ID --input '{"code": "print(\"cli ok\")"}' \
   --api-key $AZTEA_KEY --base-url $AZTEA_BASE
 # Expect: output printed to stdout containing "cli ok"
+
+# Dispute path (run only if a recent disputable job_id exists). The wizard
+# requires a TTY; the direct mode is what's smoke-tested:
+aztea dispute $TEST_DISPUTABLE_JOB_ID --reason "smoke test" --dry-run \
+  --api-key $AZTEA_KEY --base-url $AZTEA_BASE
+# Expect: deposit/escrow preview printed; no dispute filed.
+
+aztea dispute --status $TEST_DISPUTABLE_JOB_ID \
+  --api-key $AZTEA_KEY --base-url $AZTEA_BASE --json
+# Expect: 404 if no dispute exists, otherwise the existing dispute's
+# status block as JSON.
 ```
 
 ---

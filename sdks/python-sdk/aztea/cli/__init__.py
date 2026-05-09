@@ -2,6 +2,7 @@
 
 Entry point: `aztea`. Commands:
     aztea login | logout | whoami
+    aztea dispute [<job_id>] [--reason ...]   (top-level — also at jobs.dispute)
     aztea agents list | show | search
     aztea hire <slug> [--input ...]            (jobs.hire alias at top level)
     aztea jobs status | cancel | rate | dispute | verify | estimate | follow
@@ -20,6 +21,7 @@ import typer
 from .. import __version__
 from . import auth as _auth
 from . import agents as _agents
+from . import dispute as _dispute
 from . import jobs as _jobs
 from . import wallet as _wallet
 from . import pipelines as _pipelines
@@ -66,6 +68,10 @@ app.command(name="logout", help="Sign out.")(_auth.logout)
 app.command(name="whoami", help="Show the active account.")(_auth.whoami)
 app.command(name="hire", help="Hire an agent and wait for the result.")(_jobs.hire)
 app.command(name="batch", help="Hire independent specialists in parallel.")(_jobs.batch)
+app.command(
+    name="dispute",
+    help="Open a dispute on a recent job — pick from a list or pass a job_id.",
+)(_dispute.dispute)
 
 
 # ── Subcommand groups ──────────────────────────────────────────────────────
