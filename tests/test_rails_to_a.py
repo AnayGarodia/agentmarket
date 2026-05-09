@@ -326,18 +326,32 @@ def test_r9_session_audit_verify_all_caps_per_receipt_timeout():
 # ---------------------------------------------------------------------------
 
 
-def test_r10_search_floors_are_feature_flagged():
+def test_r10_search_floors_are_feature_flagged(monkeypatch):
     """Search relevance/keep/dropoff thresholds must be tunable via env
     so the floor can be adjusted without redeploy. The plan called for
     AZTEA_SEARCH_RELEVANCE_FLOOR, AZTEA_SEARCH_KEEP_FLOOR, AZTEA_SEARCH_DROPOFF_BAND.
+
+    The default for relevance_floor was raised from 0.18 to 0.30 in the
+    2026-05-09 rails pass after live calibration: off-catalog queries
+    measured 0.23–0.26 in production with the real embedding model and
+    current catalog, so 0.18 was below the off-catalog distribution and
+    let "tell me a joke" return code-execution agents. 0.30 sits cleanly
+    between off-catalog (≤0.26) and legitimate (≥0.33) blended scores.
     """
     from core import feature_flags
 
-    # Defaults match the legacy literals.
+    monkeypatch.delenv("AZTEA_SEARCH_RELEVANCE_FLOOR", raising=False)
+    monkeypatch.delenv("AZTEA_SEARCH_KEEP_FLOOR", raising=False)
+    monkeypatch.delenv("AZTEA_SEARCH_DROPOFF_BAND", raising=False)
+
     assert callable(feature_flags.search_relevance_floor)
-    assert feature_flags.search_relevance_floor() == pytest.approx(0.18, abs=1e-6)
+    assert feature_flags.search_relevance_floor() == pytest.approx(0.30, abs=1e-6)
     assert feature_flags.search_keep_floor() == pytest.approx(0.20, abs=1e-6)
     assert feature_flags.search_dropoff_band() == pytest.approx(0.20, abs=1e-6)
+
+    # And the env override actually takes effect.
+    monkeypatch.setenv("AZTEA_SEARCH_RELEVANCE_FLOOR", "0.42")
+    assert feature_flags.search_relevance_floor() == pytest.approx(0.42, abs=1e-6)
 
     # And the call site reads them.
     src = Path("core/registry/agents_ops.py").read_text()

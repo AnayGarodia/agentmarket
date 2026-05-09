@@ -451,16 +451,13 @@ def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
             return {"blocks": _slack_code_review_blocks(output)}
         # Secret scanner before linter so we don't mislabel "Linter" on a
         # leaked-credentials report.
-        if isinstance(output.get("findings"), list) and (
-            "findings_by_severity" in output
-            or "total_findings" in output
-            or any(
-                isinstance(f, dict)
-                and ("redacted_preview" in f or "rule_id" in f or "entropy" in f)
-                for f in output.get("findings") or []
-            )
-        ):
-            return {"blocks": _slack_secret_scan_blocks(output)}
+        # Secret-scan and linter findings share the same `findings` list
+        # shape, so they fall through to the same renderer for now. A
+        # dedicated _slack_secret_scan_blocks (severity emoji + redacted
+        # preview formatting) is a future polish item — until then the
+        # linter renderer surfaces enough detail and is the closest
+        # sibling. Removing the unreachable call to a never-implemented
+        # function fixes a flake8 F821 that was blocking CI.
         if isinstance(output.get("findings"), list):
             return {"blocks": _slack_linter_blocks(output)}
         if isinstance(output.get("vulnerabilities"), list):

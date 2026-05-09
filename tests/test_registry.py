@@ -209,7 +209,16 @@ def test_semantic_search_ranks_relevant_agents_first(isolated_db):
     assert code[0]["agent"]["agent_id"] == ids["code"]
 
 
-def test_semantic_search_applies_filters_and_weighting(isolated_db):
+def test_semantic_search_applies_filters_and_weighting(isolated_db, monkeypatch):
+    # 3-agent fixture has only one strong match for "find bugs in python
+    # code" (the Python Code Reviewer); the other two are deliberate
+    # weak peers (SEC filings, image gen) included to validate that the
+    # ranker SURFACES all three with their blended scores in the right
+    # order. On the production floors the weak peers correctly fall
+    # under the post-rank dropoff filter. Lower BOTH floors for this
+    # test so we can still inspect the ranking math against all three.
+    monkeypatch.setenv("AZTEA_SEARCH_RELEVANCE_FLOOR", "0.0")
+    monkeypatch.setenv("AZTEA_SEARCH_KEEP_FLOOR", "0.0")
     ids = _seed_synthetic_agents(isolated_db)
     results = registry.search_agents("find bugs in python code", limit=3)
     assert len(results) == 3
