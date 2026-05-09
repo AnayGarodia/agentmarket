@@ -301,23 +301,40 @@ def dispute(
     job_id: str,
     reason: str = typer.Option(..., help="Reason for the dispute."),
     evidence: Optional[str] = typer.Option(None, help="Optional evidence URL or text."),
+    yes: bool = typer.Option(
+        True,
+        "--yes/--no-confirm",
+        help="Skip confirmation. Defaults to True for sub-app back-compat.",
+    ),
     api_key: Optional[str] = ApiKeyOpt,
     base_url: Optional[str] = BaseUrlOpt,
     json_mode: bool = JsonOpt,
 ) -> None:
-    """Open a dispute on a completed job. Triggers LLM-judge review."""
+    """Open a dispute on a completed job. Triggers LLM-judge review.
+
+    Thin delegate to the top-level `aztea dispute` command so both surfaces
+    share one filing path. The sub-app keeps its historical signature
+    (--reason required) for back-compat with scripts.
+    """
+    from . import dispute as _dispute_module
+
     try:
-        with build_client(api_key=api_key, base_url=base_url) as client:
-            with spinner("Filing dispute", json_mode=json_mode):
-                result = client.dispute_job(job_id, reason=reason, evidence=evidence)
-            if json_mode:
-                emit(result, json_mode=True)
-                return
-            success("Dispute filed", detail=job_id)
+        with _open_client(api_key=api_key, base_url=base_url) as client:
+            policy = _dispute_module._fetch_policy_quietly(client)
+            _dispute_module._file_dispute(
+                client=client,
+                job_id=job_id,
+                reason=reason,
+                evidence=evidence,
+                yes=yes,
+                dry_run=False,
+                json_mode=json_mode,
+                policy=policy,
+            )
     except typer.Exit:
         raise
     except Exception as exc:
-        handle_error(exc)
+        _dispute_module._handle_dispute_error(exc)
 
 
 @app.command()

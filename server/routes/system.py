@@ -18,6 +18,25 @@ from server.builtin_agents import constants as _builtin_constants
 router = APIRouter()
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+# Defaults mirror the values declared in server/application_parts/part_000.py
+# so this endpoint reflects the same policy the dispute-creation route applies.
+_DEFAULT_DISPUTE_FILING_DEPOSIT_BPS = 500
+_DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS = 5
+_DEFAULT_JOB_DISPUTE_WINDOW_HOURS = 72
+_DISPUTE_JUDGES_REQUIRED = 2
+_DISPUTE_JUDGES_TOTAL = 3
+
+
 def _read_version() -> str:
     try:
         version_path = os.path.join(os.path.dirname(__file__), "..", "..", "VERSION")
@@ -115,3 +134,38 @@ def health() -> core_models.HealthResponse:
     if not all_ok:
         return JSONResponse(status_code=503, content=response.model_dump())
     return response
+
+
+@router.get(
+    "/ops/dispute-policy",
+    responses=pick_error_responses(429, 500),
+    summary="Public read-only view of the dispute filing policy.",
+)
+def ops_dispute_policy() -> JSONResponse:
+    """Filing-deposit formula and judge-panel shape used when filing a dispute.
+
+    Public so CLI / SDK clients can quote the exact deposit amount before the
+    user confirms. No auth required: these are policy constants, not secrets.
+    """
+    bps = _env_int("DISPUTE_FILING_DEPOSIT_BPS", _DEFAULT_DISPUTE_FILING_DEPOSIT_BPS)
+    min_cents = _env_int(
+        "DISPUTE_FILING_DEPOSIT_MIN_CENTS",
+        _DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS,
+    )
+    window_hours = _env_int(
+        "DEFAULT_JOB_DISPUTE_WINDOW_HOURS",
+        _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+    )
+    return JSONResponse(
+        content={
+            "filing_deposit_bps": bps,
+            "filing_deposit_min_cents": min_cents,
+            "default_dispute_window_hours": window_hours,
+            "judges_required": _DISPUTE_JUDGES_REQUIRED,
+            "judges_total": _DISPUTE_JUDGES_TOTAL,
+            "formula": (
+                "deposit_cents = max(filing_deposit_min_cents, "
+                "price_cents * filing_deposit_bps / 10000)"
+            ),
+        }
+    )

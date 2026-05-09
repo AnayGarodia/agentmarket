@@ -424,7 +424,11 @@ def _agent_response(
 
 
 def _job_response(
-    job: dict, caller: core_models.CallerContext, *, output_mode: str = "summary"
+    job: dict,
+    caller: core_models.CallerContext,
+    *,
+    output_mode: str = "summary",
+    disputable_signals: dict | None = None,
 ) -> dict:
     from core import feature_flags as _feature_flags
     from core import output_shaping as _output_shaping
@@ -469,7 +473,44 @@ def _job_response(
                     "Call aztea_job(action='full_output', job_id=..., offset=0, "
                     "limit=20000) to fetch chunks."
                 )
+
+    # Annotate dispute eligibility so the CLI/SDK can render a picker without
+    # re-implementing the predicate. Lazy-fetches signals when caller didn't
+    # pre-batch them; list endpoints should pre-batch (see _bulk_disputable_signals).
+    _attach_disputable(result, job, owner_id, signals=disputable_signals)
     return result
+
+
+def _attach_disputable(
+    result: dict,
+    job: dict,
+    owner_id: str | None,
+    *,
+    signals: dict | None,
+) -> None:
+    from core import disputes as _disputes
+    from core import reputation as _reputation
+    from core.jobs import disputable as _disputable
+
+    job_id = job.get("job_id")
+    if not job_id:
+        return
+    if signals is not None:
+        has_existing_dispute = bool(signals.get("has_dispute"))
+        has_quality_rating = bool(signals.get("has_rating"))
+    else:
+        has_existing_dispute = _disputes.has_dispute_for_job(job_id)
+        has_quality_rating = _reputation.get_job_quality_rating(job_id) is not None
+    deadline = _dispute_window_deadline(job)
+    reason = _disputable.is_disputable(
+        job,
+        deadline=deadline,
+        has_existing_dispute=has_existing_dispute,
+        has_quality_rating=has_quality_rating,
+    )
+    result["disputable"] = reason is None
+    result["disputable_reason"] = reason.message if reason else None
+    result["disputable_code"] = reason.code if reason else None
 
 
 def _caller_can_view_job(caller: core_models.CallerContext, job: dict) -> bool:
