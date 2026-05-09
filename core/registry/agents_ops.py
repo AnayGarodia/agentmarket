@@ -1262,6 +1262,7 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
 # server one-way import rule. Overlay is keyed by agent_id.
 _ROUTING_OVERLAY_MATCH: dict[str, list[str]] = {}
 _ROUTING_OVERLAY_BLOCK: dict[str, list[str]] = {}
+_ROUTING_OVERLAY_INSTALLED: bool = False
 
 
 def set_routing_overlay(
@@ -1270,12 +1271,12 @@ def set_routing_overlay(
 ) -> None:
     """Install the per-agent routing keyword overlay used by search ranking.
 
-    Called once at application startup from the FastAPI lifespan. The
-    server layer owns the spec definitions; core registers them here so
-    the search ranker (which lives in core) can use them without a
-    server → core → server import cycle.
+    Called from the FastAPI lifespan AND lazily on first search read so a
+    worker that missed the lifespan path (race, exception, lazy import
+    quirk) still routes correctly. Idempotent: calling multiple times
+    just refreshes the maps.
     """
-    global _ROUTING_OVERLAY_MATCH, _ROUTING_OVERLAY_BLOCK
+    global _ROUTING_OVERLAY_MATCH, _ROUTING_OVERLAY_BLOCK, _ROUTING_OVERLAY_INSTALLED
     _ROUTING_OVERLAY_MATCH = {
         str(k): [str(v).strip().lower() for v in (vs or []) if str(v).strip()]
         for k, vs in (match_keywords or {}).items()
@@ -1286,6 +1287,48 @@ def set_routing_overlay(
         for k, vs in (block_keywords or {}).items()
         if k
     }
+    _ROUTING_OVERLAY_INSTALLED = True
+
+
+def _ensure_routing_overlay_loaded() -> None:
+    """Self-heal the routing overlay if a worker missed the lifespan path.
+
+    The 2026-05-09 prod verification showed only 1 of 3 uvicorn workers
+    populated the overlay through the lifespan hook — the other two had
+    empty maps and silently degraded ranking, which made the eval's hit
+    rate look randomly variable. This function imports the built-in spec
+    catalog at first-read time and installs the overlay if it's still
+    empty. Cheap (one dict comprehension over ~10 specs); safe (set
+    exactly once per process — the global flag short-circuits subsequent
+    calls); robust (no dependency on lifespan ordering).
+    """
+    global _ROUTING_OVERLAY_INSTALLED
+    if _ROUTING_OVERLAY_INSTALLED:
+        return
+    try:
+        # Late import to keep the core → server one-way rule intact at
+        # module-load time. server.builtin_agents.specs has no
+        # back-import to core.registry, so this resolves cleanly.
+        from server.builtin_agents.specs import builtin_agent_specs
+
+        specs = builtin_agent_specs()
+        set_routing_overlay(
+            match_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("match_keywords") or [])
+                for spec in specs
+                if spec.get("match_keywords")
+            },
+            block_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("block_keywords") or [])
+                for spec in specs
+                if spec.get("block_keywords")
+            },
+        )
+    except Exception:  # noqa: BLE001 — search must never crash on overlay load
+        # Silent: keep the overlay flag False so a future call retries
+        # rather than caching the failure. Search degrades to lex+sim+
+        # trust+price without keyword bonus, which is still functional.
+        _ROUTING_OVERLAY_INSTALLED = False
 
 
 def _agent_match_keywords(agent: dict) -> list[str]:
@@ -1308,6 +1351,7 @@ def _agent_match_keywords(agent: dict) -> list[str]:
             raw = [raw]
     if isinstance(raw, list) and raw:
         return [str(item).strip().lower() for item in raw if str(item).strip()]
+    _ensure_routing_overlay_loaded()
     agent_id = str(agent.get("agent_id") or "").strip()
     return _ROUTING_OVERLAY_MATCH.get(agent_id, [])
 
@@ -1323,6 +1367,7 @@ def _agent_block_keywords(agent: dict) -> list[str]:
             raw = [raw]
     if isinstance(raw, list) and raw:
         return [str(item).strip().lower() for item in raw if str(item).strip()]
+    _ensure_routing_overlay_loaded()
     agent_id = str(agent.get("agent_id") or "").strip()
     return _ROUTING_OVERLAY_BLOCK.get(agent_id, [])
 
