@@ -161,8 +161,15 @@ def _batch_parallel_trace(
     # a tick-cached `last_summary` that was already stale by the time the
     # status response built, which is why callers saw `max_workers`
     # oscillate 1 → 11 → 1 → 24 across successive polls.
+    #
+    # 2026-05-09 fix: always emit the snapshot, including when the batch
+    # is fully terminal. Operators and clients want to know the pool's
+    # configured size and current capacity even on a settled batch — to
+    # plan a follow-up batch, to confirm capacity hasn't been throttled,
+    # or simply because "{} for terminal batches" was a confusing UX hole
+    # in the rails-to-A audit.
     worker_pool: dict | None = None
-    if counts["pending"] > 0 or counts["running"] > 0:
+    if True:
         try:
             queue_total = jobs.count_pending_jobs()
         except Exception:
