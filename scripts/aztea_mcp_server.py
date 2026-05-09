@@ -1268,9 +1268,259 @@ class RegistryBridge:
         min_trust: float | None = None,
         category: str | None = None,
     ) -> dict[str, Any]:
-        normalized = str(query or "").strip().lower()
+        """Server-ranked agent search with local-cache hydration.
+
+        2026-05-09 cleanup: this function used to do a ~250-line lexical
+        scoring pass locally, then fall through to the server's semantic
+        ranker only when local found nothing. That dual mode was the eval's
+        root cause for inconsistent ranking and the score-scale mismatch
+        (integer 0–100 vs float 0–1). The local lexical pre-filter is gone.
+        We now call ``/registry/search`` for ranking (single source of truth)
+        and hydrate each returned agent_id with the rich local catalog
+        entry (description, required_fields, input_shape, example_arguments,
+        etc.) so MCP callers see the same response shape they had before.
+
+        On HTTP failure (offline, 5xx, timeout) we fall back to the legacy
+        local lexical scorer, but the result is annotated with
+        ``source="local_emergency_fallback"`` and a ``warning`` field so
+        the caller knows which path fired. No silent degradation.
+        """
         capped_limit = max(1, min(int(limit or 8), 20))
         category_filter = (category or "").strip().lower() or None
+
+        body: dict[str, Any] = {"query": query, "limit": capped_limit}
+        if max_price_usd is not None:
+            try:
+                body["max_price_cents"] = int(round(float(max_price_usd) * 100))
+            except (TypeError, ValueError):
+                pass
+        if min_trust is not None:
+            try:
+                body["min_trust"] = float(min_trust)
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            resp = self._session.post(
+                f"{self.base_url}/registry/search",
+                json=body,
+                headers=self._headers(),
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"search endpoint returned {resp.status_code}"
+                )
+            server_data = resp.json()
+        except (requests.RequestException, RuntimeError, ValueError, AttributeError):
+            # AttributeError covers the partially-constructed bridge case
+            # used by some unit tests (RegistryBridge.__new__ without
+            # __init__) and any future bridge subclass that lacks a
+            # session attribute. Treat both as "server unreachable" and
+            # fall through to the local emergency path.
+            return self._search_catalog_local_fallback(
+                query,
+                capped_limit,
+                category_filter,
+                max_price_usd=max_price_usd,
+                min_trust=min_trust,
+            )
+
+        return self._hydrate_server_search(
+            query, server_data, capped_limit, category_filter
+        )
+
+    def _hydrate_server_search(
+        self,
+        query: str,
+        server_data: dict[str, Any],
+        capped_limit: int,
+        category_filter: str | None,
+    ) -> dict[str, Any]:
+        """Map server-ranked results to the rich CLI response shape.
+
+        Looks up each server-returned agent in the local catalog cache to
+        attach description, input_shape, example_arguments, pricing_model,
+        codex_recommended, and short_use_cases — fields that aren't in the
+        server's RegistrySearchResponse but that buyers depend on for
+        first-call success. When an agent isn't in the local cache (e.g.
+        registered after the last refresh), we surface what the server
+        gave us so callers still see something useful.
+        """
+        raw_results = server_data.get("results") or []
+        off_catalog = bool(server_data.get("off_catalog"))
+
+        result_items: list[dict[str, Any]] = []
+        for item in raw_results:
+            agent = item.get("agent") or {}
+            agent_id = agent.get("agent_id")
+            slug_hint = agent.get("slug") or agent.get("agent_slug")
+            local_entry: dict[str, Any] | None = None
+            for entry in self._catalog_entries():
+                if (agent_id and entry.get("agent_id") == agent_id) or (
+                    slug_hint and entry.get("slug") == slug_hint
+                ):
+                    local_entry = dict(entry)
+                    break
+            if local_entry is None:
+                # Server saw an agent we don't have locally cached. Build a
+                # minimal entry from the server payload so the caller still
+                # gets a callable slug.
+                fallback_slug = slug_hint or re.sub(
+                    r"[^a-z0-9]+", "_", str(agent.get("name") or "").lower()
+                ).strip("_")
+                if not fallback_slug:
+                    continue
+                local_entry = {
+                    "slug": fallback_slug,
+                    "kind": "registry_agent",
+                    "name": agent.get("name"),
+                    "agent_id": agent_id,
+                    "category": agent.get("category"),
+                    "description": str(agent.get("description") or ""),
+                    "price_per_call_usd": agent.get("price_per_call_usd"),
+                    "trust_score": agent.get("trust_score"),
+                    "success_rate": agent.get("success_rate"),
+                    "avg_latency_ms": agent.get("avg_latency_ms"),
+                    "tags": agent.get("tags") or [],
+                    "pricing_model": agent.get("pricing_model"),
+                    "input_schema": agent.get("input_schema"),
+                }
+
+            if (
+                category_filter
+                and category_filter
+                not in str(local_entry.get("category") or "").strip().lower()
+            ):
+                continue
+
+            quality_parts: list[str] = []
+            if local_entry.get("codex_recommended"):
+                quality_parts.append("Claude-ready")
+            if local_entry.get("stability_tier"):
+                quality_parts.append(str(local_entry["stability_tier"]))
+            if local_entry.get("tooling_kind"):
+                quality_parts.append(
+                    str(local_entry["tooling_kind"]).replace("_", " ")
+                )
+            latency = _compact_latency(local_entry.get("avg_latency_ms"))
+            if latency:
+                quality_parts.append(latency)
+
+            input_hint = meta_tools._schema_input_hint(local_entry.get("input_schema"))
+            required_list = list(local_entry.get("required_fields") or [])
+            if not required_list:
+                required_list = list(input_hint.get("required_fields") or [])
+            input_list = list(local_entry.get("input_fields") or [])[:12]
+
+            description = _word_truncate(str(local_entry.get("description") or ""), 380)
+            if required_list:
+                inline_inputs = f" Inputs: required={required_list}"
+                if input_list:
+                    extras = [f for f in input_list if f not in required_list]
+                    if extras:
+                        inline_inputs += f", optional={extras[:6]}"
+                description = f"{description}{inline_inputs}"
+
+            score = round(float(item.get("blended_score") or 0.0), 4)
+            why = list(item.get("match_reasons") or local_entry.get("_why") or [])
+            result_items.append(
+                {
+                    "slug": local_entry["slug"],
+                    "kind": local_entry.get("kind") or "registry_agent",
+                    "name": local_entry.get("name"),
+                    "agent_id": local_entry.get("agent_id"),
+                    "category": local_entry.get("category"),
+                    "description": description,
+                    "score": score,
+                    "price_per_call_usd": local_entry.get("price_per_call_usd"),
+                    "trust_score": local_entry.get("trust_score"),
+                    "success_rate": local_entry.get("success_rate"),
+                    "avg_latency_ms": local_entry.get("avg_latency_ms"),
+                    "tooling_kind": local_entry.get("tooling_kind"),
+                    "stability_tier": local_entry.get("stability_tier"),
+                    "codex_recommended": bool(
+                        local_entry.get("codex_recommended", False)
+                    ),
+                    "best_for": list(local_entry.get("short_use_cases") or [])[:4],
+                    "required_fields": required_list,
+                    "input_fields": input_list,
+                    "input_shape": input_hint["fields"],
+                    "example_arguments": input_hint["example_arguments"],
+                    "pricing_model": local_entry.get("pricing_model"),
+                    "pricing_config": local_entry.get("pricing_config"),
+                    "quality_summary": " | ".join(quality_parts),
+                    "why": why,
+                }
+            )
+            if len(result_items) >= capped_limit:
+                break
+
+        if off_catalog or not result_items:
+            note = server_data.get("note")
+            _live_categories = sorted(
+                {
+                    str(entry.get("category")).strip()
+                    for entry in self._catalog_entries()
+                    if entry.get("kind") == "registry_agent" and entry.get("category")
+                }
+            )
+            _cat_hint = (
+                f" Catalog covers: {', '.join(_live_categories)}."
+                if _live_categories
+                else ""
+            )
+            next_step = note or (
+                "No agent in the live catalog matches this task."
+                f"{_cat_hint}"
+                " Try a different phrasing, or aztea_workflow(action='list_agents') to browse."
+            )
+        else:
+            next_step = (
+                f"Best match: {result_items[0]['slug']}. "
+                f"Call aztea_describe(slug='{result_items[0]['slug']}') for the full schema, "
+                "then aztea_call(slug=..., arguments={...}) to run it."
+            )
+
+        hints = _workflow_hints(query)
+        payload: dict[str, Any] = {
+            "query": query,
+            "count": len(result_items),
+            "results": result_items,
+            "next_step": next_step,
+            "source": "registry_search",
+        }
+        if off_catalog and not result_items:
+            payload["off_catalog"] = True
+        if hints:
+            payload["workflow_hints"] = hints
+        return payload
+
+    def _search_catalog_local_fallback(
+        self,
+        query: str,
+        capped_limit: int,
+        category_filter: str | None,
+        *,
+        max_price_usd: float | None = None,
+        min_trust: float | None = None,
+    ) -> dict[str, Any]:
+        """Emergency fallback when /registry/search is unreachable.
+
+        Runs the legacy lexical scorer over the local catalog cache so the
+        CLI is not completely broken when offline. The response is tagged
+        ``source="local_emergency_fallback"`` and carries a ``warning``
+        field so callers can detect the degraded mode and report it. This
+        is never the primary path — the eval flagged dual-mode ranking as
+        a P0, so we explicitly mark when we're in this branch.
+
+        Filters (``max_price_usd``, ``min_trust``, ``category_filter``)
+        are applied locally so existing callers see the same filter
+        behavior they would get from the server when it's reachable.
+        """
+        # Fall through to the legacy implementation, then re-tag the
+        # result so callers can tell which path ran.
+        normalized = str(query or "").strip().lower()
         terms = _query_terms(normalized)
         intent, _intent_markers = _search_intent(terms)
         # Price-mode: queries asking for most/least expensive agent route via price
@@ -1624,6 +1874,13 @@ class RegistryBridge:
             "count": len(result_items),
             "results": result_items,
             "next_step": next_step,
+            "source": "local_emergency_fallback",
+            "warning": (
+                "Server-side search at /registry/search was unreachable; this "
+                "response was ranked locally over a stale catalog snapshot. "
+                "Verify against aztea_workflow(action='list_agents') and retry "
+                "once connectivity returns."
+            ),
         }
         if hints:
             payload["workflow_hints"] = hints

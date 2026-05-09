@@ -73,6 +73,34 @@ def _batch_job_trace_item(
             ),
         },
     }
+    # Unified error envelope on failed jobs. The 2026-05-09 power-user eval
+    # noted that sync /registry/agents/{id}/call returns the canonical
+    # {error, message, details, request_id} envelope while batch jobs[]
+    # carried only a flat `error_message` string — two shapes for one
+    # concept. We now emit BOTH on failure: the structured envelope under
+    # `error` (matches sync routes via core/error_codes.make_error) and
+    # the legacy string under `error_message` for backwards compatibility
+    # with existing SDK consumers. The envelope is always present on
+    # failed jobs (independent of include_detail) so compact polling
+    # surfaces structured failure context without a follow-up status fan-out.
+    if status == "failed":
+        msg = str(job.get("error_message") or "Agent call failed.")
+        # Derive a code from the message text using the same heuristics as
+        # the sync exception handler. Imports are local to the function so
+        # the trace builder doesn't pay the import cost on the hot path
+        # for non-failed jobs.
+        try:
+            from server import error_handlers as _eh
+
+            code = _eh._error_code_from_message(  # pyright: ignore[reportPrivateUsage]
+                502,
+                f"/jobs/{job.get('job_id') or ''}",
+                msg,
+            )
+        except Exception:
+            code = error_codes.AGENT_INTERNAL_ERROR
+        item["error"] = error_codes.make_error(code, msg, None)
+        item["error_message"] = msg  # legacy string field, preserved
     if include_detail:
         item["detail"] = _job_response(job, caller)
     # Inline an `output` payload only in detailed responses so compact polling
@@ -94,8 +122,6 @@ def _batch_job_trace_item(
                 item["output_preview"] = raw[:6000]
         except Exception:
             item["output"] = None
-    elif status == "failed":
-        item["error"] = job.get("error_message")
     return item
 
 
@@ -108,6 +134,7 @@ def _batch_parallel_trace(
     intent: str | None = None,
     max_total_cents: int | None = None,
     include_detail: bool = False,
+    debug: bool = False,
 ) -> dict:
     """Aggregate trace that makes parallel marketplace hiring visible to agents."""
     trace_jobs = [
@@ -175,6 +202,15 @@ def _batch_parallel_trace(
             _inflight_raw = None
             in_flight_now = None
             capacity_remaining_now = None
+        # Default response is the operator-friendly view: one in_flight
+        # number that's already MAX-corrected, no internal counter noise,
+        # no multi-paragraph documentation in the wire response. The
+        # 2026-05-09 power-user eval flagged the prior shape's confusing
+        # _raw vs in_flight_global mismatch and the verbose hint as
+        # diagnostic clutter that leaked internal correctness concerns
+        # into normal callers' polling responses. Operators who actually
+        # need the diagnostic detail pass ?debug=1 through batch_status
+        # and get the legacy shape back.
         worker_pool = {
             "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
             "interval_seconds": _BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
@@ -182,21 +218,24 @@ def _batch_parallel_trace(
             "this_batch_pending": counts["pending"],
             "this_batch_running": counts["running"],
             "in_flight_global": in_flight_now,
-            "in_flight_global_raw": _inflight_raw,
             "capacity_remaining": capacity_remaining_now,
-            "last_worker_summary": worker_state_summary,
-            "hint": (
-                "Jobs run on a shared worker pool with persistent threads. "
-                "platform_queue_depth = total pending across all callers; "
-                "capacity_remaining = free worker slots right now. "
-                "in_flight_global is the floor MAX(live counter, this batch's "
-                "running count); in_flight_global_raw is the unadjusted counter "
-                "(may briefly lag the DB while fast jobs settle). If "
-                "platform_queue_depth > capacity_remaining + in_flight, "
-                "your jobs are queued behind other callers and will start "
-                "as soon as a slot frees."
-            ),
         }
+        if debug:
+            worker_pool["debug"] = {
+                "in_flight_global_raw": _inflight_raw,
+                "last_worker_summary": worker_state_summary,
+                "hint": (
+                    "Jobs run on a shared worker pool with persistent threads. "
+                    "platform_queue_depth = total pending across all callers; "
+                    "capacity_remaining = free worker slots right now. "
+                    "in_flight_global is the floor MAX(live counter, this batch's "
+                    "running count); in_flight_global_raw is the unadjusted counter "
+                    "(may briefly lag the DB while fast jobs settle). If "
+                    "platform_queue_depth > capacity_remaining + in_flight, "
+                    "your jobs are queued behind other callers and will start "
+                    "as soon as a slot frees."
+                ),
+            }
     return {
         "batch_id": batch_id,
         "phase": phase,
@@ -1197,6 +1236,9 @@ def jobs_batch_create(
     compact_submission = len(created_jobs) > 10 or str(
         request.query_params.get("include") or ""
     ).strip().lower() in {"compact", "minimal"}
+    submission_debug = str(
+        request.query_params.get("debug") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
     trace = _batch_parallel_trace(
         batch_id=batch_id,
         batch_jobs=[
@@ -1209,6 +1251,7 @@ def jobs_batch_create(
         intent=body.intent,
         max_total_cents=body.max_total_cents,
         include_detail=not compact_submission,
+        debug=submission_debug,
     )
     response_jobs = (
         [
@@ -1336,12 +1379,16 @@ def jobs_batch_status(
         elif status == "failed":
             n_failed += 1
 
+    status_debug = str(
+        request.query_params.get("debug") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
     trace = _batch_parallel_trace(
         batch_id=batch_id,
         batch_jobs=batch_jobs,
         caller=caller,
         phase="status",
         include_detail=not compact,
+        debug=status_debug,
     )
     response_jobs = (
         trace["jobs"] if compact else [_job_response(job, caller) for job in batch_jobs]

@@ -2255,19 +2255,49 @@ def _session_audit(
     timeout: float,
     args: dict,
 ) -> tuple[bool, dict]:
-    """Aggregate spend/refund/receipt audit for a window of caller activity.
+    """Thin passthrough to the server-side ``/wallets/audit`` endpoint.
 
-    Improvements over the v1:
-      * Receipts sorted by `settled_at` desc (most-recent-first).
-      * Optional `since` / `until` ISO-8601 timestamps narrow the window.
-      * Optional `verify_all=True` runs Ed25519 verification on every
-        signed receipt and returns counts + first-failure detail. Lets an
-        auditor confirm the entire window in one call.
-      * Aggregate `receipts_digest` — a deterministic SHA-256 over each
-        receipt's (job_id, output_hash, signature) so the audit response
-        itself is pin-able. A different digest on the next poll signals
-        that something material in the audit window changed.
+    The rich aggregation logic — time-range filters, bulk Ed25519
+    verification, aggregate digest — used to live here as client-side
+    code. That created a deploy gap: every fix to the audit surface had
+    to ship via a new aztea-cli release before users saw it. After the
+    2026-05-09 rails pass the logic moved to ``server/application_parts/
+    part_011.py:wallet_audit``, so this stub forwards every supported
+    parameter unchanged. Any future audit shape change ships through
+    aztea.ai's normal deploy and is picked up by callers on the next
+    request without a CLI release.
+
+    Forwarded query params: ``period``, ``since``, ``until``, ``limit``,
+    ``verify_all``. The server is the source of truth for defaults and
+    validation; we just pass them through.
     """
+    params: dict[str, Any] = {}
+    for key in ("period", "since", "until", "limit"):
+        value = args.get(key)
+        if value is not None and str(value).strip() != "":
+            params[key] = value
+    if args.get("verify_all"):
+        params["verify_all"] = "true"
+    # Bulk verification can do real Ed25519 work on N receipts. Allow a
+    # generous server-side timeout when the caller asked for it. Default
+    # request timeout otherwise.
+    request_timeout = max(float(timeout or 30.0), 60.0) if params.get("verify_all") else float(timeout or 30.0)
+    return _get(session, f"{base}/wallets/audit", hdrs, request_timeout, params=params)
+
+
+# Legacy client-side audit aggregation. Kept as a private function ONLY
+# for the unlikely case that a user runs an old aztea-cli against an
+# older server build that doesn't yet expose /wallets/audit. The MCP
+# dispatch above always calls _session_audit (the passthrough); this
+# function is no longer wired in. Slated for deletion once aztea.ai has
+# been on the new endpoint for one release cycle.
+def _session_audit_legacy(
+    session: requests.Session,
+    base: str,
+    hdrs: dict,
+    timeout: float,
+    args: dict,
+) -> tuple[bool, dict]:
     import hashlib
     import datetime as _dt
     period = str(args.get("period") or "1d").strip().lower()

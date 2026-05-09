@@ -112,6 +112,38 @@ def search_dropoff_band() -> float:
     they fall under the keep floor."""
     return flag_float("AZTEA_SEARCH_DROPOFF_BAND", default=0.20)
 
+
+def search_content_floor() -> float:
+    """Minimum semantic similarity required for a candidate to count as a
+    real content match when its lexical score is zero.
+
+    Rationale (2026-05-09 power-user eval): the existing `relevance_floor`
+    only checks `blended_score`, which is a weighted sum of lexical +
+    semantic + trust + inverse-price + intent-bonus. An agent with high
+    trust and average price can clear the 0.18 blended floor on queries
+    like "tell me a joke" or "cook me dinner" purely because trust and
+    price contribute >0.10 each — even when both lexical and semantic
+    overlap with the query are zero. Adding this gate as a hard
+    pre-condition fixes the false-positive class without disturbing the
+    legitimate match path. Tunable so the floor can be raised once the
+    catalog grows past ~30 agents and embedding noise increases.
+    """
+    return flag_float("AZTEA_SEARCH_CONTENT_FLOOR", default=0.30)
+
+
+def search_llm_rerank_enabled() -> bool:
+    """Master switch for the optional LLM re-rank stage in agent search.
+
+    Off by default: the deterministic lexical+embedding+trust ranker is
+    fast, cheap, and accurate on the current ~10-agent catalog. Flip on
+    once the catalog grows past ~30 agents and ambiguous intent queries
+    start surfacing wrong agents at the top. The stage runs only when the
+    top candidates are clustered in the fuzzy zone (top score in
+    [content_floor, content_floor+0.15]) — clear winners and clear
+    off-catalog queries skip it. See core/registry/agents_ops.py.
+    """
+    return flag("AZTEA_SEARCH_LLM_RERANK", default=False)
+
 # Require an external verifier to approve output before settling payment.
 # Off by default: settle immediately and allow clawback via disputes.
 REQUIRE_VERIFICATION: bool = flag("AZTEA_REQUIRE_VERIFICATION", default=False)

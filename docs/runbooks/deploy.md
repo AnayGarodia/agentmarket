@@ -48,6 +48,62 @@ sudo journalctl -u aztea -n 50
 
 If the service stops cleanly: `sudo systemctl restart aztea`. Migrations run automatically on startup via `core/migrate.py`.
 
+## Post-deploy rails verification
+
+The 2026-05-09 rails-to-A pass moved every "rich" platform behavior — audit
+aggregation, search ranking, off-catalog detection, error envelope, worker-pool
+telemetry — to **server-side endpoints**. The `aztea-cli` package is now a dumb
+HTTP passthrough. This means the right place to check that a rails fix shipped
+is `https://aztea.ai` itself, **not** a local MCP. If you skip this check after
+a deploy you'll repeat the bug class that produced eight prior "fix the rails"
+commits without lifting any eval grades.
+
+After every deploy that touches rails code, run these four probes against
+production. Each one should return the new shape; if any returns the old shape,
+**the deploy didn't ship and you need to debug the deploy lane before celebrating**.
+
+```bash
+API_KEY="<a caller-scope key>"
+
+# 1. Audit endpoint exists with the rich shape (since/until/digest/bulk-verify).
+curl -s -H "Authorization: Bearer $API_KEY" \
+  "https://aztea.ai/wallets/audit?period=1d&verify_all=true" \
+  | jq '{has_digest: (.receipts_digest != null),
+         has_aggregates: (.receipts_aggregate != null),
+         has_options: (.available_options != null),
+         has_bulk_verify: (.bulk_verification != null)}'
+# Expect: every key true.
+
+# 2. Search empty-result mode fires for off-catalog queries.
+curl -s -H "Authorization: Bearer $API_KEY" -X POST https://aztea.ai/registry/search \
+  -H "Content-Type: application/json" -d '{"query":"tell me a joke","limit":5}' \
+  | jq '{count, off_catalog, has_note: (.note != null)}'
+# Expect: count == 0, off_catalog == true, has_note == true.
+
+# 3. Worker_pool snapshot has the collapsed shape (no in_flight_global_raw at top).
+# Replace <BATCH_ID> with any batch you can poll. ?debug=1 should still show the
+# diagnostic fields under a `debug` sub-dict.
+curl -s -H "Authorization: Bearer $API_KEY" \
+  "https://aztea.ai/jobs/batch/<BATCH_ID>" \
+  | jq '.parallel_hire_trace.worker_pool | keys'
+# Expect: ["capacity_remaining","configured_parallelism","in_flight_global",
+#          "interval_seconds","platform_queue_depth",
+#          "this_batch_pending","this_batch_running"]
+# Specifically: NO "in_flight_global_raw", NO "last_worker_summary", NO "hint".
+
+# 4. Failed batch jobs carry the structured error envelope alongside the legacy
+# error_message string. Submit any batch with one intentionally bad job, poll
+# batch_status, and inspect a failed entry.
+# Expect: jobs[].error to be a dict with {error, message, details};
+# jobs[].error_message to remain present as a string.
+```
+
+If any probe fails, do NOT bump the `aztea-cli` package — the CLI is a thin
+wrapper. The grades only move when the **server** ships the new shape, which
+happens via `git fetch origin main && git reset --hard origin/main` followed by
+`sudo systemctl restart aztea`. The CLI release exists for hygiene (smaller
+client codebase, less duplication), not for grade improvements.
+
 ## Recommended nginx config
 
 ```nginx

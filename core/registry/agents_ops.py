@@ -1648,6 +1648,28 @@ def _match_reasons(
     return reasons
 
 
+def _llm_rerank_candidates(
+    query: str,
+    candidates: list[dict],
+) -> list[dict]:
+    """Optional LLM re-rank stage. Default no-op until the catalog grows.
+
+    Activation policy (when AZTEA_SEARCH_LLM_RERANK=1):
+      * Skip when there's a clear winner — top score >= top2 + 0.15.
+      * Skip when there's clearly nothing — top score below content floor.
+      * Otherwise: send query + top-N (name, description, category) to a
+        small fast model via core.llm.run_with_fallback (Groq llama-3.1-8b
+        first in the default chain), with a 500ms timeout, and let it
+        re-order or signal "none of these match" → empty list.
+
+    Stub for now: returns the input unchanged. Filling in the body is a
+    one-function-touch when the catalog crosses ~30 agents and the
+    deterministic ranker starts losing to ambiguous-intent queries. The
+    seam is here so that change does not require restructuring search.
+    """
+    return candidates
+
+
 def search_agents(
     query: str,
     limit: int = 10,
@@ -1916,6 +1938,45 @@ def search_agents(
                     return []
             except Exception:  # noqa: BLE001 — predicates must never crash search
                 continue
+
+    # Content-relevance gate (2026-05-09 fix): the existing relevance_floor
+    # only checks `blended_score`, which is a weighted sum that includes
+    # trust and inverse-price as additive components. A high-trust agent
+    # with average price contributes >0.10 to blended_score even when both
+    # lexical and semantic overlap with the query are zero — so queries
+    # like "tell me a joke" or "cook me dinner" cleared the floor and
+    # returned three random code-execution agents in the eval. The fix
+    # gates on actual content match: the top candidate must have either a
+    # nonzero lexical match OR semantic similarity above the content
+    # floor. If neither, the catalog has nothing topically relevant and we
+    # return empty regardless of how high trust/price boosted the blend.
+    if price_query_mode is None and ranked:
+        top = ranked[0]
+        _content_floor = _feature_flags.search_content_floor()
+        has_content_signal = (
+            float(top.get("lexical_score") or 0.0) > 0.0
+            or float(top.get("similarity") or 0.0) >= _content_floor
+        )
+        if not has_content_signal:
+            ranked = []
+
+    # Optional LLM re-rank seam (2026-05-09): when the catalog grows past
+    # ~30 agents, lexical+embedding can struggle to disambiguate among
+    # several semantically-overlapping candidates. The stage below is
+    # gated off by default and is a no-op until AZTEA_SEARCH_LLM_RERANK=1
+    # is set in the env. The implementation lives in
+    # `_llm_rerank_candidates` so this site stays small and the stub can
+    # be filled with a real Groq/llama call when needed without touching
+    # the surrounding ranking logic.
+    if (
+        ranked
+        and price_query_mode is None
+        and _feature_flags.search_llm_rerank_enabled()
+    ):
+        try:
+            ranked = _llm_rerank_candidates(normalized_query, ranked)
+        except Exception:  # noqa: BLE001 — re-rank must never block search
+            pass
 
     # Confidence floor: drop low-relevance candidates so callers don't get
     # five mediocre matches when nothing in the catalog is a real fit. The

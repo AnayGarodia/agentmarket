@@ -313,7 +313,23 @@ def registry_search(
         }
         for item in ranked
     ]
-    return JSONResponse(content={"results": results, "count": len(results)})
+    # Empty-result signal: when the ranker gates a query off-catalog (no
+    # content-matching candidate, or all below the relevance floor),
+    # callers need to distinguish "we ran the search and nothing matches"
+    # from "search infrastructure failed." The 2026-05-09 eval noted that
+    # gibberish queries returned three generic agents — that path is gone,
+    # but the empty response now ships a structured `off_catalog: true`
+    # signal so MCP/SDK layers can surface a friendly explanation instead
+    # of a silent zero-results UX.
+    payload: dict[str, Any] = {"results": results, "count": len(results)}
+    if not results:
+        payload["off_catalog"] = True
+        payload["note"] = (
+            "No agent in the current catalog matches this query. "
+            "Try aztea_workflow(action='list_agents') to browse, or "
+            "rephrase the query to describe the capability you need."
+        )
+    return JSONResponse(content=payload)
 
 
 @app.get(

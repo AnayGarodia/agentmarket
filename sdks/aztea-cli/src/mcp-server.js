@@ -689,26 +689,44 @@ function backendSearchItem(item) {
 }
 
 async function searchCatalog(query, limit) {
+  // 2026-05-09 cleanup: ranking is now exclusively the server's
+  // responsibility. The prior "try server first, silently fall back to
+  // local lexical on empty" path was the eval's two-mode-ranker bug —
+  // callers couldn't tell which scoring scale they were seeing. We now
+  // surface server results AS-IS (including the new server-side
+  // off_catalog flag and `note`) so empty-result detection works
+  // correctly. The local lexical scorer remains only as an emergency
+  // fallback when /registry/search is genuinely unreachable, and the
+  // response is explicitly marked when that branch fires.
   const capped = Math.max(1, Math.min(Number(limit || 8), 20))
   try {
     const remote = parseApiResponse(await postJson('/registry/search', { query, limit: capped }))
-    if (remote.ok && Array.isArray(remote.body.results) && remote.body.results.length) {
-      const results = remote.body.results.map(backendSearchItem).filter(item => item.slug)
+    if (remote.ok && remote.body && typeof remote.body === 'object') {
+      const rawResults = Array.isArray(remote.body.results) ? remote.body.results : []
+      const results = rawResults.map(backendSearchItem).filter(item => item.slug)
+      const offCatalog = Boolean(remote.body.off_catalog) || results.length === 0
+      const note = remote.body.note
       return {
         query,
         count: results.length,
         results,
         source: 'registry_search',
+        off_catalog: offCatalog || undefined,
         next_step: results.length
           ? `Call aztea_describe(slug='${results[0].slug}') to get the full schema, then aztea_call(slug=..., arguments={...}).`
-          : 'No matches found. Try a broader query.',
+          : (note || 'No agent in the live catalog matches this query. Try aztea_workflow(action="list_agents") to browse.'),
       }
     }
   } catch (err) {
-    log(`backend search failed; falling back to local catalog: ${err.message}`)
+    log(`backend search unreachable; using local emergency fallback: ${err.message}`)
   }
   const fallback = localSearchCatalog(query, capped)
-  fallback.source = 'local_catalog_fallback'
+  fallback.source = 'local_emergency_fallback'
+  fallback.warning = (
+    'Server-side search at /registry/search was unreachable; this response was ranked locally '
+    + 'over a stale catalog snapshot. Verify against aztea_workflow(action="list_agents") and retry '
+    + 'once connectivity returns.'
+  )
   return fallback
 }
 
@@ -1608,35 +1626,29 @@ async function listAgents(args) {
 }
 
 async function sessionAudit(args) {
+  // 2026-05-09 cleanup: rich audit logic (time-range filters, bulk Ed25519
+  // verification, aggregate digest) moved server-side to /wallets/audit.
+  // This stub just forwards every supported parameter so any audit-shape
+  // change ships through aztea.ai's normal deploy without a CLI release.
   const opts = args && typeof args === 'object' ? args : {}
-  let period = String(opts.period || '1d').trim().toLowerCase()
-  if (!['1d', '7d', '30d', '90d'].includes(period)) period = '1d'
-  const spend = parseApiResponse(await getJson(`/wallets/spend-summary?period=${encodeURIComponent(period)}`))
-  if (!spend.ok) return spend
-  let receipts = []
-  try {
-    const recent = parseApiResponse(await getJson('/jobs?limit=50&status=complete'))
-    if (recent.ok && recent.body && Array.isArray(recent.body.jobs)) {
-      receipts = recent.body.jobs.slice(0, 50).map(job => ({
-        job_id: job.job_id,
-        agent_id: job.agent_id,
-        agent_name: job.agent_name,
-        charge_cents: job.caller_charge_cents != null ? job.caller_charge_cents : job.price_cents,
-        settled_at: job.settled_at,
-        signature_endpoint: job.output_signature ? `/jobs/${job.job_id}/signature` : null,
-      }))
-    }
-  } catch (_) {}
-  return {
-    ok: true,
-    body: {
-      period,
-      spend: spend.body,
-      recent_signed_receipts: receipts,
-      audit_signature_method: 'per-job Ed25519 (call aztea_job(action=verify, job_id=...) to verify each)',
-      next_step: 'For an authoritative audit log, verify each receipt individually.',
-    },
+  const params = []
+  if (opts.period != null && String(opts.period).trim()) {
+    params.push(`period=${encodeURIComponent(String(opts.period).trim())}`)
   }
+  if (opts.since != null && String(opts.since).trim()) {
+    params.push(`since=${encodeURIComponent(String(opts.since).trim())}`)
+  }
+  if (opts.until != null && String(opts.until).trim()) {
+    params.push(`until=${encodeURIComponent(String(opts.until).trim())}`)
+  }
+  if (opts.limit != null && String(opts.limit).trim()) {
+    params.push(`limit=${encodeURIComponent(String(opts.limit).trim())}`)
+  }
+  if (opts.verify_all) {
+    params.push('verify_all=true')
+  }
+  const qs = params.length ? `?${params.join('&')}` : ''
+  return parseApiResponse(await getJson(`/wallets/audit${qs}`))
 }
 
 async function disputeStatus(args) {
