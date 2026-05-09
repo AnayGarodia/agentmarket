@@ -954,6 +954,11 @@ class RegistryBridge:
         self._auth_required: bool = not bool(api_key)
         self._auth_fail_count: int = 0
         self._signup_url: str = f"{self.base_url.rstrip('/')}/signup"
+        # Last ETag returned by /registry/agents. Sent back as If-None-Match
+        # on every poll so unchanged registries answer with 304 + empty body
+        # (no tool-list rebuild, no JSON parse). This is the bandwidth/CPU
+        # budget that pays for the tighter 5-second poll interval.
+        self._last_etag: str | None = None
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -966,15 +971,24 @@ class RegistryBridge:
     def refresh(self) -> dict[str, Any]:
         if self._auth_required:
             return self._manifest
+        headers = self._headers()
+        if self._last_etag:
+            headers["If-None-Match"] = self._last_etag
         try:
             response = self._session.get(
                 f"{self.base_url}/registry/agents",
                 params={"include_reputation": "true"},
-                headers=self._headers(),
+                headers=headers,
                 timeout=self.timeout_seconds,
             )
         except requests.RequestException as exc:
             _LOG.warning("Registry refresh network error: %s", exc)
+            return self._manifest
+
+        # 304 Not Modified — registry hasn't changed since last poll. Keep the
+        # cached manifest, refresh the auth counter, no rebuild needed.
+        if response.status_code == 304:
+            self._auth_fail_count = 0
             return self._manifest
 
         if response.status_code in (401, 403):
@@ -998,8 +1012,12 @@ class RegistryBridge:
                 with self._lock:
                     self._auth_required = True
             return self._manifest
-        # Successful refresh resets the auth-fail counter.
+        # Successful refresh resets the auth-fail counter and stores the new
+        # ETag for the next poll.
         self._auth_fail_count = 0
+        new_etag = response.headers.get("etag") or response.headers.get("ETag")
+        if new_etag:
+            self._last_etag = new_etag.strip()
 
         response.raise_for_status()
         payload = response.json()
@@ -2374,10 +2392,13 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=int(
             _env_with_legacy(
-                "AZTEA_MCP_REFRESH_SECONDS", "AZTEA_MCP_REFRESH_SECONDS", "60"
+                "AZTEA_MCP_REFRESH_SECONDS", "AZTEA_MCP_REFRESH_SECONDS", "5"
             )
         ),
-        help="Tool manifest refresh interval in seconds (default: 60).",
+        help=(
+            "Tool manifest refresh interval in seconds (default: 5). "
+            "ETag-aware — 304 polls are essentially free."
+        ),
     )
     parser.add_argument(
         "--timeout-seconds",

@@ -97,6 +97,23 @@ def skills_create(
             status_code=400, detail="price_per_call_usd must be between 0 and 25."
         )
 
+    # Server-side safety scan. CLI runs the same scanner pre-flight, but the
+    # /skills route is reachable directly so we re-enforce here. Any block
+    # finding refuses the upload before we even parse the SKILL.md body.
+    safety_findings = _listing_safety.scan_skill_md(raw_md)
+    if _listing_safety.has_block(safety_findings):
+        first_block = next(
+            f for f in safety_findings if f.level == _listing_safety.LEVEL_BLOCK
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "listing.safety_block",
+                first_block.message,
+                {"code": first_block.code, "detail": first_block.detail},
+            ),
+        )
+
     try:
         parsed = _skill_parser.parse_skill_md(raw_md, source="upload")
     except _skill_parser.SkillParseError as exc:

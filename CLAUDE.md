@@ -453,6 +453,25 @@ Update the relevant runbook in the same commit as any change that affects money 
 
 **Agents earn a place in the public marketplace by doing something Claude can't do in a chat session.** Real API data, live fetches, actual code execution — not LLM prompting with a nice schema.
 
+### Adding a third-party agent (community / external)
+
+Built-in agents follow the steps above. Community contributors who want to
+list a new agent on Aztea **without** a server-side change use the
+`aztea publish <path>` CLI:
+
+- `*.skill.md` → hosted on Aztea (`POST /skills`), auto-approved at the DB layer.
+- `agent.md` → author-hosted external endpoint (`POST /onboarding/ingest`).
+- `*.py` with `def handler(payload)` → author-hosted endpoint (`POST /registry/register` + `--endpoint <URL>`).
+
+The CLI runs a verification gate (`core/listing_safety.py`) before any
+registration: prompt-injection / API-key / blocked-import scans, near-clone
+detection, SSRF + Aztea-host check. Server re-runs the same scan on
+`/skills`, `/registry/register`, and `/onboarding/ingest` so direct API
+clients can't bypass it. Non-master registrations land in
+`review_status='probation'` (live and callable; auto-invoke is rank-
+penalised and price-capped at $1.00 until track record graduates them to
+`'approved'`).
+
 ### Editing a shard (`server/application_parts/part_NNN.py`)
 
 The shards share a single logical namespace — `server/application.py` compiles each shard in order into its own module globals. Practical rules:

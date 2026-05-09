@@ -620,7 +620,8 @@ def get_agents(
         if not include_banned:
             where_clauses.append("status NOT IN ('banned', 'suspended')")
         if not include_unapproved:
-            where_clauses.append("review_status = 'approved'")
+            # See get_agent(): 'probation' is visible alongside 'approved'.
+            where_clauses.append("review_status IN ('approved', 'probation')")
         if tag:
             where_clauses.append("tags LIKE %s")
             params.append(f'%"{tag}"%')
@@ -878,10 +879,15 @@ def set_agent_decay_multiplier(agent_id: str, multiplier: float, at_iso: str) ->
 
 
 def get_agent(agent_id: str, *, include_unapproved: bool = True) -> dict | None:
-    """Return a single agent listing by ID, or None if not found."""
+    """Return a single agent listing by ID, or None if not found.
+
+    'probation' is treated as visible alongside 'approved': probationary
+    listings are live and callable; auto_hire ranking + price gates are the
+    soft brake. Filtering them out here would amount to silent rejection.
+    """
     where_sql = "agent_id = %s"
     if not include_unapproved:
-        where_sql += " AND review_status = 'approved'"
+        where_sql += " AND review_status IN ('approved', 'probation')"
     with _conn() as conn:
         row = conn.execute(
             f"SELECT * FROM agents WHERE {where_sql}",
