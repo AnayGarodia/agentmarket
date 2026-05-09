@@ -496,15 +496,18 @@ async def lifespan(app: FastAPI):
     ensure_builtin_agents_registered()
     recipes.ensure_builtin_recipes()
 
-    # Warm the sentence-transformers MiniLM model off the request path. The
-    # first call to embeddings._local_model() loads ~80MB of weights and
-    # takes 1-3s on first import. Without this, the first search hit after
-    # a cold deploy spent that time on the request thread, making cache
-    # misses look like a 1.5-3s p99 spike right after restart. The 2026-05-08
-    # plan's discovery grade-A bar called for keeping search latency
-    # consistent. Skip when AZTEA_DISABLE_EMBEDDINGS=1 — there's nothing to
-    # warm in that mode.
-    if not _feature_flags.DISABLE_EMBEDDINGS:
+    # Optional warm-up of sentence-transformers MiniLM. With uvicorn's 3
+    # worker processes each independently loading ~80MB of weights at
+    # startup, a t-class EC2 instance OOM-kills the workers (silent
+    # SIGKILL — no Python traceback, just "Child process died" in the
+    # uvicorn supervisor). Default OFF so prod stays stable; opt in via
+    # AZTEA_WARM_EMBEDDINGS=1 on hosts with enough RAM, or pre-load a
+    # singleton in a forked-once pattern under gunicorn for the real
+    # cache-miss-latency win. Lazy load on first request still works.
+    if (
+        _feature_flags.flag("AZTEA_WARM_EMBEDDINGS", default=False)
+        and not _feature_flags.DISABLE_EMBEDDINGS
+    ):
         try:
             embeddings._local_model()
         except Exception:
