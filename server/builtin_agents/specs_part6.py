@@ -2,7 +2,7 @@
 
 This shard registers the six agents that anchor the launch-audit demo:
 Lighthouse, axe-core accessibility, security-headers grader, broken-link
-crawler, PDF parser, and Brave web search. Kept separate from
+crawler, PDF parser, and DuckDuckGo web search. Kept separate from
 ``specs_part2`` to respect the < 1000-line per-file budget.
 """
 
@@ -594,11 +594,11 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
                 }
             ],
         },
-        # ── Web Search (Brave) ──────────────────────────────────────────────────
+        # ── Web Search (DuckDuckGo) ─────────────────────────────────────────────
         {
             "agent_id": _WEB_SEARCH_AGENT_ID,
             "name": "Web Search",
-            "description": "Use when the task requires searching the live web. Calls the Brave Search API and returns ranked results with title, URL, description, optional age + thumbnail. Supports 'web' and 'news' modes, country filter, and freshness window.",
+            "description": "Use when the task requires searching the live web. Calls DuckDuckGo's HTML endpoint (no API key required) and returns ranked results with title, URL, description, and site name. Supports country region filter and freshness window (past day/week/month/year).",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WEB_SEARCH_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["search", "web", "news", "research", "live-data"],
@@ -607,7 +607,7 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
                 "google search",
                 "search the web",
                 "serp",
-                "brave search",
+                "duckduckgo search",
                 "live web",
                 "current events",
                 "news search",
@@ -616,7 +616,7 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
             "kind": "aztea_built",
             "category": "Research",
             "is_featured": True,
-            "runtime_requirements": ["BRAVE_SEARCH_API_KEY"],
+            "runtime_requirements": [],
             "input_schema": {
                 "type": "object",
                 "properties": {

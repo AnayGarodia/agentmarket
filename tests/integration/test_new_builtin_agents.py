@@ -349,53 +349,46 @@ def test_pdf_document_parser_contract(client):
     assert body["billing_units_actual"] >= 1
 
 
-def test_web_search_no_api_key_returns_structured_error(client, monkeypatch):
-    """When BRAVE_SEARCH_API_KEY is unset the call must return a clean error
-    (the call is auto-refunded — the marketplace listing degrades cleanly)."""
+def test_web_search_missing_query_returns_structured_error(client):
+    """Empty query must return a clean structured error (no API key needed —
+    DuckDuckGo HTML endpoint requires no credentials)."""
     caller = _register_user()
     _fund_user_wallet(caller, 200)
-
-    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
 
     resp = client.post(
         f"/registry/agents/{WEB_SEARCH_AGENT_ID}/call",
-        json={"query": "what is aztea", "count": 5},
+        json={"query": "", "count": 5},
         headers=_auth_headers(caller["raw_api_key"]),
     )
 
-    # The platform may either return 200 with an error envelope, or a structured
-    # 4xx — both are acceptable contract outcomes for missing-runtime errors.
     assert resp.status_code in (200, 402, 422, 502), resp.text
     if resp.status_code == 200:
         body = resp.json().get("output") or resp.json()
-        # Some versions wrap the error under "error", others surface the dict.
         if "error" in body:
-            assert body["error"]["code"] == "web_search.no_api_key"
+            assert body["error"]["code"] == "web_search.missing_query"
 
 
-def test_web_search_happy_path_contract(client, monkeypatch):
+def test_web_search_happy_path_contract(client):
+    """Happy path: query DDG HTML, parse out at least one result.
+    Mocks httpx.post since the agent uses POST against html.duckduckgo.com."""
     caller = _register_user()
     _fund_user_wallet(caller, 200)
 
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test_key_abc")
+    # Minimal DDG HTML response that exercises the parser. The wrapped
+    # `/l/?uddg=...` redirect is intentional — verifies the unwrap logic.
+    fake_html = """
+    <html><body>
+      <div class="result">
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Faztea.ai&amp;rut=abc">
+          Aztea — agent marketplace
+        </a>
+        <a class="result__snippet">The marketplace where AI agents hire each other.</a>
+      </div>
+    </body></html>
+    """
+    fake_resp = MagicMock(status_code=200, text=fake_html)
 
-    fake_resp = MagicMock(status_code=200)
-    fake_resp.json.return_value = {
-        "web": {
-            "results": [
-                {
-                    "title": "Aztea — agent marketplace",
-                    "url": "https://aztea.ai",
-                    "description": "The marketplace where AI agents hire each other.",
-                    "age": None,
-                    "profile": {"name": "Aztea"},
-                    "thumbnail": {},
-                }
-            ]
-        }
-    }
-
-    with patch("agents.web_search.httpx.get", return_value=fake_resp):
+    with patch("agents.web_search.httpx.post", return_value=fake_resp):
         resp = client.post(
             f"/registry/agents/{WEB_SEARCH_AGENT_ID}/call",
             json={"query": "aztea ai", "count": 3},
@@ -407,4 +400,5 @@ def test_web_search_happy_path_contract(client, monkeypatch):
     assert body["mode"] == "web"
     assert body["result_count"] == 1
     assert body["results"][0]["url"] == "https://aztea.ai"
+    assert body["results"][0]["site_name"] == "aztea.ai"
     assert body["billing_units_actual"] == 1

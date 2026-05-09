@@ -1,12 +1,13 @@
 """
-web_search.py — Live web search via the Brave Search API.
+web_search.py — Live web search via DuckDuckGo's HTML endpoint.
 
 Input:
   {
-    "query": "what is aztea",          # required, 1-400 chars
-    "count": 10,                         # optional, default 10, hard cap 20
-    "mode": "web" | "news",             # optional, default "web"
-    "country": "US",                    # optional, ISO-3166-1 alpha-2
+    "query": "what is aztea",      # required, 1-400 chars
+    "count": 10,                     # optional, default 10, hard cap 20
+    "mode": "web",                   # optional; only "web" supported.
+                                     # "news" returns the same web results.
+    "country": "us-en",              # optional DDG region (e.g. us-en, gb-en, wt-wt).
     "freshness": "pd" | "pw" | "pm" | "py"  # optional past-day / week / month / year
   }
 
@@ -20,186 +21,224 @@ Output:
         "title": str,
         "url": str,
         "description": str,
-        "age": str | null,             # human-readable, when provider supplies
-        "site_name": str | null,
+        "age": str | null,        # null — DDG HTML scrape does not surface ages.
+        "site_name": str | null,  # parsed from URL host
         "thumbnail_url": str | null
       }
     ],
-    "billing_units_actual": int        # always 1
+    "billing_units_actual": int   # always 1
   }
 
 Setup:
-  Requires BRAVE_SEARCH_API_KEY env var. Free tier = 2k queries/month.
-  When the key is absent the agent returns a structured error so the
-  marketplace listing degrades cleanly instead of charging the caller.
+  No API key required. We call https://html.duckduckgo.com/html/ which is the
+  same endpoint the official `duckduckgo-search` Python package uses. DDG is
+  rate-limited: ~30 requests/minute per source IP before they start serving
+  CAPTCHAs. The marketplace billing ($0.01/call) absorbs the operational cost
+  of caching at the registry layer.
+
+  Switched from Brave Search API (paid beyond 2k queries/month) on 2026-05-09
+  so the marketplace listing has no per-call dependency on the host setting up
+  a vendor account.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 
 from core.url_security import validate_outbound_url
 
-_BRAVE_WEB_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
-_BRAVE_NEWS_ENDPOINT = "https://api.search.brave.com/res/v1/news/search"
+_DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html/"
 _TIMEOUT_S = 8.0
 _DEFAULT_COUNT = 10
 _HARD_MAX_COUNT = 20
 _MAX_QUERY_LEN = 400
-_VALID_MODES = {"web", "news"}
-_VALID_FRESHNESS = {"pd", "pw", "pm", "py"}
+# DDG's `df` (date filter) values match Brave's freshness enum 1:1 — d/w/m/y —
+# so we accept the Brave-style enum and translate. Saves callers from learning
+# both vocabularies.
+_FRESHNESS_TO_DDG_DF = {"pd": "d", "pw": "w", "pm": "m", "py": "y"}
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message}}
 
 
-def _normalize_web_result(item: dict[str, Any]) -> dict[str, Any]:
-    profile = item.get("profile") or {}
-    thumbnail = item.get("thumbnail") or {}
-    return {
-        "title": str(item.get("title") or "").strip(),
-        "url": str(item.get("url") or "").strip(),
-        "description": str(item.get("description") or "").strip(),
-        "age": str(item.get("age") or "") or None,
-        "site_name": str(profile.get("name") or "") or None,
-        "thumbnail_url": str(thumbnail.get("src") or "") or None,
-    }
+def _unwrap_ddg_redirect(href: str) -> str:
+    """Convert DDG's `/l/?uddg=<encoded>&...` wrapper back into the destination URL.
 
-
-def _normalize_news_result(item: dict[str, Any]) -> dict[str, Any]:
-    thumbnail = item.get("thumbnail") or {}
-    meta_url = item.get("meta_url") or {}
-    return {
-        "title": str(item.get("title") or "").strip(),
-        "url": str(item.get("url") or "").strip(),
-        "description": str(item.get("description") or "").strip(),
-        "age": str(item.get("age") or "") or None,
-        "site_name": str(meta_url.get("hostname") or "") or None,
-        "thumbnail_url": str(thumbnail.get("src") or "") or None,
-    }
-
-
-def run(payload: dict) -> dict:
-    """Run a live web search via the Brave Search API.
-
-    Cheap, single-shot. Returns up to 20 result objects with title, url,
-    description, optional age + thumbnail. News mode is also available.
+    The HTML endpoint wraps every result link through a click-tracking redirect.
+    We don't want the wrapped form in the response — callers expect a direct
+    URL they can fetch or hand to another agent.
     """
+    if not href:
+        return ""
+    href = href.strip()
+    # Some links arrive without a scheme (//duckduckgo.com/...) and some with
+    # https://. Both shapes route through the same /l/ wrapper.
+    if "duckduckgo.com/l/" in href:
+        try:
+            qs = parse_qs(urlparse(href).query)
+            target = qs.get("uddg", [""])[0]
+            if target:
+                return unquote(target)
+        except Exception:
+            return href
+    return href
+
+
+def _site_name_from_url(url: str) -> str | None:
+    try:
+        host = urlparse(url).hostname or ""
+        # Strip a leading "www." so "www.example.com" reads as "example.com".
+        if host.startswith("www."):
+            host = host[4:]
+        return host or None
+    except Exception:
+        return None
+
+
+def _parse_ddg_html(html: str, limit: int) -> list[dict[str, Any]]:
+    """Extract results from html.duckduckgo.com's response.
+
+    The DDG HTML markup uses `div.result` rows with `a.result__a` for the
+    title/link and `a.result__snippet` (or `.result__snippet`) for the
+    description. The structure has been stable for years; if DDG ever changes
+    it the agent fails closed via the structured-error path below.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[dict[str, Any]] = []
+    for row in soup.select("div.result, div.web-result"):
+        link = row.select_one("a.result__a")
+        if not link:
+            continue
+        title = link.get_text(strip=True)
+        href = _unwrap_ddg_redirect(str(link.get("href") or ""))
+        if not title or not href:
+            continue
+        snippet_el = row.select_one("a.result__snippet, .result__snippet")
+        description = snippet_el.get_text(" ", strip=True) if snippet_el else ""
+        out.append({
+            "title": title,
+            "url": href,
+            "description": description,
+            "age": None,
+            "site_name": _site_name_from_url(href),
+            "thumbnail_url": None,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def run(payload: dict) -> dict[str, Any]:
+    payload = payload or {}
+
     query = str(payload.get("query") or "").strip()
     if not query:
-        return _err("web_search.missing_query", "query is required")
+        return _err("web_search.missing_query", "query is required.")
     if len(query) > _MAX_QUERY_LEN:
         return _err(
             "web_search.query_too_long",
-            f"query must be ≤ {_MAX_QUERY_LEN} chars (got {len(query)})",
-        )
-
-    api_key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
-    if not api_key:
-        return _err(
-            "web_search.no_api_key",
-            "BRAVE_SEARCH_API_KEY is not configured on this server. "
-            "Set the env var to enable live web search (free tier at brave.com/search/api).",
-        )
-
-    mode = str(payload.get("mode") or "web").strip().lower()
-    if mode not in _VALID_MODES:
-        return _err(
-            "web_search.invalid_mode",
-            f"mode must be one of: {sorted(_VALID_MODES)}",
+            f"query exceeds {_MAX_QUERY_LEN} characters.",
         )
 
     try:
         count = int(payload.get("count") or _DEFAULT_COUNT)
     except (TypeError, ValueError):
-        count = _DEFAULT_COUNT
-    count = max(1, min(count, _HARD_MAX_COUNT))
+        return _err("web_search.invalid_count", "count must be an integer.")
+    if count < 1:
+        count = 1
+    if count > _HARD_MAX_COUNT:
+        count = _HARD_MAX_COUNT
 
-    params: dict[str, Any] = {"q": query, "count": count}
+    mode = str(payload.get("mode") or "web").strip().lower()
+    if mode not in ("web", "news"):
+        return _err(
+            "web_search.invalid_mode",
+            "mode must be one of: web, news.",
+        )
+    # DDG HTML endpoint serves the same result set for both; we surface the
+    # caller's mode in the output for contract symmetry but don't branch.
 
-    country = str(payload.get("country") or "").strip().upper()
-    if country:
-        if len(country) != 2 or not country.isalpha():
-            return _err(
-                "web_search.invalid_country",
-                "country must be a 2-letter ISO-3166-1 alpha-2 code (e.g. US, GB)",
-            )
-        params["country"] = country
+    region = str(payload.get("country") or "wt-wt").strip().lower()
+    # Accept ISO codes like "US" — translate to DDG's "us-en" form.
+    if len(region) == 2 and region.isalpha():
+        region = f"{region}-en"
 
     freshness = str(payload.get("freshness") or "").strip().lower()
-    if freshness:
-        if freshness not in _VALID_FRESHNESS:
-            return _err(
-                "web_search.invalid_freshness",
-                f"freshness must be one of: {sorted(_VALID_FRESHNESS)}",
-            )
-        params["freshness"] = freshness
+    if freshness and freshness not in _FRESHNESS_TO_DDG_DF:
+        return _err(
+            "web_search.invalid_freshness",
+            "freshness must be one of: pd, pw, pm, py.",
+        )
 
-    endpoint = _BRAVE_NEWS_ENDPOINT if mode == "news" else _BRAVE_WEB_ENDPOINT
+    form_data = {"q": query, "kl": region}
+    if freshness:
+        form_data["df"] = _FRESHNESS_TO_DDG_DF[freshness]
+
+    headers = {
+        # DDG's HTML endpoint requires a browser-like UA; bare `python-httpx`
+        # gets rate-limited harder. This is the same UA pattern the
+        # community `duckduckgo-search` package uses.
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
 
     try:
-        resp = httpx.get(
-            endpoint,
-            params=params,
+        resp = httpx.post(
+            _DDG_HTML_ENDPOINT,
+            data=form_data,
+            headers=headers,
             timeout=_TIMEOUT_S,
-            headers={
-                "Accept": "application/json",
-                "Accept-Encoding": "gzip",
-                "X-Subscription-Token": api_key,
-                "User-Agent": "Aztea-Web-Search/1.0",
-            },
+            follow_redirects=True,
         )
-    except httpx.HTTPError as exc:
+    except httpx.TimeoutException:
+        return _err("web_search.timeout", "DuckDuckGo request timed out.")
+    except httpx.RequestError as exc:
         return _err(
-            "web_search.fetch_failed",
-            f"Brave API request failed: {type(exc).__name__}: {exc}",
+            "web_search.upstream_unreachable",
+            f"DuckDuckGo request failed: {exc}",
         )
 
-    if resp.status_code == 401 or resp.status_code == 403:
-        return _err(
-            "web_search.auth_failed",
-            f"Brave API rejected the API key (HTTP {resp.status_code}). "
-            "Verify BRAVE_SEARCH_API_KEY is correct.",
-        )
     if resp.status_code == 429:
         return _err(
             "web_search.rate_limited",
-            "Brave API rate-limited this query. Try again in a few seconds, "
-            "or upgrade the subscription tier.",
+            "DuckDuckGo rate-limited this request. Retry shortly.",
         )
-    if resp.status_code >= 400:
+    if resp.status_code >= 500:
         return _err(
             "web_search.upstream_error",
-            f"Brave API returned HTTP {resp.status_code}: {resp.text[:300]}",
+            f"DuckDuckGo returned HTTP {resp.status_code}.",
+        )
+    if resp.status_code != 200:
+        return _err(
+            "web_search.upstream_error",
+            f"DuckDuckGo returned HTTP {resp.status_code}.",
         )
 
     try:
-        data = resp.json()
-    except ValueError:
+        results = _parse_ddg_html(resp.text, count)
+    except Exception as exc:  # noqa: BLE001 — never let parser bugs leak as 500s
         return _err(
             "web_search.parse_failed",
-            "Brave API returned non-JSON body",
+            f"Failed to parse DuckDuckGo HTML: {exc}",
         )
 
-    if mode == "web":
-        items = (data.get("web") or {}).get("results") or []
-        results = [_normalize_web_result(item) for item in items if isinstance(item, dict)]
-    else:
-        items = (data.get("results") or [])
-        results = [_normalize_news_result(item) for item in items if isinstance(item, dict)]
-
-    # Drop any blanks (provider occasionally returns rows without title/url).
+    # Drop rows missing title/url (defence against parser drift).
     results = [r for r in results if r["title"] and r["url"]]
 
-    # SSRF guardrail on every URL we surface back to the caller. Brave is a
-    # trusted upstream, but CLAUDE.md's "all outbound URLs go through
-    # url_security.py" invariant covers result URLs too — if Brave ever
-    # returns a private/loopback/reserved address (compromised result,
-    # parked-domain redirect, etc.) the caller should not see it.
+    # SSRF guardrail on every URL we surface back to the caller. DDG sanitises
+    # to a degree, but CLAUDE.md's "all outbound URLs go through
+    # url_security.py" invariant covers result URLs too — if a DDG row ever
+    # decoded to a private/loopback/reserved address, the caller should not
+    # see it.
     safe_results = []
     for r in results:
         try:
@@ -208,12 +247,11 @@ def run(payload: dict) -> dict:
         except Exception:
             # Drop the row silently rather than fail the whole call.
             continue
-    results = safe_results
 
     return {
         "query": query,
         "mode": mode,
-        "result_count": len(results),
-        "results": results[:count],
+        "result_count": len(safe_results),
+        "results": safe_results[:count],
         "billing_units_actual": 1,
     }
