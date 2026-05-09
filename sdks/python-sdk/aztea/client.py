@@ -87,11 +87,14 @@ class AuthNamespace(_NamespaceBase):
             require_api_key=False,
         )
 
-    def login(self, email: str, password: str) -> JSONObject:
+    def login(self, email: str, password: str, *, rotate: bool = False) -> JSONObject:
+        # rotate=True forces the server to mint a fresh raw_api_key. Without it,
+        # an existing active session reuses the prior key and returns raw_api_key=None,
+        # which leaves callers (e.g. the CLI on a new machine) with no usable key.
         return self._client._request_json(
             "POST",
             "/auth/login",
-            json_body={"email": email, "password": password},
+            json_body={"email": email, "password": password, "rotate": rotate},
             require_api_key=False,
         )
 

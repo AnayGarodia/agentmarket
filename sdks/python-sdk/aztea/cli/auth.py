@@ -232,8 +232,15 @@ def login(
             )
             console.print()
             with spinner("Signing in", json_mode=json_mode):
-                data = client.auth.login(login_email, login_password)
+                data = client.auth.login(login_email, login_password, rotate=True)
             raw_key = str(data.get("raw_api_key") or "")
+            if not raw_key:
+                # Server didn't return a key even with rotate=True — bail loudly
+                # so the user doesn't end up with empty credentials silently.
+                raise RuntimeError(
+                    "Login succeeded but no API key was returned. "
+                    "Try `aztea login` again, or report this issue."
+                )
             username = str(data.get("username") or "")
             save_config(api_key=raw_key, base_url=base_url, username=username)
             if json_mode:
