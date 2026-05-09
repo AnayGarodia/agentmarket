@@ -25,6 +25,7 @@ from .common import (
     JsonOpt,
     build_client,
     handle_error,
+    resolve_settings,
     slugify,
 )
 from .output import (
@@ -41,6 +42,7 @@ from .output import (
     spinner,
 )
 from ._detect import DetectionError, DetectionResult, detect
+from . import wizard as _wizard
 
 # Re-use the shared scanner. The CLI imports from `core` because the SDK and
 # server share a checkout in this monorepo; in a pip-only install path the
@@ -78,7 +80,13 @@ _DEFAULT_PY_HANDLER_PRICE_USD = 0.05
 
 
 def publish(
-    path: Path = typer.Argument(..., help="SKILL.md, agent.md, or .py handler."),
+    path: Optional[Path] = typer.Argument(
+        None,
+        help=(
+            "SKILL.md, agent.md, or .py handler. Omit to launch the "
+            "interactive wizard."
+        ),
+    ),
     price: Optional[float] = typer.Option(
         None,
         "--price",
@@ -109,11 +117,20 @@ def publish(
         "--explain",
         help="On block, print the matched line / detail for each finding.",
     ),
+    from_template: Optional[str] = typer.Option(
+        None,
+        "--from-template",
+        help=(
+            "Generate a starter file (skill | agent | python) and exit "
+            "without publishing. Equivalent to running the wizard but "
+            "stopping after the file is written."
+        ),
+    ),
     api_key: Optional[str] = ApiKeyOpt,
     base_url: Optional[str] = BaseUrlOpt,
     json_mode: bool = JsonOpt,
 ) -> None:
-    """List an agent on Aztea. Auto-detects file kind."""
+    """List an agent on Aztea. Auto-detects file kind, or runs the wizard."""
     if scan_skill_md is None:
         from .output import error
         error(
@@ -122,6 +139,16 @@ def publish(
             code="publish.missing_safety_module",
         )
         raise typer.Exit(code=1)
+
+    if path is None:
+        path = _wizard.run_wizard(
+            api_key=api_key,
+            base_url=base_url,
+            json_mode=json_mode,
+            from_template_only=from_template is not None,
+        )
+        if from_template is not None:
+            return
 
     try:
         detection = detect(path)
@@ -164,6 +191,12 @@ def publish(
                 json_mode=True,
             )
         raise typer.Exit(code=3)
+
+    # Resolve the base URL once so the marketplace link in the receipt
+    # matches whatever the call session actually targets.
+    resolved_base, _ = resolve_settings(
+        api_key=api_key, base_url=base_url, require_api_key=False
+    )
 
     # Network-touching stages happen inside one client session.
     try:
@@ -216,7 +249,12 @@ def publish(
                 )
 
         _emit_findings(findings, json_mode=json_mode, explain=False)
-        _emit_receipt(receipt, detection=detection, json_mode=json_mode)
+        _emit_receipt(
+            receipt,
+            detection=detection,
+            json_mode=json_mode,
+            base_url=resolved_base,
+        )
     except typer.Exit:
         raise
     except Exception as exc:  # noqa: BLE001 — funnel into the standard error UX
@@ -426,6 +464,10 @@ def _emit_findings(
         )
         target = err_console if finding.level == LEVEL_BLOCK else console
         target.print(f"[{style}]{glyph}[/{style}]  {finding.message}")
+        if finding.level == LEVEL_BLOCK:
+            hint = _wizard.remediation_for(getattr(finding, "code", "") or "")
+            if hint:
+                target.print(f"    [muted]{hint}[/muted]")
         if explain and finding.detail:
             target.print(f"    [muted]{json.dumps(finding.detail, default=str)}[/muted]")
 
@@ -435,6 +477,7 @@ def _emit_receipt(
     *,
     detection: DetectionResult,
     json_mode: bool,
+    base_url: str | None = None,
 ) -> None:
     agent = receipt.get("agent") or {}
     agent_id = receipt.get("agent_id") or agent.get("agent_id") or ""
@@ -473,8 +516,14 @@ def _emit_receipt(
     )
     if review_status == "probation":
         console.print(
-            f"[warn]{ARROW}[/warn]  [muted]probation: live but ranked last for the "
-            "next 24 h or 5 settlements.[/muted]"
+            f"[warn]{ARROW}[/warn]  [muted]probation: visible in the marketplace, "
+            "ranked last in auto-hire until the listing accumulates a track record. "
+            "Direct hires aren't affected.[/muted]"
+        )
+    if base_url and agent_id and base_url.startswith(("http://", "https://")):
+        marketplace_url = f"{base_url.rstrip('/')}/agents/{agent_id}"
+        console.print(
+            f"[muted]View at[/muted] [code]{marketplace_url}[/code]"
         )
     console.print(
         f"[muted]Try it: [/muted][code]aztea hire {slugify(name)} --input "
