@@ -1,8 +1,18 @@
 {
   "name": "aztea-cli",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Aztea CLI — give coding agents a specialist labor market in one command",
-  "keywords": ["aztea", "mcp", "claude", "claude-code", "codex", "cursor", "gemini", "agents", "ai"],
+  "keywords": [
+    "aztea",
+    "mcp",
+    "claude",
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini",
+    "agents",
+    "ai"
+  ],
   "license": "MIT",
   "main": "src/mcp-server.js",
   "bin": {
