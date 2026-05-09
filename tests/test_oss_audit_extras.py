@@ -575,10 +575,14 @@ def test_user_agent_leak_fixed_in_retrieval_agents():
     'research-agent@aztea.dev' (audit P1) must now be sourced from
     core.outbound_ua.outbound_user_agent(). The leak strings must NOT
     appear in those files anymore.
+
+    Files that have been entirely removed from the codebase (sunset agents
+    in the agent prune) trivially can't leak — skip them.
     """
     for rel, needle in _FIXED_LEAKS:
         path = _REPO_ROOT / rel
-        assert path.exists(), f"file missing: {rel}"
+        if not path.exists():
+            continue  # sunset agent: file gone, leak gone.
         text = path.read_text(encoding="utf-8")
         assert needle not in text, (
             f"audit P1 regression — {needle!r} reappeared in {rel}; "
