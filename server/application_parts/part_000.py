@@ -103,6 +103,11 @@ from agents import type_checker as agent_type_checker
 from agents import video_storyboard as agent_video_storyboard
 from agents import visual_regression as agent_visual_regression
 from agents import web_search as agent_web_search
+from agents import docs_grounder as agent_docs_grounder
+from agents import sast_scanner as agent_sast_scanner
+from agents import stripe_webhook_debugger as agent_stripe_webhook_debugger
+from agents import load_tester as agent_load_tester
+from agents import ci_failure_reproducer as agent_ci_failure_reproducer
 from core import auth as _auth
 from core import cache as _cache
 from core import (
@@ -325,6 +330,11 @@ _SECURITY_HEADERS_GRADER_AGENT_ID = _builtin_constants.SECURITY_HEADERS_GRADER_A
 _BROKEN_LINK_CRAWLER_AGENT_ID = _builtin_constants.BROKEN_LINK_CRAWLER_AGENT_ID
 _PDF_DOCUMENT_PARSER_AGENT_ID = _builtin_constants.PDF_DOCUMENT_PARSER_AGENT_ID
 _WEB_SEARCH_AGENT_ID = _builtin_constants.WEB_SEARCH_AGENT_ID
+_DOCS_GROUNDER_AGENT_ID = _builtin_constants.DOCS_GROUNDER_AGENT_ID
+_SAST_SCANNER_AGENT_ID = _builtin_constants.SAST_SCANNER_AGENT_ID
+_STRIPE_WEBHOOK_DEBUGGER_AGENT_ID = _builtin_constants.STRIPE_WEBHOOK_DEBUGGER_AGENT_ID
+_LOAD_TESTER_AGENT_ID = _builtin_constants.LOAD_TESTER_AGENT_ID
+_CI_FAILURE_REPRODUCER_AGENT_ID = _builtin_constants.CI_FAILURE_REPRODUCER_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS

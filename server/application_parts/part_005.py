@@ -771,6 +771,64 @@ def _deterministic_quality_result(
             "reason": "Structured video storyboard output is internally consistent.",
         }
 
+    if agent_id == _DOCS_GROUNDER_AGENT_ID:
+        if not isinstance(payload.get("sources"), list):
+            return {"verdict": "fail", "score": 2, "reason": "Docs grounder output must include a sources list."}
+        if not isinstance(payload.get("summary"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Docs grounder output must include a summary string."}
+        if not str(payload.get("library") or "").strip():
+            return {"verdict": "fail", "score": 2, "reason": "Docs grounder output must include a library field."}
+        return {"verdict": "pass", "score": 8, "reason": "Docs grounder output is internally consistent."}
+
+    if agent_id == _SAST_SCANNER_AGENT_ID:
+        findings = payload.get("findings")
+        counts = payload.get("by_severity")
+        if not isinstance(findings, list) or not isinstance(counts, dict):
+            return {"verdict": "fail", "score": 2, "reason": "SAST scanner output must include findings and by_severity."}
+        try:
+            total = int(payload.get("total_findings"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "SAST scanner output must include numeric total_findings."}
+        if total != len(findings):
+            return {"verdict": "fail", "score": 2, "reason": "SAST scanner output is inconsistent: total_findings does not match findings."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured SAST scanner output is internally consistent."}
+
+    if agent_id == _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID:
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return {"verdict": "fail", "score": 2, "reason": "Stripe webhook debugger output must include a results list."}
+        try:
+            tests_run = int(payload.get("tests_run"))
+            passed = int(payload.get("passed"))
+            failed = int(payload.get("failed"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Stripe webhook debugger output must include numeric tests_run, passed, failed."}
+        if tests_run != passed + failed:
+            return {"verdict": "fail", "score": 2, "reason": "Stripe webhook debugger output is inconsistent: tests_run != passed + failed."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured Stripe webhook debugger output is internally consistent."}
+
+    if agent_id == _LOAD_TESTER_AGENT_ID:
+        latency = payload.get("latency_ms")
+        if not isinstance(latency, dict):
+            return {"verdict": "fail", "score": 2, "reason": "Load tester output must include a latency_ms dict."}
+        try:
+            total = int(payload.get("total_requests"))
+            success = int(payload.get("success_count"))
+            errors = int(payload.get("error_count"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Load tester output must include numeric total_requests, success_count, error_count."}
+        if total != success + errors:
+            return {"verdict": "fail", "score": 2, "reason": "Load tester output is inconsistent: total_requests != success_count + error_count."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured load tester output is internally consistent."}
+
+    if agent_id == _CI_FAILURE_REPRODUCER_AGENT_ID:
+        valid_types = {"code_error", "dependency_error", "env_error", "config_error", "flaky_test", "timeout", "unknown"}
+        if str(payload.get("failure_type") or "") not in valid_types:
+            return {"verdict": "fail", "score": 2, "reason": "CI failure reproducer output must include a valid failure_type."}
+        if not isinstance(payload.get("commands_tried"), list):
+            return {"verdict": "fail", "score": 2, "reason": "CI failure reproducer output must include commands_tried list."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured CI failure reproducer output is internally consistent."}
+
     return None
 
 

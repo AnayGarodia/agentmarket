@@ -125,6 +125,16 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return _finalize(agent_pdf_document_parser.run(payload))
     if agent_id == _WEB_SEARCH_AGENT_ID:
         return _finalize(agent_web_search.run(payload))
+    if agent_id == _DOCS_GROUNDER_AGENT_ID:
+        return _finalize(agent_docs_grounder.run(payload))
+    if agent_id == _SAST_SCANNER_AGENT_ID:
+        return _finalize(agent_sast_scanner.run(payload))
+    if agent_id == _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID:
+        return _finalize(agent_stripe_webhook_debugger.run(payload))
+    if agent_id == _LOAD_TESTER_AGENT_ID:
+        return _finalize(agent_load_tester.run(payload))
+    if agent_id == _CI_FAILURE_REPRODUCER_AGENT_ID:
+        return _finalize(agent_ci_failure_reproducer.run(payload))
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

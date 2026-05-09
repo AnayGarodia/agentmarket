@@ -10,27 +10,32 @@ from server.builtin_agents.constants import (
     ARXIV_RESEARCH_AGENT_ID,
     BROKEN_LINK_CRAWLER_AGENT_ID,
     BROWSER_AGENT_ID,
+    CI_FAILURE_REPRODUCER_AGENT_ID,
     CURATED_BUILTIN_AGENT_IDS,
     CVELOOKUP_AGENT_ID,
     DB_SANDBOX_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
+    DOCS_GROUNDER_AGENT_ID,
     FINANCIAL_AGENT_ID,
     HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID,
     LIGHTHOUSE_AUDITOR_AGENT_ID,
     LINTER_AGENT_ID,
     LIVE_ENDPOINT_TESTER_AGENT_ID,
+    LOAD_TESTER_AGENT_ID,
     MULTI_FILE_EXECUTOR_AGENT_ID,
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
     PDF_DOCUMENT_PARSER_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
     QUALITY_JUDGE_AGENT_ID,
+    SAST_SCANNER_AGENT_ID,
     SECRET_SCANNER_AGENT_ID,
     SECURITY_HEADERS_GRADER_AGENT_ID,
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
     SHELL_EXECUTOR_AGENT_ID,
     SQL_EXPLAINER_AGENT_ID,
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID,
     VISUAL_REGRESSION_AGENT_ID,
@@ -42,6 +47,7 @@ from server.builtin_agents.specs_part3 import load_builtin_specs_part3
 from server.builtin_agents.specs_part4 import load_builtin_specs_part4
 from server.builtin_agents.specs_part5 import load_builtin_specs_part5
 from server.builtin_agents.specs_part6 import load_builtin_specs_part6
+from server.builtin_agents.specs_part7 import load_builtin_specs_part7
 
 _DEFAULT_CATEGORY_BY_AGENT_ID = {
     FINANCIAL_AGENT_ID: "Finance",
@@ -67,6 +73,11 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     BROKEN_LINK_CRAWLER_AGENT_ID: "Quality",
     PDF_DOCUMENT_PARSER_AGENT_ID: "Research",
     WEB_SEARCH_AGENT_ID: "Research",
+    DOCS_GROUNDER_AGENT_ID: "Research",
+    SAST_SCANNER_AGENT_ID: "Security",
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: "Developer Tools",
+    LOAD_TESTER_AGENT_ID: "QA",
+    CI_FAILURE_REPRODUCER_AGENT_ID: "Developer Tools",
 }
 
 _DEFAULT_CACHEABLE_BY_AGENT_ID = {
@@ -92,6 +103,11 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     BROKEN_LINK_CRAWLER_AGENT_ID: False,
     PDF_DOCUMENT_PARSER_AGENT_ID: True,
     WEB_SEARCH_AGENT_ID: False,
+    DOCS_GROUNDER_AGENT_ID: True,
+    SAST_SCANNER_AGENT_ID: True,
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: False,
+    LOAD_TESTER_AGENT_ID: False,
+    CI_FAILURE_REPRODUCER_AGENT_ID: False,
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
@@ -117,6 +133,11 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     BROKEN_LINK_CRAWLER_AGENT_ID: ["httpx", "beautifulsoup4"],
     PDF_DOCUMENT_PARSER_AGENT_ID: ["pymupdf", "pdfplumber"],
     WEB_SEARCH_AGENT_ID: ["BRAVE_SEARCH_API_KEY"],
+    DOCS_GROUNDER_AGENT_ID: ["httpx", "llm provider optional for synthesis"],
+    SAST_SCANNER_AGENT_ID: ["semgrep (optional)", "bandit (optional for Python)"],
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: ["requests"],
+    LOAD_TESTER_AGENT_ID: ["requests"],
+    CI_FAILURE_REPRODUCER_AGENT_ID: ["python3", "node optional"],
 }
 
 _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
@@ -146,6 +167,11 @@ _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
     BROKEN_LINK_CRAWLER_AGENT_ID: "live_network_checks",
     PDF_DOCUMENT_PARSER_AGENT_ID: "live_fetch_plus_parse",
     WEB_SEARCH_AGENT_ID: "live_api",
+    DOCS_GROUNDER_AGENT_ID: "live_fetch_plus_llm",
+    SAST_SCANNER_AGENT_ID: "tool_execution",
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: "live_network_checks",
+    LOAD_TESTER_AGENT_ID: "live_network_checks",
+    CI_FAILURE_REPRODUCER_AGENT_ID: "sandbox_execution",
 }
 
 _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
@@ -175,6 +201,11 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     BROKEN_LINK_CRAWLER_AGENT_ID: "beta",
     PDF_DOCUMENT_PARSER_AGENT_ID: "beta",
     WEB_SEARCH_AGENT_ID: "beta",
+    DOCS_GROUNDER_AGENT_ID: "beta",
+    SAST_SCANNER_AGENT_ID: "beta",
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: "beta",
+    LOAD_TESTER_AGENT_ID: "beta",
+    CI_FAILURE_REPRODUCER_AGENT_ID: "beta",
 }
 
 _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
@@ -204,6 +235,11 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
     BROKEN_LINK_CRAWLER_AGENT_ID: True,
     PDF_DOCUMENT_PARSER_AGENT_ID: False,
     WEB_SEARCH_AGENT_ID: True,
+    DOCS_GROUNDER_AGENT_ID: True,
+    SAST_SCANNER_AGENT_ID: True,
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: True,
+    LOAD_TESTER_AGENT_ID: True,
+    CI_FAILURE_REPRODUCER_AGENT_ID: True,
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
@@ -267,6 +303,31 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
         "search the live web",
         "find recent news",
         "compare top results",
+    ],
+    DOCS_GROUNDER_AGENT_ID: [
+        "look up current Stripe API",
+        "find Next.js migration notes",
+        "get exact function signatures",
+    ],
+    SAST_SCANNER_AGENT_ID: [
+        "scan for SQL injection",
+        "find hardcoded secrets",
+        "run semgrep on a PR diff",
+    ],
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: [
+        "test webhook signature verification",
+        "debug Stripe idempotency",
+        "replay a checkout.session.completed event",
+    ],
+    LOAD_TESTER_AGENT_ID: [
+        "measure p99 latency",
+        "load-test an API endpoint",
+        "stress-test before launch",
+    ],
+    CI_FAILURE_REPRODUCER_AGENT_ID: [
+        "reproduce a flaky test",
+        "diagnose a failing CI step",
+        "isolate a dependency error",
     ],
 }
 
@@ -339,6 +400,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
     specs.extend(load_builtin_specs_part4())
     specs.extend(load_builtin_specs_part5())
     specs.extend(load_builtin_specs_part6())
+    specs.extend(load_builtin_specs_part7())
     normalized = [_normalize_builtin_spec(spec) for spec in specs]
     seen_ids: set[str] = set()
     seen_endpoints: set[str] = set()

@@ -1,0 +1,505 @@
+"""Seventh chunk of built-in agent specs — YC launch agents added 2026-05-09.
+
+Registers five high-impact specialists: docs_grounder, sast_scanner,
+stripe_webhook_debugger, load_tester, and ci_failure_reproducer.
+"""
+
+from __future__ import annotations
+
+from server.builtin_agents.constants import (
+    BUILTIN_INTERNAL_ENDPOINTS,
+    CI_FAILURE_REPRODUCER_AGENT_ID,
+    DOCS_GROUNDER_AGENT_ID,
+    LOAD_TESTER_AGENT_ID,
+    SAST_SCANNER_AGENT_ID,
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
+)
+
+
+def load_builtin_specs_part7() -> list[dict]:
+    return [
+        # ------------------------------------------------------------------ #
+        # Docs Grounder — live documentation fetcher                          #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": DOCS_GROUNDER_AGENT_ID,
+            "name": "Docs Grounder",
+            "slug": "docs-grounder",
+            "description": (
+                "Fetches current official documentation for any library or framework and "
+                "returns API signatures, code examples, migration notes, and gotchas — "
+                "with citations. Eliminates hallucinated APIs from stale training data."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[DOCS_GROUNDER_AGENT_ID],
+            "price_per_call_usd": 0.02,
+            "tags": ["documentation", "research", "developer-tools", "live-data"],
+            "is_featured": True,
+            "cacheable": True,
+            "category": "Research",
+            "runtime_requirements": ["web_search agent", "httpx"],
+            "tooling_kind": "live_fetch_plus_llm",
+            "stability_tier": "beta",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "look up current Stripe API",
+                "find Next.js 14 migration notes",
+                "get Prisma schema syntax",
+            ],
+            "match_keywords": [
+                "documentation", "docs", "api reference", "changelog",
+                "migration guide", "upgrade guide", "how to use",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "library": {
+                        "type": "string",
+                        "description": "Library or framework name, e.g. 'stripe', 'nextjs', 'react', 'prisma'",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "Specific question or topic, e.g. 'how do webhook signatures work'",
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Version to target, e.g. 'latest', '13.4', 'v4'",
+                        "default": "latest",
+                    },
+                },
+                "required": ["library"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "library": {"type": "string"},
+                    "version_found": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "code_example": {"type": "string"},
+                    "api_signatures": {"type": "array", "items": {"type": "string"}},
+                    "gotchas": {"type": "array", "items": {"type": "string"}},
+                    "sources": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string"},
+                                "title": {"type": "string"},
+                                "excerpt": {"type": "string"},
+                            },
+                        },
+                    },
+                    "as_of_date": {"type": "string"},
+                    "query_used": {"type": "string"},
+                },
+                "required": ["library", "summary", "sources"],
+            },
+            "output_examples": [
+                {
+                    "input": {"library": "stripe", "question": "how do webhook signatures work"},
+                    "output": {
+                        "library": "stripe",
+                        "version_found": "latest",
+                        "summary": "Stripe signs webhook events with HMAC-SHA256. You must verify the signature before parsing the JSON body — parsing first is a common security bug.",
+                        "code_example": "import stripe\nevent = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)",
+                        "api_signatures": ["stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)"],
+                        "gotchas": ["Parse raw body before JSON decode", "Use raw bytes not string for signature"],
+                        "sources": [{"url": "https://stripe.com/docs/webhooks/signatures", "title": "Webhook signatures", "excerpt": "..."}],
+                        "as_of_date": "2026-05-09",
+                        "query_used": "stripe webhook signature verification documentation",
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # SAST Scanner — static application security testing                  #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": SAST_SCANNER_AGENT_ID,
+            "name": "SAST Scanner",
+            "slug": "sast-scanner",
+            "description": (
+                "Runs semgrep and bandit on submitted code files and returns structured "
+                "security findings with severity, CWE, rule ID, and fix hints. "
+                "Claude can suggest security issues; this agent finds them by running real tools."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[SAST_SCANNER_AGENT_ID],
+            "price_per_call_usd": 0.04,
+            "tags": ["security", "sast", "static-analysis", "code-review"],
+            "is_featured": True,
+            "cacheable": True,
+            "category": "Security",
+            "runtime_requirements": ["semgrep (optional)", "bandit (optional, Python only)"],
+            "tooling_kind": "tool_execution",
+            "stability_tier": "beta",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "scan Python for injection flaws",
+                "find SQL injection in JS",
+                "pre-commit security check",
+            ],
+            "match_keywords": [
+                "security scan", "sast", "static analysis", "semgrep", "bandit",
+                "injection", "xss", "vulnerability", "security audit",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["name", "content"],
+                        },
+                        "description": "Code files to scan (max 20 files, 100 KB total)",
+                    },
+                    "language": {
+                        "type": "string",
+                        "enum": ["auto", "python", "javascript", "typescript", "go", "java"],
+                        "default": "auto",
+                    },
+                },
+                "required": ["files"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "findings": {"type": "array", "items": {"type": "object"}},
+                    "total_findings": {"type": "integer"},
+                    "by_severity": {"type": "object"},
+                    "files_scanned": {"type": "integer"},
+                    "languages_detected": {"type": "array", "items": {"type": "string"}},
+                    "tools_used": {"type": "array", "items": {"type": "string"}},
+                    "scan_time_ms": {"type": "integer"},
+                },
+                "required": ["findings", "total_findings", "by_severity"],
+            },
+            "output_examples": [
+                {
+                    "input": {
+                        "files": [{"name": "app.py", "content": "import subprocess\nsubprocess.run(user_input, shell=True)"}],
+                        "language": "python",
+                    },
+                    "output": {
+                        "findings": [
+                            {
+                                "file": "app.py",
+                                "line": 2,
+                                "column": 0,
+                                "severity": "high",
+                                "rule_id": "python.lang.security.audit.subprocess-shell-true",
+                                "cwe": "CWE-78",
+                                "message": "subprocess call with shell=True is a security risk",
+                                "code_snippet": "subprocess.run(user_input, shell=True)",
+                                "fix_hint": "Pass arguments as a list and set shell=False",
+                                "tool": "semgrep",
+                            }
+                        ],
+                        "total_findings": 1,
+                        "by_severity": {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0},
+                        "files_scanned": 1,
+                        "languages_detected": ["python"],
+                        "tools_used": ["semgrep", "bandit"],
+                        "scan_time_ms": 1200,
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # Stripe Webhook Debugger                                              #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
+            "name": "Stripe Webhook Debugger",
+            "slug": "stripe-webhook-debugger",
+            "description": (
+                "Sends real Stripe-signed test webhook events to your endpoint and verifies "
+                "correct behavior: signature verification, idempotency, status codes, and common "
+                "bugs. No Stripe API key needed — constructs signed events locally."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[STRIPE_WEBHOOK_DEBUGGER_AGENT_ID],
+            "price_per_call_usd": 0.03,
+            "tags": ["stripe", "payments", "webhooks", "testing", "developer-tools"],
+            "is_featured": True,
+            "cacheable": False,
+            "category": "Developer Tools",
+            "runtime_requirements": ["requests", "hmac (stdlib)"],
+            "tooling_kind": "live_network_checks",
+            "stability_tier": "beta",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "debug Stripe webhook handler",
+                "test checkout.session.completed",
+                "verify signature validation",
+            ],
+            "match_keywords": [
+                "stripe", "webhook", "payment", "checkout", "subscription",
+                "invoice", "billing", "stripe event",
+            ],
+            "examples_sensitive": False,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "endpoint_url": {
+                        "type": "string",
+                        "description": "Your webhook handler URL, e.g. http://localhost:3000/webhooks/stripe",
+                    },
+                    "webhook_secret": {
+                        "type": "string",
+                        "description": "Stripe webhook signing secret (whsec_...)",
+                    },
+                    "event_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Event types to test. Defaults to common checkout/subscription events.",
+                        "default": ["checkout.session.completed", "customer.subscription.updated", "invoice.payment_failed"],
+                    },
+                    "timeout_seconds": {"type": "integer", "default": 10, "maximum": 30},
+                },
+                "required": ["endpoint_url", "webhook_secret"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "endpoint_url": {"type": "string"},
+                    "tests_run": {"type": "integer"},
+                    "passed": {"type": "integer"},
+                    "failed": {"type": "integer"},
+                    "results": {"type": "array", "items": {"type": "object"}},
+                    "common_issues_detected": {"type": "array", "items": {"type": "string"}},
+                    "summary": {"type": "string"},
+                },
+                "required": ["tests_run", "passed", "failed", "results"],
+            },
+            "output_examples": [
+                {
+                    "input": {
+                        "endpoint_url": "http://localhost:3000/webhooks/stripe",
+                        "webhook_secret": "whsec_test_abc123",
+                        "event_types": ["checkout.session.completed"],
+                    },
+                    "output": {
+                        "endpoint_url": "http://localhost:3000/webhooks/stripe",
+                        "tests_run": 3,
+                        "passed": 2,
+                        "failed": 1,
+                        "results": [
+                            {
+                                "test_name": "checkout.session.completed — valid signature",
+                                "event_type": "checkout.session.completed",
+                                "status": "pass",
+                                "http_status": 200,
+                                "response_time_ms": 45,
+                                "failure_reason": "",
+                                "diagnosis": "",
+                            },
+                            {
+                                "test_name": "checkout.session.completed — invalid signature",
+                                "event_type": "checkout.session.completed",
+                                "status": "fail",
+                                "http_status": 200,
+                                "response_time_ms": 40,
+                                "failure_reason": "Handler returned 200 for an invalid signature",
+                                "diagnosis": "Your handler is not verifying the Stripe-Signature header. Anyone can send fake events.",
+                            },
+                        ],
+                        "common_issues_detected": ["Signature not verified — handler accepts forged events"],
+                        "summary": "2/3 tests passed. Critical: handler does not verify webhook signatures.",
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # Load Tester                                                          #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": LOAD_TESTER_AGENT_ID,
+            "name": "Load Tester",
+            "slug": "load-tester",
+            "description": (
+                "Runs a real HTTP load test against a URL and returns p50/p75/p95/p99 latency, "
+                "error rates, throughput, and a latency histogram. Impossible to do accurately "
+                "in a chat session."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[LOAD_TESTER_AGENT_ID],
+            "price_per_call_usd": 0.03,
+            "tags": ["performance", "load-testing", "latency", "developer-tools"],
+            "is_featured": True,
+            "cacheable": False,
+            "category": "Quality",
+            "runtime_requirements": ["requests", "threading (stdlib)"],
+            "tooling_kind": "live_network_checks",
+            "stability_tier": "beta",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "measure API latency under load",
+                "find p95 before launch",
+                "detect performance regression",
+            ],
+            "match_keywords": [
+                "load test", "load testing", "performance test", "latency", "throughput",
+                "p95", "p99", "stress test", "benchmark endpoint",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Target URL to load test"},
+                    "rps": {"type": "integer", "description": "Target requests per second (max 50)", "default": 5},
+                    "duration_seconds": {"type": "integer", "description": "Test duration in seconds (max 30)", "default": 10},
+                    "concurrency": {"type": "integer", "description": "Concurrent workers (max 20)", "default": 5},
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET"},
+                    "headers": {"type": "object", "description": "Additional HTTP headers"},
+                    "body": {"type": "string", "description": "Request body for POST/PUT"},
+                    "expected_status": {"type": "integer", "default": 200},
+                },
+                "required": ["url"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "total_requests": {"type": "integer"},
+                    "success_count": {"type": "integer"},
+                    "error_count": {"type": "integer"},
+                    "error_rate": {"type": "number"},
+                    "throughput_rps": {"type": "number"},
+                    "latency_ms": {
+                        "type": "object",
+                        "properties": {
+                            "p50": {"type": "number"},
+                            "p75": {"type": "number"},
+                            "p95": {"type": "number"},
+                            "p99": {"type": "number"},
+                            "mean": {"type": "number"},
+                            "min": {"type": "number"},
+                            "max": {"type": "number"},
+                        },
+                    },
+                    "status_codes": {"type": "object"},
+                    "histogram": {"type": "array"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["total_requests", "success_count", "error_count", "latency_ms"],
+            },
+            "output_examples": [
+                {
+                    "input": {"url": "https://api.example.com/health", "rps": 10, "duration_seconds": 10},
+                    "output": {
+                        "url": "https://api.example.com/health",
+                        "total_requests": 98,
+                        "success_count": 98,
+                        "error_count": 0,
+                        "error_rate": 0.0,
+                        "duration_actual_ms": 10050,
+                        "throughput_rps": 9.75,
+                        "latency_ms": {"p50": 28.4, "p75": 35.1, "p95": 62.3, "p99": 88.7, "mean": 31.2, "min": 18.1, "max": 95.4, "std_dev": 12.1},
+                        "status_codes": {"200": 98},
+                        "errors": [],
+                        "histogram": [{"bucket_ms": 50, "count": 82}, {"bucket_ms": 100, "count": 16}],
+                        "summary": "p50=28ms p95=62ms p99=89ms — 9.75 rps, 0% errors on 98 requests",
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # CI Failure Reproducer                                                #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": CI_FAILURE_REPRODUCER_AGENT_ID,
+            "name": "CI Failure Reproducer",
+            "slug": "ci-failure-reproducer",
+            "description": (
+                "Reproduces CI failures by actually running the extracted or provided commands "
+                "in a clean sandbox. Identifies failure type (code, dependency, env, config, flaky), "
+                "returns diagnosis and suggested fix. Claude patches CI from log text; this runs the command."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[CI_FAILURE_REPRODUCER_AGENT_ID],
+            "price_per_call_usd": 0.05,
+            "tags": ["ci", "debugging", "testing", "developer-tools"],
+            "is_featured": True,
+            "cacheable": False,
+            "category": "Developer Tools",
+            "runtime_requirements": ["python3", "subprocess (stdlib)"],
+            "tooling_kind": "sandbox_execution",
+            "stability_tier": "beta",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "reproduce pytest failure",
+                "debug failing npm test",
+                "identify flaky test",
+            ],
+            "match_keywords": [
+                "ci failure", "ci error", "failing test", "pytest failure",
+                "npm test failed", "github actions", "circleci", "reproduce failure",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "log": {
+                        "type": "string",
+                        "description": "CI failure log output (stdout + stderr from CI run)",
+                    },
+                    "commands": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Commands to run (extracted from log if not provided)",
+                    },
+                    "language": {
+                        "type": "string",
+                        "enum": ["python", "node", "go", "auto"],
+                        "default": "auto",
+                    },
+                    "working_dir_files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                        },
+                        "description": "Files needed to reproduce (requirements.txt, package.json, test files)",
+                    },
+                    "timeout_seconds": {"type": "integer", "default": 30, "maximum": 120},
+                },
+                "required": ["log"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "failure_type": {"type": "string", "enum": ["code_error", "dependency_error", "env_error", "config_error", "flaky_test", "timeout", "unknown"]},
+                    "failing_command": {"type": "string"},
+                    "exit_code": {"type": "integer"},
+                    "stdout": {"type": "string"},
+                    "stderr": {"type": "string"},
+                    "diagnosis": {"type": "string"},
+                    "suggested_fix": {"type": "string"},
+                    "reproduction_command": {"type": "string"},
+                    "commands_tried": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["failure_type", "failing_command", "commands_tried"],
+            },
+            "output_examples": [
+                {
+                    "input": {
+                        "log": "FAILED tests/test_api.py::test_auth - ModuleNotFoundError: No module named 'jwt'\nERROR: tests/test_api.py",
+                        "working_dir_files": [{"name": "requirements.txt", "content": "fastapi\npydantic"}],
+                    },
+                    "output": {
+                        "failure_type": "dependency_error",
+                        "failing_command": "pytest tests/test_api.py",
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": "ModuleNotFoundError: No module named 'jwt'",
+                        "diagnosis": "The test imports 'jwt' but it's not in requirements.txt. Add 'PyJWT' to fix.",
+                        "suggested_fix": "pip install PyJWT and add it to requirements.txt",
+                        "reproduction_command": "pip install -r requirements.txt && pytest tests/test_api.py",
+                        "commands_tried": [{"command": "pytest tests/test_api.py", "exit_code": 1, "duration_ms": 820}],
+                    },
+                }
+            ],
+        },
+    ]

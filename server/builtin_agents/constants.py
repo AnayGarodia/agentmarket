@@ -46,6 +46,11 @@ SECURITY_HEADERS_GRADER_AGENT_ID = "33171c82-b9a0-5cef-b867-c7da3889cff1"
 BROKEN_LINK_CRAWLER_AGENT_ID = "79199276-9dc3-593d-9d85-26241365f292"
 PDF_DOCUMENT_PARSER_AGENT_ID = "c569490b-c886-5c94-b22b-192027d8c485"
 WEB_SEARCH_AGENT_ID = "7d5f4e06-60b5-5950-a885-eaef04cf0b33"
+DOCS_GROUNDER_AGENT_ID = "7a93b924-e981-5d38-8e63-e117ba691aac"
+SAST_SCANNER_AGENT_ID = "91d229dc-1f37-5044-aaa2-f157e9425159"
+STRIPE_WEBHOOK_DEBUGGER_AGENT_ID = "0dd11350-0307-5900-ac19-71105117a9c9"
+LOAD_TESTER_AGENT_ID = "38143c50-4484-595c-827f-629d3c877f7e"
+CI_FAILURE_REPRODUCER_AGENT_ID = "fec9fdac-4685-579f-b26f-82119124c73e"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: "internal://financial",
@@ -76,6 +81,11 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     BROKEN_LINK_CRAWLER_AGENT_ID: "internal://broken_link_crawler",
     PDF_DOCUMENT_PARSER_AGENT_ID: "internal://pdf_document_parser",
     WEB_SEARCH_AGENT_ID: "internal://web_search",
+    DOCS_GROUNDER_AGENT_ID: "internal://docs_grounder",
+    SAST_SCANNER_AGENT_ID: "internal://sast_scanner",
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: "internal://stripe_webhook_debugger",
+    LOAD_TESTER_AGENT_ID: "internal://load_tester",
+    CI_FAILURE_REPRODUCER_AGENT_ID: "internal://ci_failure_reproducer",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -148,6 +158,11 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         BROKEN_LINK_CRAWLER_AGENT_ID,
         PDF_DOCUMENT_PARSER_AGENT_ID,
         WEB_SEARCH_AGENT_ID,
+        DOCS_GROUNDER_AGENT_ID,
+        SAST_SCANNER_AGENT_ID,
+        STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
+        LOAD_TESTER_AGENT_ID,
+        CI_FAILURE_REPRODUCER_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.
