@@ -59,6 +59,20 @@ def flag_float(name: str, *, default: float) -> float:
         return default
 
 
+def flag_int(name: str, *, default: int) -> int:
+    """Return an env-driven integer flag, defaulted on missing/invalid values.
+
+    Used for hard caps (rate limits, max iterations) tunable without redeploy.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Named flags (add new ones here; keep alphabetical)
 # ---------------------------------------------------------------------------
@@ -224,6 +238,32 @@ def hosted_api_url() -> str:
 def hosted_api_key() -> str:
     """Bearer token for the hosted API. Empty string when not configured."""
     return os.environ.get("AZTEA_HOSTED_API_KEY", "").strip()
+
+
+# ---------------------------------------------------------------------------
+# Vibe-an-agent (self-serve agent generation from natural-language description)
+# Read at call time so a deploy can flip without restart. Defaults are OFF
+# in OSS — generation is opt-in and rate-limited per owner.
+# ---------------------------------------------------------------------------
+
+
+def agent_generation_enabled() -> bool:
+    """Master switch for POST /agents/generate. Default OFF in OSS."""
+    return flag("AZTEA_AGENT_GENERATION_ENABLED", default=False)
+
+
+def agent_generation_clone_threshold() -> float:
+    """Cosine similarity (0.0–1.0) above which a generated agent is rejected
+    as a near-clone of an existing approved/probation listing. Default 0.92.
+    """
+    return flag_float("AZTEA_AGENT_GENERATION_CLONE_THRESHOLD", default=0.92)
+
+
+def agent_generation_max_per_day() -> int:
+    """Per-owner cap on generation attempts in a UTC day. Default 20.
+    Platform-wide cap is 10x this, enforced at handler level.
+    """
+    return flag_int("AZTEA_AGENT_GENERATION_MAX_PER_DAY", default=20)
 
 
 def stripe_enabled() -> bool:
