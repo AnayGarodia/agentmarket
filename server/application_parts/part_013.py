@@ -401,6 +401,144 @@ def connect_status(
     )
 
 
+def _withdraw_check_balance(
+    *,
+    amount_cents: int,
+    wallet: dict,
+    account_id: str,
+) -> None:
+    """Guard amount range, account linkage, and wallet balance. Raises HTTPException."""
+    if amount_cents < 100:
+        raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
+    if amount_cents > 1_000_000:
+        raise HTTPException(status_code=400, detail="Maximum withdrawal is $10,000.00.")
+    if not account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No bank account connected. Use POST /wallets/connect/onboard first.",
+        )
+    if not wallet.get("stripe_connect_enabled"):
+        raise HTTPException(
+            status_code=400,
+            detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
+        )
+    if wallet["balance_cents"] < amount_cents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient balance: have {wallet['balance_cents']}¢, need {amount_cents}¢.",
+        )
+
+
+def _withdraw_build_idempotency_key(
+    *,
+    owner_id: str,
+    wallet_id: str,
+    amount_cents: int,
+    request_header_key: str,
+) -> str:
+    """Build a deterministic Stripe idempotency key for this withdrawal attempt."""
+    basis = request_header_key or str(uuid.uuid4())
+    digest = hashlib.sha256(
+        f"{owner_id}:{wallet_id}:{amount_cents}:{basis}".encode("utf-8")
+    ).hexdigest()
+    return f"aztea-withdraw-{digest}"
+
+
+def _withdraw_charge_and_transfer(
+    *,
+    wallet_id: str,
+    amount_cents: int,
+    account_id: str,
+    stripe_idempotency_key: str,
+) -> str:
+    """Debit wallet then issue Stripe transfer. Refunds on Stripe failure.
+
+    charge→reserve→external-call→settle ordering preserved:
+      1. Debit wallet (raises InsufficientBalanceError if balance changed).
+      2. Issue Stripe Transfer.
+      3. On Stripe failure, refund the debit and re-raise as HTTPException.
+
+    Returns transfer_id on success.
+    """
+    # 1. Reserve: debit wallet first.
+    try:
+        payments.charge(
+            wallet_id,
+            amount_cents,
+            memo=f"Withdrawal to Stripe Connect [{account_id[:12]}]",
+        )
+    except payments.InsufficientBalanceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # 2. External call: Stripe Transfer.
+    try:
+        transfer = _stripe_lib.Transfer.create(
+            amount=amount_cents,
+            currency="usd",
+            destination=account_id,
+            idempotency_key=stripe_idempotency_key,
+        )
+    except Exception as exc:
+        # 3. Settle: refund on external failure.
+        try:
+            payments.deposit(
+                wallet_id,
+                amount_cents,
+                memo=f"Withdrawal refund (Stripe error): {exc}",
+            )
+        except Exception:
+            _LOG.exception("Critical: failed to refund withdrawal for wallet %s", wallet_id)
+        status_code, payload = _stripe_http_error("withdraw_transfer", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
+
+    transfer_id = _stripe_obj_id(transfer)
+    if not transfer_id:
+        raise HTTPException(
+            status_code=502,
+            detail="Stripe transfer response did not include an ID.",
+        )
+    return transfer_id
+
+
+def _withdraw_record_and_notify(
+    *,
+    wallet_id: str,
+    amount_cents: int,
+    account_id: str,
+    transfer_id: str,
+    owner_id: str,
+) -> None:
+    """Insert audit row and send notification email. Non-critical — logs on failure."""
+    with get_db_connection() as _tr_conn:
+        _tr_conn.execute(
+            "INSERT INTO stripe_connect_transfers"
+            " (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                str(uuid.uuid4()),
+                wallet_id,
+                amount_cents,
+                transfer_id,
+                f"Withdrawal to {account_id[:12]}",
+                _utc_now_iso(),
+            ),
+        )
+        _tr_conn.commit()
+    _LOG.info(
+        "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
+        amount_cents,
+        wallet_id,
+        account_id,
+        transfer_id,
+    )
+    try:
+        _withdraw_email = _get_owner_email(owner_id)
+        if _withdraw_email:
+            _email.send_withdrawal_processed(_withdraw_email, amount_cents)
+    except Exception:
+        _LOG.warning("Failed to send withdrawal email for owner %s", owner_id)
+
+
 @app.post(
     "/wallets/withdraw",
     tags=["wallet"],
@@ -418,122 +556,40 @@ def withdraw(
     _require_scope(caller, "caller")
 
     def _operation() -> tuple[dict[str, Any], int]:
-        if body.amount_cents < 100:
-            raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
-        if body.amount_cents > 1_000_000:
-            raise HTTPException(
-                status_code=400, detail="Maximum withdrawal is $10,000.00."
-            )
-
         wallet = payments.get_wallet_by_owner(caller["owner_id"])
         if wallet is None:
             raise HTTPException(status_code=404, detail="Wallet not found.")
 
         account_id = str(wallet.get("stripe_connect_account_id") or "").strip()
-        if not account_id:
-            raise HTTPException(
-                status_code=400,
-                detail="No bank account connected. Use POST /wallets/connect/onboard first.",
-            )
-
-        if not wallet.get("stripe_connect_enabled"):
-            raise HTTPException(
-                status_code=400,
-                detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
-            )
-
-        if wallet["balance_cents"] < body.amount_cents:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient balance: have {wallet['balance_cents']}¢, need {body.amount_cents}¢.",
-            )
+        _withdraw_check_balance(
+            amount_cents=body.amount_cents,
+            wallet=wallet,
+            account_id=account_id,
+        )
 
         _stripe_lib.api_key = _STRIPE_SECRET_KEY
-        request_idempotency_key = (
-            request.headers.get(_IDEMPOTENCY_KEY_HEADER, "") or ""
-        ).strip()
-        stripe_idempotency_basis = request_idempotency_key or str(uuid.uuid4())
-        stripe_idempotency_key = (
-            "aztea-withdraw-"
-            + hashlib.sha256(
-                f"{caller['owner_id']}:{wallet['wallet_id']}:{body.amount_cents}:{stripe_idempotency_basis}".encode(
-                    "utf-8"
-                )
-            ).hexdigest()
+        stripe_idempotency_key = _withdraw_build_idempotency_key(
+            owner_id=caller["owner_id"],
+            wallet_id=wallet["wallet_id"],
+            amount_cents=body.amount_cents,
+            request_header_key=(
+                request.headers.get(_IDEMPOTENCY_KEY_HEADER, "") or ""
+            ).strip(),
         )
 
-        # Debit wallet first (raises InsufficientBalanceError if something changed).
-        try:
-            payments.charge(
-                wallet["wallet_id"],
-                body.amount_cents,
-                memo=f"Withdrawal to Stripe Connect [{account_id[:12]}]",
-            )
-        except payments.InsufficientBalanceError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        try:
-            transfer = _stripe_lib.Transfer.create(
-                amount=body.amount_cents,
-                currency="usd",
-                destination=account_id,
-                idempotency_key=stripe_idempotency_key,
-            )
-        except Exception as exc:
-            # Refund the wallet charge on Stripe failure.
-            try:
-                payments.deposit(
-                    wallet["wallet_id"],
-                    body.amount_cents,
-                    memo=f"Withdrawal refund (Stripe error): {exc}",
-                )
-            except Exception:
-                _LOG.exception(
-                    "Critical: failed to refund withdrawal for wallet %s",
-                    wallet["wallet_id"],
-                )
-            status_code, payload = _stripe_http_error("withdraw_transfer", exc)
-            raise HTTPException(status_code=status_code, detail=payload)
-
-        transfer_id = _stripe_obj_id(transfer)
-        if not transfer_id:
-            raise HTTPException(
-                status_code=502,
-                detail="Stripe transfer response did not include an ID.",
-            )
-
-        # Record the transfer for audit.
-        with get_db_connection() as _tr_conn:
-            _tr_conn.execute(
-                "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
-                " VALUES (%s, %s, %s, %s, %s, %s)",
-                (
-                    str(uuid.uuid4()),
-                    wallet["wallet_id"],
-                    body.amount_cents,
-                    transfer_id,
-                    f"Withdrawal to {account_id[:12]}",
-                    _utc_now_iso(),
-                ),
-            )
-            _tr_conn.commit()
-
-        _LOG.info(
-            "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
-            body.amount_cents,
-            wallet["wallet_id"],
-            account_id,
-            transfer_id,
+        transfer_id = _withdraw_charge_and_transfer(
+            wallet_id=wallet["wallet_id"],
+            amount_cents=body.amount_cents,
+            account_id=account_id,
+            stripe_idempotency_key=stripe_idempotency_key,
         )
-        try:
-            _withdraw_email = _get_owner_email(caller.get("owner_id", ""))
-            if _withdraw_email:
-                _email.send_withdrawal_processed(_withdraw_email, body.amount_cents)
-        except Exception:
-            _LOG.warning(
-                "Failed to send withdrawal email for owner %s",
-                caller.get("owner_id", ""),
-            )
+        _withdraw_record_and_notify(
+            wallet_id=wallet["wallet_id"],
+            amount_cents=body.amount_cents,
+            account_id=account_id,
+            transfer_id=transfer_id,
+            owner_id=caller.get("owner_id", ""),
+        )
         return {
             "status": "ok",
             "transfer_id": transfer_id,
