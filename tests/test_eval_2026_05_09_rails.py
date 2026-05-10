@@ -257,8 +257,18 @@ def test_secret_scanner_judge_accepts_info_severity():
     # init line includes "info". Using a focused window to avoid
     # matching the unrelated codereview branch which also has its
     # own severity_counts dict above.
-    marker = 'if agent_id == _SECRET_SCANNER_AGENT_ID:'
-    start = src.find(marker)
+    # After the part_005 dispatch refactor (PR #25), the judge body lives in
+    # _dq_check_secret_scanner. Earlier branch was inline under
+    # `if agent_id == _SECRET_SCANNER_AGENT_ID`; keep the test stable across
+    # both forms.
+    marker = next(
+        (m for m in (
+            "def _dq_check_secret_scanner",
+            "if agent_id == _SECRET_SCANNER_AGENT_ID:",
+        ) if m in src),
+        "",
+    )
+    start = src.find(marker) if marker else -1
     assert start != -1, "secret_scanner judge branch not found in part_005.py"
     window = src[start:start + 4000]
     assert (
