@@ -324,6 +324,47 @@ def _compare_response(compare_row: dict, caller: core_models.CallerContext) -> d
     }
 
 
+def _compare_parse_input_payload(body: dict) -> dict:
+    """Extract and merge input_payload from compare request body (supports aliases task/input)."""
+    input_payload: dict[str, Any] | None = None
+    for candidate_field in ("input_payload", "task", "input"):
+        candidate = body.get(candidate_field)
+        if candidate is None:
+            continue
+        if not isinstance(candidate, dict):
+            raise HTTPException(status_code=422, detail=f"'{candidate_field}' must be an object.")
+        if input_payload is None:
+            input_payload = candidate
+            continue
+        merged = dict(candidate)
+        merged.update(input_payload)
+        input_payload = merged
+    return input_payload or {}
+
+
+def _compare_refund_all(
+    *,
+    charge_tx_ids: list[tuple[str, str, int, str]],
+    created_jobs: list[dict],
+    error_msg: str,
+) -> None:
+    """Refund all charges and mark created jobs failed. Used in rollback paths."""
+    for wallet_id, charge_tx_id, refund_cents, compare_agent_id in charge_tx_ids:
+        try:
+            payments.post_call_refund(wallet_id, charge_tx_id, refund_cents, compare_agent_id)
+        except Exception as exc:
+            _LOG.exception(
+                "Compare-session refund failed (wallet=%s charge_tx_id=%s agent=%s): %s",
+                wallet_id, charge_tx_id, compare_agent_id, exc,
+            )
+    for created_job in created_jobs:
+        failed = jobs.update_job_status(
+            created_job["job_id"], "failed", error_message=error_msg, completed=True
+        )
+        if failed is not None and not failed.get("settled_at"):
+            jobs.mark_settled(created_job["job_id"])
+
+
 @app.post(
     "/jobs/compare",
     status_code=201,
@@ -343,61 +384,29 @@ def jobs_compare_create(
     raw_agent_ids = body.get("agent_ids")
     if not isinstance(raw_agent_ids, list):
         raise HTTPException(status_code=400, detail="agent_ids must be an array.")
-    agent_ids = [
-        str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()
-    ]
+    agent_ids = [str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()]
     if len(agent_ids) < 2 or len(agent_ids) > 3:
-        raise HTTPException(
-            status_code=400, detail="agent_ids must contain 2 or 3 agent IDs."
-        )
+        raise HTTPException(status_code=400, detail="agent_ids must contain 2 or 3 agent IDs.")
     if len(set(agent_ids)) != len(agent_ids):
         raise HTTPException(status_code=400, detail="agent_ids must be unique.")
-    # Accept the canonical field name and the two natural aliases. Resolve to the first
-    # dict-typed value present so a caller passing `task` (the SDK/CLI shorthand) is not
-    # silently dropped — historical bug: child jobs received an empty payload and failed.
-    input_payload: dict[str, Any] | None = None
-    for candidate_field in ("input_payload", "task", "input"):
-        candidate = body.get(candidate_field)
-        if candidate is None:
-            continue
-        if not isinstance(candidate, dict):
-            raise HTTPException(
-                status_code=422,
-                detail=f"'{candidate_field}' must be an object.",
-            )
-        if input_payload is None:
-            input_payload = candidate
-            continue
-        # Merge subsequent aliases on top so the most specific (input_payload) wins,
-        # but a caller who sent only `task` still gets full propagation.
-        merged = dict(candidate)
-        merged.update(input_payload)
-        input_payload = merged
-    if input_payload is None:
-        input_payload = {}
+    input_payload = _compare_parse_input_payload(body)
     max_attempts = max(1, min(int(body.get("max_attempts") or 3), 10))
     private_task = bool(body.get("private_task"))
     caller_owner_id = _caller_owner_id(request)
     client_id = _request_client_id(request, body.get("client_id"))
     key_per_job_cap_cents = _caller_key_per_job_cap(caller)
-    merged_input_payload = _merge_protocol_input_envelope(
-        input_payload,
-        private_task=private_task,
-    )
+    merged_input_payload = _merge_protocol_input_envelope(input_payload, private_task=private_task)
 
+    # --- Validate all agents and compute totals before charging anything ---
     resolved: list[dict[str, Any]] = []
     total_charged_cents = 0
     for index, agent_id in enumerate(agent_ids):
         agent = registry.get_agent(agent_id, include_unapproved=True)
         if agent is None or not _caller_can_access_agent(caller, agent):
-            raise HTTPException(
-                status_code=404, detail=f"Agent '{agent_id}' not found."
-            )
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
         _assert_agent_callable(agent_id, agent)
         pricing_estimate = _estimate_variable_charge(
-            agent=agent,
-            payload=merged_input_payload,
-            per_job_cap_cents=key_per_job_cap_cents,
+            agent=agent, payload=merged_input_payload, per_job_cap_cents=key_per_job_cap_cents
         )
         if pricing_estimate.get("cap_violated"):
             violation = pricing_estimate["cap_violated"]
@@ -406,46 +415,30 @@ def jobs_compare_create(
                 detail=error_codes.make_error(
                     error_codes.SPEND_LIMIT_EXCEEDED,
                     "Variable-price estimate exceeds your API key's per-job cap.",
-                    {
-                        "scope": "api_key_per_job",
-                        "limit_cents": violation["limit_cents"],
-                        "attempted_cents": violation["price_cents"],
-                        "pricing_model": pricing_estimate["pricing_model"],
-                        "agent_id": agent_id,
-                    },
+                    {"scope": "api_key_per_job", "limit_cents": violation["limit_cents"],
+                     "attempted_cents": violation["price_cents"], "pricing_model": pricing_estimate["pricing_model"],
+                     "agent_id": agent_id},
                 ),
             )
         price_cents = int(pricing_estimate["price_cents"])
         distribution = payments.compute_success_distribution(
-            price_cents,
-            platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
-            fee_bearer_policy="caller",
+            price_cents, platform_fee_pct=int(payments.PLATFORM_FEE_PCT), fee_bearer_policy="caller"
         )
         caller_charge_cents = int(distribution["caller_charge_cents"])
         total_charged_cents += caller_charge_cents
-        resolved.append(
-            {
-                "agent": agent,
-                "index": index,
-                "price_cents": price_cents,
-                "caller_charge_cents": caller_charge_cents,
-            }
-        )
+        resolved.append({"agent": agent, "index": index, "price_cents": price_cents, "caller_charge_cents": caller_charge_cents})
 
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     if int(caller_wallet.get("balance_cents") or 0) < total_charged_cents:
         raise HTTPException(
             status_code=402,
             detail=error_codes.make_error(
-                error_codes.INSUFFICIENT_FUNDS,
-                "Insufficient balance for compare session.",
-                {
-                    "balance_cents": caller_wallet["balance_cents"],
-                    "required_cents": total_charged_cents,
-                },
+                error_codes.INSUFFICIENT_FUNDS, "Insufficient balance for compare session.",
+                {"balance_cents": caller_wallet["balance_cents"], "required_cents": total_charged_cents},
             ),
         )
 
+    # --- Charge and create jobs (atomic-ish: refund all on any failure) ---
     created_jobs: list[dict] = []
     charge_tx_ids: list[tuple[str, str, int, str]] = []
     try:
@@ -456,107 +449,46 @@ def jobs_compare_create(
             agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
             platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
             charge_tx_id = _pre_call_charge_or_402(
-                caller=caller,
-                caller_wallet_id=caller_wallet["wallet_id"],
-                charge_cents=caller_charge_cents,
-                agent_id=agent["agent_id"],
+                caller=caller, caller_wallet_id=caller_wallet["wallet_id"],
+                charge_cents=caller_charge_cents, agent_id=agent["agent_id"],
             )
-            charge_tx_ids.append(
-                (
-                    caller_wallet["wallet_id"],
-                    charge_tx_id,
-                    caller_charge_cents,
-                    agent["agent_id"],
-                )
-            )
+            charge_tx_ids.append((caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]))
             job = jobs.create_job(
-                agent_id=agent["agent_id"],
-                caller_owner_id=caller_owner_id,
-                caller_wallet_id=caller_wallet["wallet_id"],
-                agent_wallet_id=agent_wallet["wallet_id"],
-                platform_wallet_id=platform_wallet["wallet_id"],
-                price_cents=price_cents,
-                caller_charge_cents=caller_charge_cents,
-                platform_fee_pct_at_create=int(payments.PLATFORM_FEE_PCT),
-                fee_bearer_policy="caller",
-                client_id=client_id,
-                charge_tx_id=charge_tx_id,
-                input_payload=merged_input_payload,
-                agent_owner_id=agent.get("owner_id"),
-                max_attempts=max_attempts,
-                dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
-                or _QUALITY_JUDGE_AGENT_ID,
+                agent_id=agent["agent_id"], caller_owner_id=caller_owner_id,
+                caller_wallet_id=caller_wallet["wallet_id"], agent_wallet_id=agent_wallet["wallet_id"],
+                platform_wallet_id=platform_wallet["wallet_id"], price_cents=price_cents,
+                caller_charge_cents=caller_charge_cents, platform_fee_pct_at_create=int(payments.PLATFORM_FEE_PCT),
+                fee_bearer_policy="caller", client_id=client_id, charge_tx_id=charge_tx_id,
+                input_payload=merged_input_payload, agent_owner_id=agent.get("owner_id"),
+                max_attempts=max_attempts, dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
                 output_verification_window_seconds=_COMPARE_SELECTION_WINDOW_SECONDS,
             )
-            _record_job_event(
-                job,
-                "job.created",
-                actor_owner_id=caller["owner_id"],
-                payload={"source": "jobs.compare", "max_attempts": max_attempts},
-            )
+            _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"],
+                              payload={"source": "jobs.compare", "max_attempts": max_attempts})
             created_jobs.append(job)
     except Exception:
-        for wallet_id, charge_tx_id, refund_cents, compare_agent_id in charge_tx_ids:
-            try:
-                payments.post_call_refund(
-                    wallet_id, charge_tx_id, refund_cents, compare_agent_id
-                )
-            except Exception as exc:
-                _LOG.exception(
-                    "Compare-session refund failed after create error (wallet=%s charge_tx_id=%s agent=%s): %s",
-                    wallet_id,
-                    charge_tx_id,
-                    compare_agent_id,
-                    exc,
-                )
-        for created_job in created_jobs:
-            failed = jobs.update_job_status(
-                created_job["job_id"],
-                "failed",
-                error_message="Compare session creation failed before the session could be initialized.",
-                completed=True,
-            )
-            if failed is not None and not failed.get("settled_at"):
-                jobs.mark_settled(created_job["job_id"])
+        _compare_refund_all(
+            charge_tx_ids=charge_tx_ids, created_jobs=created_jobs,
+            error_msg="Compare session creation failed before the session could be initialized.",
+        )
         raise
 
     try:
         compare_row = compare.create_compare(
-            caller_owner_id,
-            agent_ids,
-            merged_input_payload,
+            caller_owner_id, agent_ids, merged_input_payload,
             job_ids=[job["job_id"] for job in created_jobs],
         )
     except Exception:
-        for wallet_id, charge_tx_id, refund_cents, compare_agent_id in charge_tx_ids:
-            try:
-                payments.post_call_refund(
-                    wallet_id, charge_tx_id, refund_cents, compare_agent_id
-                )
-            except Exception as exc:
-                _LOG.exception(
-                    "Compare-session refund failed after compare-row create error (wallet=%s charge_tx_id=%s agent=%s): %s",
-                    wallet_id,
-                    charge_tx_id,
-                    compare_agent_id,
-                    exc,
-                )
-        for created_job in created_jobs:
-            failed = jobs.update_job_status(
-                created_job["job_id"],
-                "failed",
-                error_message="Compare session metadata creation failed.",
-                completed=True,
-            )
-            if failed is not None and not failed.get("settled_at"):
-                jobs.mark_settled(created_job["job_id"])
+        _compare_refund_all(
+            charge_tx_ids=charge_tx_ids, created_jobs=created_jobs,
+            error_msg="Compare session metadata creation failed.",
+        )
         raise
+
     response = _compare_response(compare_row, caller)
     response["total_charged_cents"] = total_charged_cents
-    response["note"] = (
-        "All agent charges are held now. Select a winner later to release payment only for that job."
-    )
+    response["note"] = "All agent charges are held now. Select a winner later to release payment only for that job."
     return JSONResponse(content=response, status_code=201)
 
 
@@ -726,6 +658,145 @@ def jobs_compare_select(
     return JSONResponse(content=response)
 
 
+def _batch_resolve_one_spec(
+    *,
+    index: int,
+    spec: Any,
+    caller: Any,
+    request: Any,
+    request_client_id: str,
+    key_per_job_cap_cents: int | None,
+) -> tuple[dict | None, dict | None]:
+    """Validate and price one batch job spec.
+
+    Returns (resolved_item, invalid_item). Exactly one of them is non-None.
+    """
+    parent_job = _resolve_parent_job_for_creation(
+        caller, spec.parent_job_id, parent_cascade_policy=spec.parent_cascade_policy
+    )
+    parent_tree_depth = _to_non_negative_int((parent_job or {}).get("tree_depth"), default=0)
+    tree_depth = parent_tree_depth + 1 if parent_job is not None else 0
+    if tree_depth >= 10:
+        return None, {
+            "index": index, "agent_id": spec.agent_id, "status_code": 422,
+            "detail": error_codes.make_error(
+                error_codes.ORCHESTRATION_DEPTH_EXCEEDED, "Maximum orchestration depth is 10 levels.",
+                {"max_depth": 10, "attempted_depth": tree_depth},
+            ),
+        }
+    agent = registry.get_agent(spec.agent_id, include_unapproved=True)
+    if agent is None or not _caller_can_access_agent(caller, agent):
+        return None, {"index": index, "agent_id": spec.agent_id, "status_code": 404,
+                      "detail": f"Agent '{spec.agent_id}' not found."}
+    try:
+        _assert_agent_callable(spec.agent_id, agent)
+    except HTTPException as exc:
+        return None, {"index": index, "agent_id": spec.agent_id, "status_code": exc.status_code, "detail": exc.detail}
+    try:
+        normalized_input = _merge_protocol_input_envelope(
+            spec.input_payload,
+            input_artifacts=_normalize_protocol_artifact_list(spec.input_artifacts, field_name="jobs[].input_artifacts"),
+            preferred_input_formats=_normalize_format_preferences(spec.preferred_input_formats, field_name="jobs[].preferred_input_formats"),
+            preferred_output_formats=_normalize_format_preferences(spec.preferred_output_formats, field_name="jobs[].preferred_output_formats"),
+            communication_channel=_normalize_protocol_channel(spec.communication_channel, field_name="jobs[].communication_channel"),
+            protocol_metadata=_normalize_protocol_metadata(spec.protocol_metadata, field_name="jobs[].protocol_metadata"),
+            private_task=bool(spec.private_task),
+        )
+    except ValueError as exc:
+        return None, {"index": index, "agent_id": spec.agent_id, "status_code": 422, "detail": str(exc)}
+    builtin_agent_id = _resolve_builtin_agent_id(agent)
+    if builtin_agent_id is not None:
+        try:
+            _validate_builtin_agent_payload(builtin_agent_id, normalized_input)
+        except Exception as exc:
+            return None, {"index": index, "agent_id": agent["agent_id"], "status_code": 422,
+                          "detail": error_codes.make_error(error_codes.INVALID_INPUT, str(exc), {"agent_id": agent["agent_id"]})}
+    agent_input_schema = agent.get("input_schema")
+    if isinstance(agent_input_schema, dict) and agent_input_schema:
+        try:
+            normalized_input = _validate_payload_against_schema(
+                payload=normalized_input, schema=agent_input_schema,
+                allow_string_coercion=_allow_schema_string_coercion(request),
+            )
+        except Exception as _schema_exc:
+            return None, {
+                "index": index, "agent_id": agent["agent_id"], "status_code": 422,
+                "detail": error_codes.make_error(
+                    error_codes.INPUT_SCHEMA_VIOLATION,
+                    f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                    {"path": list(getattr(_schema_exc, "absolute_path", [])), "agent_id": agent["agent_id"]},
+                ),
+            }
+    spec_budget_cents = spec.budget_cents
+    if spec.max_price_cents is not None:
+        spec_budget_cents = (
+            spec.max_price_cents if spec_budget_cents is None
+            else min(spec_budget_cents, spec.max_price_cents)
+        )
+    pricing_estimate = _estimate_variable_charge(
+        agent=agent, payload=normalized_input,
+        budget_cents=spec_budget_cents, per_job_cap_cents=key_per_job_cap_cents,
+    )
+    if pricing_estimate.get("cap_violated"):
+        violation = pricing_estimate["cap_violated"]
+        return None, {
+            "index": index, "agent_id": agent["agent_id"], "status_code": 402,
+            "detail": error_codes.make_error(
+                error_codes.SPEND_LIMIT_EXCEEDED, "Variable-price estimate exceeds a spend cap.",
+                {"scope": violation["scope"], "limit_cents": violation["limit_cents"],
+                 "attempted_cents": violation["price_cents"], "agent_id": agent["agent_id"],
+                 "pricing_model": pricing_estimate["pricing_model"], "detail": pricing_estimate.get("detail")},
+            ),
+        }
+    price_cents = int(pricing_estimate["price_cents"])
+    if price_cents > 2000 and not _agent_has_verified_contract(agent):
+        return None, {
+            "index": index, "agent_id": agent["agent_id"], "status_code": 422,
+            "detail": error_codes.make_error(
+                error_codes.VERIFIED_CONTRACT_REQUIRED,
+                "Jobs above $20 require a worker with a verified input/output contract.",
+                {"agent_id": agent["agent_id"], "price_cents": price_cents},
+            ),
+        }
+    fee_bearer_policy = payments.normalize_fee_bearer_policy(spec.fee_bearer_policy)
+    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+    success_distribution = payments.compute_success_distribution(
+        price_cents, platform_fee_pct=platform_fee_pct_at_create, fee_bearer_policy=fee_bearer_policy
+    )
+    caller_charge_cents = int(success_distribution["caller_charge_cents"])
+    return {
+        "index": index, "agent": agent, "price_cents": price_cents,
+        "caller_charge_cents": caller_charge_cents,
+        "platform_fee_pct_at_create": platform_fee_pct_at_create,
+        "fee_bearer_policy": fee_bearer_policy, "success_distribution": success_distribution,
+        "pricing_estimate": pricing_estimate,
+        "client_id": _request_client_id(request, spec.client_id) or request_client_id,
+        "spec": spec, "input_payload": normalized_input,
+        "parent_job_id": (parent_job or {}).get("job_id"), "tree_depth": tree_depth,
+    }, None
+
+
+def _batch_refund_all_charges(
+    *,
+    charge_tx_ids: list[tuple[str, str, int, str]],
+    label: str = "unhandled",
+) -> tuple[int, int]:
+    """Refund all charges from a batch creation error. Returns (refunded_count, refunded_cents)."""
+    refunded_count = 0
+    refunded_cents = 0
+    for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
+        try:
+            payments.post_call_refund(wallet_id, charge_tx_id, price_cents, agent_id)
+            refunded_count += 1
+            refunded_cents += int(price_cents or 0)
+        except Exception as ref_exc:
+            _LOG.exception(
+                "Batch refund failed after %s error (wallet=%s charge_tx_id=%s agent=%s): %s",
+                label, wallet_id, charge_tx_id, agent_id, ref_exc,
+            )
+    return refunded_count, refunded_cents
+
+
 @app.post(
     "/jobs/batch",
     status_code=201,
@@ -748,9 +819,7 @@ def jobs_batch_create(
     # marketplace fan-out — and 250 stays well under the worker's per-tick
     # max_total so a 250-job batch drains in ~4 worker ticks.
     if len(body.jobs) > 250:
-        raise HTTPException(
-            status_code=400, detail="Batch size limited to 250 jobs."
-        )
+        raise HTTPException(status_code=400, detail="Batch size limited to 250 jobs.")
 
     # Defense-in-depth: accept ?dry_run=true as a query param so older
     # MCP/SDK clients that don't yet forward the body field can still ask
@@ -768,209 +837,15 @@ def jobs_batch_create(
     total_price_cents = 0
     key_per_job_cap_cents = _caller_key_per_job_cap(caller)
     for index, spec in enumerate(body.jobs):
-        parent_job = _resolve_parent_job_for_creation(
-            caller,
-            spec.parent_job_id,
-            parent_cascade_policy=spec.parent_cascade_policy,
+        item, err = _batch_resolve_one_spec(
+            index=index, spec=spec, caller=caller, request=request,
+            request_client_id=request_client_id, key_per_job_cap_cents=key_per_job_cap_cents,
         )
-        parent_tree_depth = _to_non_negative_int(
-            (parent_job or {}).get("tree_depth"), default=0
-        )
-        tree_depth = parent_tree_depth + 1 if parent_job is not None else 0
-        if tree_depth >= 10:
-            invalid_jobs.append(
-                {
-                    "index": index,
-                    "agent_id": spec.agent_id,
-                    "status_code": 422,
-                    "detail": error_codes.make_error(
-                        error_codes.ORCHESTRATION_DEPTH_EXCEEDED,
-                        "Maximum orchestration depth is 10 levels.",
-                        {"max_depth": 10, "attempted_depth": tree_depth},
-                    ),
-                }
-            )
+        if err is not None:
+            invalid_jobs.append(err)
             continue
-        agent = registry.get_agent(spec.agent_id, include_unapproved=True)
-        if agent is None or not _caller_can_access_agent(caller, agent):
-            invalid_jobs.append(
-                {
-                    "index": index,
-                    "agent_id": spec.agent_id,
-                    "status_code": 404,
-                    "detail": f"Agent '{spec.agent_id}' not found.",
-                }
-            )
-            continue
-        try:
-            _assert_agent_callable(spec.agent_id, agent)
-        except HTTPException as exc:
-            invalid_jobs.append(
-                {
-                    "index": index,
-                    "agent_id": spec.agent_id,
-                    "status_code": exc.status_code,
-                    "detail": exc.detail,
-                }
-            )
-            continue
-        try:
-            normalized_spec_input_payload = _merge_protocol_input_envelope(
-                spec.input_payload,
-                input_artifacts=_normalize_protocol_artifact_list(
-                    spec.input_artifacts,
-                    field_name="jobs[].input_artifacts",
-                ),
-                preferred_input_formats=_normalize_format_preferences(
-                    spec.preferred_input_formats,
-                    field_name="jobs[].preferred_input_formats",
-                ),
-                preferred_output_formats=_normalize_format_preferences(
-                    spec.preferred_output_formats,
-                    field_name="jobs[].preferred_output_formats",
-                ),
-                communication_channel=_normalize_protocol_channel(
-                    spec.communication_channel,
-                    field_name="jobs[].communication_channel",
-                ),
-                protocol_metadata=_normalize_protocol_metadata(
-                    spec.protocol_metadata,
-                    field_name="jobs[].protocol_metadata",
-                ),
-                private_task=bool(spec.private_task),
-            )
-        except ValueError as exc:
-            invalid_jobs.append(
-                {
-                    "index": index,
-                    "agent_id": spec.agent_id,
-                    "status_code": 422,
-                    "detail": str(exc),
-                }
-            )
-            continue
-        builtin_agent_id = _resolve_builtin_agent_id(agent)
-        if builtin_agent_id is not None:
-            try:
-                _validate_builtin_agent_payload(
-                    builtin_agent_id, normalized_spec_input_payload
-                )
-            except Exception as exc:
-                invalid_jobs.append(
-                    {
-                        "index": index,
-                        "agent_id": agent["agent_id"],
-                        "status_code": 422,
-                        "detail": error_codes.make_error(
-                            error_codes.INVALID_INPUT,
-                            str(exc),
-                            {"agent_id": agent["agent_id"]},
-                        ),
-                    }
-                )
-                continue
-        agent_input_schema = agent.get("input_schema")
-        if isinstance(agent_input_schema, dict) and agent_input_schema:
-            try:
-                normalized_spec_input_payload = _validate_payload_against_schema(
-                    payload=normalized_spec_input_payload,
-                    schema=agent_input_schema,
-                    allow_string_coercion=_allow_schema_string_coercion(request),
-                )
-            except Exception as _schema_exc:
-                invalid_jobs.append(
-                    {
-                        "index": index,
-                        "agent_id": agent["agent_id"],
-                        "status_code": 422,
-                        "detail": error_codes.make_error(
-                            error_codes.INPUT_SCHEMA_VIOLATION,
-                            f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
-                            {
-                                "path": list(getattr(_schema_exc, "absolute_path", [])),
-                                "agent_id": agent["agent_id"],
-                            },
-                        ),
-                    }
-                )
-                continue
-        spec_budget_cents = spec.budget_cents
-        if spec.max_price_cents is not None:
-            spec_budget_cents = (
-                spec.max_price_cents
-                if spec_budget_cents is None
-                else min(spec_budget_cents, spec.max_price_cents)
-            )
-        pricing_estimate = _estimate_variable_charge(
-            agent=agent,
-            payload=normalized_spec_input_payload,
-            budget_cents=spec_budget_cents,
-            per_job_cap_cents=key_per_job_cap_cents,
-        )
-        if pricing_estimate.get("cap_violated"):
-            violation = pricing_estimate["cap_violated"]
-            invalid_jobs.append(
-                {
-                    "index": index,
-                    "agent_id": agent["agent_id"],
-                    "status_code": 402,
-                    "detail": error_codes.make_error(
-                        error_codes.SPEND_LIMIT_EXCEEDED,
-                        "Variable-price estimate exceeds a spend cap.",
-                        {
-                            "scope": violation["scope"],
-                            "limit_cents": violation["limit_cents"],
-                            "attempted_cents": violation["price_cents"],
-                            "agent_id": agent["agent_id"],
-                            "pricing_model": pricing_estimate["pricing_model"],
-                            "detail": pricing_estimate.get("detail"),
-                        },
-                    ),
-                }
-            )
-            continue
-        price_cents = int(pricing_estimate["price_cents"])
-        if price_cents > 2000 and not _agent_has_verified_contract(agent):
-            invalid_jobs.append(
-                {
-                    "index": index,
-                    "agent_id": agent["agent_id"],
-                    "status_code": 422,
-                    "detail": error_codes.make_error(
-                        error_codes.VERIFIED_CONTRACT_REQUIRED,
-                        "Jobs above $20 require a worker with a verified input/output contract.",
-                        {"agent_id": agent["agent_id"], "price_cents": price_cents},
-                    ),
-                }
-            )
-            continue
-        fee_bearer_policy = payments.normalize_fee_bearer_policy(spec.fee_bearer_policy)
-        platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
-        success_distribution = payments.compute_success_distribution(
-            price_cents,
-            platform_fee_pct=platform_fee_pct_at_create,
-            fee_bearer_policy=fee_bearer_policy,
-        )
-        caller_charge_cents = int(success_distribution["caller_charge_cents"])
-        total_price_cents += caller_charge_cents
-        resolved.append(
-            {
-                "index": index,
-                "agent": agent,
-                "price_cents": price_cents,
-                "caller_charge_cents": caller_charge_cents,
-                "platform_fee_pct_at_create": platform_fee_pct_at_create,
-                "fee_bearer_policy": fee_bearer_policy,
-                "success_distribution": success_distribution,
-                "pricing_estimate": pricing_estimate,
-                "client_id": _request_client_id(request, spec.client_id)
-                or request_client_id,
-                "spec": spec,
-                "input_payload": normalized_spec_input_payload,
-                "parent_job_id": (parent_job or {}).get("job_id"),
-                "tree_depth": tree_depth,
-            }
-        )
+        total_price_cents += item["caller_charge_cents"]
+        resolved.append(item)
 
     if not resolved:
         # Same body shape as the partial-success response so callers can use
@@ -1158,83 +1033,44 @@ def jobs_batch_create(
     except HTTPException as exc:
         # Refund every charge taken so far AND surface a structured error so
         # the caller has an actionable recovery handle (batch_id, refunded
-        # count, which job_index failed). Without this, MCP clients see only a
-        # bare 502 with empty body and cannot tell whether earlier jobs were
-        # charged or refunded.
-        refunded_count = 0
-        refunded_cents = 0
-        for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
-            try:
-                payments.post_call_refund(
-                    wallet_id, charge_tx_id, price_cents, agent_id
-                )
-                refunded_count += 1
-                refunded_cents += int(price_cents or 0)
-            except Exception as ref_exc:
-                _LOG.exception(
-                    "Batch refund failed after handled error (wallet=%s charge_tx_id=%s agent=%s): %s",
-                    wallet_id,
-                    charge_tx_id,
-                    agent_id,
-                    ref_exc,
-                )
-        # Re-wrap the inner HTTPException with batch metadata so the caller
-        # always sees batch_id and refund tally.
-        original_detail = exc.detail
-        wrapped = error_codes.make_error(
+        # count, which job_index failed).
+        refunded_count, refunded_cents = _batch_refund_all_charges(
+            charge_tx_ids=charge_tx_ids, label="handled"
+        )
+        batch_failure_code = (
             error_codes.JOB_BATCH_PARTIAL_FAILURE
             if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
-            else "job.batch.partial_failure",
-            "Batch creation failed before all jobs were created.",
+            else "job.batch.partial_failure"
+        )
+        wrapped = error_codes.make_error(
+            batch_failure_code, "Batch creation failed before all jobs were created.",
             {
-                "batch_id": batch_id,
-                "submitted_count": len(resolved),
-                "created_count": len(created_jobs),
-                "failed_at_index": len(created_jobs),
-                "refunded_count": refunded_count,
-                "refunded_cents": refunded_cents,
-                "created_job_ids": [
-                    j.get("job_id") for j in created_jobs if isinstance(j, dict)
-                ],
-                "inner_error": original_detail,
+                "batch_id": batch_id, "submitted_count": len(resolved),
+                "created_count": len(created_jobs), "failed_at_index": len(created_jobs),
+                "refunded_count": refunded_count, "refunded_cents": refunded_cents,
+                "created_job_ids": [j.get("job_id") for j in created_jobs if isinstance(j, dict)],
+                "inner_error": exc.detail,
             },
         )
         raise HTTPException(status_code=exc.status_code, detail=wrapped) from exc
     except Exception as exc:
-        refunded_count = 0
-        refunded_cents = 0
-        for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
-            try:
-                payments.post_call_refund(
-                    wallet_id, charge_tx_id, price_cents, agent_id
-                )
-                refunded_count += 1
-                refunded_cents += int(price_cents or 0)
-            except Exception as ref_exc:
-                _LOG.exception(
-                    "Batch refund failed after unhandled error (wallet=%s charge_tx_id=%s agent=%s): %s",
-                    wallet_id,
-                    charge_tx_id,
-                    agent_id,
-                    ref_exc,
-                )
+        refunded_count, refunded_cents = _batch_refund_all_charges(
+            charge_tx_ids=charge_tx_ids, label="unhandled"
+        )
+        batch_failure_code = (
+            error_codes.JOB_BATCH_PARTIAL_FAILURE
+            if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
+            else "job.batch.partial_failure"
+        )
         raise HTTPException(
             status_code=500,
             detail=error_codes.make_error(
-                error_codes.JOB_BATCH_PARTIAL_FAILURE
-                if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
-                else "job.batch.partial_failure",
-                "Batch creation failed; all charges refunded.",
+                batch_failure_code, "Batch creation failed; all charges refunded.",
                 {
-                    "batch_id": batch_id,
-                    "submitted_count": len(resolved),
-                    "created_count": len(created_jobs),
-                    "failed_at_index": len(created_jobs),
-                    "refunded_count": refunded_count,
-                    "refunded_cents": refunded_cents,
-                    "created_job_ids": [
-                        j.get("job_id") for j in created_jobs if isinstance(j, dict)
-                    ],
+                    "batch_id": batch_id, "submitted_count": len(resolved),
+                    "created_count": len(created_jobs), "failed_at_index": len(created_jobs),
+                    "refunded_count": refunded_count, "refunded_cents": refunded_cents,
+                    "created_job_ids": [j.get("job_id") for j in created_jobs if isinstance(j, dict)],
                     "inner_error": str(exc)[:500],
                 },
             ),
@@ -1958,6 +1794,94 @@ def jobs_release(
     return JSONResponse(content=_job_response(released, caller))
 
 
+def _jobs_complete_normalize_output(*, body: Any) -> dict:
+    """Merge output payload with protocol envelope fields. Raises 422 on error."""
+    try:
+        return _merge_protocol_output_envelope(
+            body.output_payload,
+            output_artifacts=_normalize_protocol_artifact_list(body.output_artifacts, field_name="output_artifacts"),
+            output_format=str(body.output_format).strip().lower() if body.output_format else None,
+            protocol_metadata=_normalize_protocol_metadata(body.protocol_metadata, field_name="protocol_metadata"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _jobs_complete_validate_output_schema(*, agent: dict, output_payload: Any) -> None:
+    """Validate output against agent's declared output_schema. Raises 422 on mismatch."""
+    output_schema = agent.get("output_schema")
+    if not (isinstance(output_schema, dict) and output_schema):
+        return
+    mismatches = _validate_json_schema_subset(output_payload, output_schema)
+    if mismatches:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.SCHEMA_MISMATCH,
+                "output_payload does not match the declared output_schema.",
+                {"mismatches": mismatches},
+            ),
+        )
+
+
+def _jobs_complete_sign_output(*, agent: dict, output: Any, job_id: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """Sign output with agent key. Returns (sig_b64, sig_alg, sig_did, sig_at)."""
+    sig_b64 = sig_alg = sig_did = sig_at = None
+    try:
+        from core import crypto as _crypto
+        private_pem = agent.get("signing_private_key")
+        agent_did_value = agent.get("did")
+        if not private_pem or not agent_did_value:
+            private_pem, _pub, agent_did_value = registry.ensure_agent_signing_keys(agent.get("agent_id") or "")
+        if private_pem and agent_did_value and output is not None:
+            sig_b64 = _crypto.sign_payload(private_pem, output)
+            sig_alg = str(agent.get("signing_alg") or "ed25519")
+            sig_did = agent_did_value
+            sig_at = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        _LOG.exception("Failed to sign output for job %s", job_id)
+    return sig_b64, sig_alg, sig_did, sig_at
+
+
+def _jobs_complete_settle_and_notify(
+    *,
+    updated: dict,
+    normalized_output_payload: Any,
+    quality: dict,
+    job_id: str,
+    actor_owner_id: str,
+    caller: Any,
+) -> tuple[dict, int]:
+    """Settle job, pay judge fee, send email, record example. Returns (response_dict, status)."""
+    settled = _settle_successful_job(updated, actor_owner_id=actor_owner_id)
+    distribution = payments.compute_success_distribution(
+        int(updated.get("price_cents") or 0),
+        platform_fee_pct=updated.get("platform_fee_pct_at_create"),
+        fee_bearer_policy=updated.get("fee_bearer_policy"),
+    )
+    platform_fee_cents = int(distribution["platform_fee_cents"])
+    judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
+    if judge_fee_cents > 0:
+        judge_wallet = payments.get_or_create_wallet(f"agent:{quality['judge_agent_id']}")
+        payments.record_judge_fee(
+            updated["platform_wallet_id"], judge_wallet["wallet_id"],
+            charge_tx_id=updated["charge_tx_id"], agent_id=updated["agent_id"], fee_cents=judge_fee_cents,
+        )
+        settled = jobs.get_job(job_id) or settled
+    caller_email = _get_owner_email(settled.get("caller_owner_id", ""))
+    if caller_email:
+        agent_row = registry.get_agent(settled.get("agent_id", ""))
+        agent_name = (agent_row or {}).get("name", "agent")
+        _email.send_job_complete(caller_email, job_id, agent_name, int(settled.get("price_cents") or 0))
+    agent_for_example = registry.get_agent(updated.get("agent_id", ""), include_unapproved=True)
+    if agent_for_example:
+        _record_public_work_example(
+            agent_for_example, settled.get("input_payload") or {}, normalized_output_payload,
+            job_id=job_id, latency_ms=_job_latency_ms(settled), quality_score=quality.get("quality_score"),
+        )
+    return _job_response(settled, caller), 200
+
+
 @app.post(
     "/jobs/{job_id}/complete",
     response_model=core_models.JobResponse,
@@ -1976,140 +1900,43 @@ def jobs_complete(
         job = jobs.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-
         actor_owner_id = caller["owner_id"]
         if not _caller_worker_authorized_for_job(caller, job):
-            raise HTTPException(
-                status_code=403, detail="Not authorized for this agent job."
-            )
-        timed_out = _timeout_stale_lease_at_touchpoint(
-            job,
-            actor_owner_id=actor_owner_id,
-            touchpoint="complete",
-        )
+            raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
+        timed_out = _timeout_stale_lease_at_touchpoint(job, actor_owner_id=actor_owner_id, touchpoint="complete")
         if timed_out is not None:
-            timed_out_response = _job_response(timed_out, caller)
-            return (
-                _timeout_error_payload(timed_out_response),
-                410,
-            )
-
+            return _timeout_error_payload(_job_response(timed_out, caller)), 410
         if job["settled_at"]:
             return _job_response(job, caller), 200
         if job["status"] == "complete" and job.get("completed_at"):
             settled = _settle_successful_job(job, actor_owner_id=actor_owner_id)
             return _job_response(settled, caller), 200
-
-        _assert_settlement_claim_or_grace(
-            job,
-            caller=caller,
-            claim_token=body.claim_token,
-            action="complete",
-        )
-        try:
-            normalized_output_payload = _merge_protocol_output_envelope(
-                body.output_payload,
-                output_artifacts=_normalize_protocol_artifact_list(
-                    body.output_artifacts,
-                    field_name="output_artifacts",
-                ),
-                output_format=(
-                    str(body.output_format).strip().lower()
-                    if body.output_format
-                    else None
-                ),
-                protocol_metadata=_normalize_protocol_metadata(
-                    body.protocol_metadata,
-                    field_name="protocol_metadata",
-                ),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-
+        _assert_settlement_claim_or_grace(job, caller=caller, claim_token=body.claim_token, action="complete")
+        normalized_output_payload = _jobs_complete_normalize_output(body=body)
         agent = registry.get_agent(job["agent_id"], include_unapproved=True)
         if agent is None:
-            raise HTTPException(
-                status_code=404, detail=f"Agent '{job['agent_id']}' not found."
-            )
-        output_schema = agent.get("output_schema")
-        if isinstance(output_schema, dict) and output_schema:
-            mismatches = _validate_json_schema_subset(
-                body.output_payload, output_schema
-            )
-            if mismatches:
-                raise HTTPException(
-                    status_code=422,
-                    detail=error_codes.make_error(
-                        error_codes.SCHEMA_MISMATCH,
-                        "output_payload does not match the declared output_schema.",
-                        {"mismatches": mismatches},
-                    ),
-                )
-
+            raise HTTPException(status_code=404, detail=f"Agent '{job['agent_id']}' not found.")
+        _jobs_complete_validate_output_schema(agent=agent, output_payload=body.output_payload)
         quality = _run_quality_gate(job, agent, body.output_payload)
         jobs.set_job_quality_result(
-            job_id,
-            judge_verdict=quality["judge_verdict"],
-            quality_score=quality["quality_score"],
-            judge_agent_id=quality["judge_agent_id"],
+            job_id, judge_verdict=quality["judge_verdict"],
+            quality_score=quality["quality_score"], judge_agent_id=quality["judge_agent_id"],
         )
         if not quality["passed"]:
             failed = jobs.update_job_status(
-                job_id,
-                "failed",
-                error_message=f"Quality judge failed: {quality['reason']}",
-                completed=True,
+                job_id, "failed", error_message=f"Quality judge failed: {quality['reason']}", completed=True
             )
             if failed is None:
-                raise HTTPException(
-                    status_code=409, detail="Unable to update job status."
-                )
-            settled_failed = _settle_failed_job(
-                failed, actor_owner_id=actor_owner_id, event_type="job.failed_quality"
-            )
+                raise HTTPException(status_code=409, detail="Unable to update job status.")
+            settled_failed = _settle_failed_job(failed, actor_owner_id=actor_owner_id, event_type="job.failed_quality")
             return _job_response(settled_failed, caller), 200
-
-        # Sign the output with the agent's private key, if it has one.
-        # The signature attests *who* signed (the agent's DID), not that
-        # the work is correct — quality verification is a separate concern.
-        sig_b64: str | None = None
-        sig_alg: str | None = None
-        sig_did: str | None = None
-        sig_at: str | None = None
-        try:
-            from core import crypto as _crypto
-
-            private_pem = agent.get("signing_private_key")
-            agent_did_value = agent.get("did")
-            if not private_pem or not agent_did_value:
-                # Same lazy-provision guarantee as the sync path so async
-                # completions never silently drop signatures when the lifespan
-                # backfill missed an agent.
-                private_pem, _public_pem, agent_did_value = (
-                    registry.ensure_agent_signing_keys(agent.get("agent_id") or "")
-                )
-            if (
-                private_pem
-                and agent_did_value
-                and normalized_output_payload is not None
-            ):
-                sig_b64 = _crypto.sign_payload(private_pem, normalized_output_payload)
-                sig_alg = str(agent.get("signing_alg") or "ed25519")
-                sig_did = agent_did_value
-                sig_at = datetime.now(timezone.utc).isoformat()
-        except Exception:  # signing must never break completion
-            _LOG.exception("Failed to sign output for job %s", job_id)
-            sig_b64 = sig_alg = sig_did = sig_at = None
-
+        sig_b64, sig_alg, sig_did, sig_at = _jobs_complete_sign_output(
+            agent=agent, output=normalized_output_payload, job_id=job_id
+        )
         updated = jobs.update_job_status(
-            job_id,
-            "complete",
-            output_payload=normalized_output_payload,
-            completed=True,
-            output_signature=sig_b64,
-            output_signature_alg=sig_alg,
-            output_signed_by_did=sig_did,
-            output_signed_at=sig_at,
+            job_id, "complete", output_payload=normalized_output_payload, completed=True,
+            output_signature=sig_b64, output_signature_alg=sig_alg,
+            output_signed_by_did=sig_did, output_signed_at=sig_at,
         )
         if updated is None:
             raise HTTPException(status_code=409, detail="Unable to update job status.")
@@ -2117,53 +1944,17 @@ def jobs_complete(
         if initialized is not None:
             updated = initialized
         _record_job_event(
-            updated,
-            "job.completed",
-            actor_owner_id=actor_owner_id,
+            updated, "job.completed", actor_owner_id=actor_owner_id,
             payload={
                 "status": updated["status"],
                 "output_verification_status": updated.get("output_verification_status"),
-                "output_verification_deadline_at": updated.get(
-                    "output_verification_deadline_at"
-                ),
+                "output_verification_deadline_at": updated.get("output_verification_deadline_at"),
             },
         )
-        settled = _settle_successful_job(updated, actor_owner_id=actor_owner_id)
-        distribution = payments.compute_success_distribution(
-            int(updated.get("price_cents") or 0),
-            platform_fee_pct=updated.get("platform_fee_pct_at_create"),
-            fee_bearer_policy=updated.get("fee_bearer_policy"),
+        return _jobs_complete_settle_and_notify(
+            updated=updated, normalized_output_payload=normalized_output_payload,
+            quality=quality, job_id=job_id, actor_owner_id=actor_owner_id, caller=caller,
         )
-        platform_fee_cents = int(distribution["platform_fee_cents"])
-        judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
-        if judge_fee_cents > 0:
-            judge_wallet = payments.get_or_create_wallet(
-                f"agent:{quality['judge_agent_id']}"
-            )
-            payments.record_judge_fee(
-                updated["platform_wallet_id"],
-                judge_wallet["wallet_id"],
-                charge_tx_id=updated["charge_tx_id"],
-                agent_id=updated["agent_id"],
-                fee_cents=judge_fee_cents,
-            )
-            settled = jobs.get_job(job_id) or settled
-        caller_email = _get_owner_email(settled.get("caller_owner_id", ""))
-        if caller_email:
-            _agent_row = registry.get_agent(settled.get("agent_id", ""))
-            _agent_name = (_agent_row or {}).get("name", "agent")
-            _email.send_job_complete(
-                caller_email, job_id, _agent_name, int(settled.get("price_cents") or 0)
-            )
-        _record_public_work_example(
-            agent,
-            settled.get("input_payload") or {},
-            normalized_output_payload,
-            job_id=job_id,
-            latency_ms=_job_latency_ms(settled),
-            quality_score=quality.get("quality_score"),
-        )
-        return _job_response(settled, caller), 200
 
     return _run_idempotent_json_response(
         request=request,
@@ -2178,6 +1969,93 @@ def jobs_complete(
         },
         operation=_operation,
     )
+
+
+def _verification_check_expiry(
+    *,
+    job_id: str,
+    initialized: dict,
+    verification_status: str,
+    caller_owner_id: str,
+) -> tuple[dict, str]:
+    """Expire verification if deadline passed. Returns (updated_initialized, updated_status)."""
+    if verification_status != "pending":
+        return initialized, verification_status
+    deadline = _parse_iso_datetime(initialized.get("output_verification_deadline_at"))
+    if deadline is None or datetime.now(timezone.utc) <= deadline:
+        return initialized, verification_status
+    expired = jobs.mark_output_verification_expired(
+        job_id, decision_owner_id="system:verification-expiry-api"
+    )
+    if expired is not None:
+        _record_job_event(
+            expired, "job.output_verification_expired", actor_owner_id=caller_owner_id,
+            payload={"output_verification_deadline_at": expired.get("output_verification_deadline_at")},
+        )
+        return expired, "expired"
+    return initialized, verification_status
+
+
+def _verification_handle_accept(
+    *,
+    job_id: str,
+    initialized: dict,
+    verification_status: str,
+    caller_owner_id: str,
+    reason: str | None,
+    caller: Any,
+) -> tuple[dict, int]:
+    """Process an accept decision. Returns (response_dict, status_code)."""
+    if disputes.has_dispute_for_job(job_id):
+        raise HTTPException(status_code=409, detail="Cannot accept output after a dispute is already filed.")
+    if verification_status == "accepted":
+        settled = _settle_successful_job(initialized, actor_owner_id=caller_owner_id, require_dispute_window_expiry=False)
+        return _job_response(settled, caller), 200
+    if verification_status in {"rejected", "expired"}:
+        raise HTTPException(status_code=409, detail="Output verification decision is already closed for this job.")
+    decided = jobs.set_output_verification_decision(
+        job_id, decision="accept", decision_owner_id=caller_owner_id, reason=reason
+    )
+    if decided is None:
+        raise HTTPException(status_code=409, detail="Unable to record output verification decision.")
+    _record_job_event(decided, "job.output_verification_accepted", actor_owner_id=caller_owner_id, payload={})
+    settled = _settle_successful_job(decided, actor_owner_id=caller_owner_id, require_dispute_window_expiry=False)
+    return _job_response(settled, caller), 200
+
+
+def _verification_handle_reject(
+    *,
+    job_id: str,
+    initialized: dict,
+    verification_status: str,
+    caller_owner_id: str,
+    reason: str | None,
+    evidence: Any,
+    caller: Any,
+) -> tuple[dict, int]:
+    """Process a reject decision. Returns (response_dict, status_code)."""
+    if verification_status == "rejected":
+        return _job_response(initialized, caller), 200
+    if verification_status in {"accepted", "expired"}:
+        raise HTTPException(status_code=409, detail="Output verification decision is already closed for this job.")
+    rejection_reason = reason or "Caller rejected output during verification window."
+    dispute_row = _ensure_output_rejection_dispute(
+        initialized, filed_by_owner_id=caller_owner_id, reason=rejection_reason, evidence=evidence
+    )
+    decided = jobs.set_output_verification_decision(
+        job_id, decision="reject", decision_owner_id=caller_owner_id, reason=rejection_reason
+    )
+    decided_job = decided or jobs.get_job(job_id) or initialized
+    _record_job_event(
+        decided_job, "job.output_verification_rejected", actor_owner_id=caller_owner_id,
+        payload={"dispute_id": dispute_row["dispute_id"]},
+    )
+    _record_job_event(
+        decided_job, "job.dispute_filed", actor_owner_id=caller_owner_id,
+        payload={"dispute_id": dispute_row["dispute_id"], "side": "caller",
+                 "reason": rejection_reason, "auto_opened": True},
+    )
+    return _job_response(decided_job, caller), 200
 
 
 @app.post(
@@ -2197,136 +2075,29 @@ def jobs_output_verification_decide(
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
         # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
-        if job is None or (
-            caller["type"] != "master"
-            and caller["owner_id"] != job.get("caller_owner_id")
-        ):
-            raise HTTPException(
-                status_code=403, detail="Job not found or not authorized."
-            )
+        if job is None or (caller["type"] != "master" and caller["owner_id"] != job.get("caller_owner_id")):
+            raise HTTPException(status_code=403, detail="Job not found or not authorized.")
         if job.get("status") != "complete" or not job.get("completed_at"):
-            raise HTTPException(
-                status_code=400,
-                detail="Output verification is only available for completed jobs.",
-            )
+            raise HTTPException(status_code=400, detail="Output verification is only available for completed jobs.")
         if job.get("settled_at"):
             raise HTTPException(status_code=409, detail="Job is already settled.")
-
         initialized = jobs.initialize_output_verification_state(job_id) or job
         verification_status = _normalize_output_verification_status(initialized)
         if verification_status == "not_required":
-            raise HTTPException(
-                status_code=400,
-                detail="This job does not have an output verification window configured.",
-            )
-
-        if verification_status == "pending":
-            deadline = _parse_iso_datetime(
-                initialized.get("output_verification_deadline_at")
-            )
-            if deadline is not None and datetime.now(timezone.utc) > deadline:
-                expired = jobs.mark_output_verification_expired(
-                    job_id,
-                    decision_owner_id="system:verification-expiry-api",
-                )
-                if expired is not None:
-                    initialized = expired
-                    verification_status = "expired"
-                    _record_job_event(
-                        expired,
-                        "job.output_verification_expired",
-                        actor_owner_id=caller["owner_id"],
-                        payload={
-                            "output_verification_deadline_at": expired.get(
-                                "output_verification_deadline_at"
-                            )
-                        },
-                    )
-
+            raise HTTPException(status_code=400, detail="This job does not have an output verification window configured.")
+        initialized, verification_status = _verification_check_expiry(
+            job_id=job_id, initialized=initialized, verification_status=verification_status,
+            caller_owner_id=caller["owner_id"],
+        )
         if body.decision == "accept":
-            if disputes.has_dispute_for_job(job_id):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Cannot accept output after a dispute is already filed.",
-                )
-            if verification_status == "accepted":
-                settled = _settle_successful_job(
-                    initialized,
-                    actor_owner_id=caller["owner_id"],
-                    require_dispute_window_expiry=False,
-                )
-                return _job_response(settled, caller), 200
-            if verification_status in {"rejected", "expired"}:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Output verification decision is already closed for this job.",
-                )
-            decided = jobs.set_output_verification_decision(
-                job_id,
-                decision="accept",
-                decision_owner_id=caller["owner_id"],
-                reason=body.reason,
+            return _verification_handle_accept(
+                job_id=job_id, initialized=initialized, verification_status=verification_status,
+                caller_owner_id=caller["owner_id"], reason=body.reason, caller=caller,
             )
-            if decided is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Unable to record output verification decision.",
-                )
-            _record_job_event(
-                decided,
-                "job.output_verification_accepted",
-                actor_owner_id=caller["owner_id"],
-                payload={},
-            )
-            settled = _settle_successful_job(
-                decided,
-                actor_owner_id=caller["owner_id"],
-                require_dispute_window_expiry=False,
-            )
-            return _job_response(settled, caller), 200
-
-        if verification_status == "rejected":
-            return _job_response(initialized, caller), 200
-        if verification_status in {"accepted", "expired"}:
-            raise HTTPException(
-                status_code=409,
-                detail="Output verification decision is already closed for this job.",
-            )
-
-        rejection_reason = (
-            body.reason or "Caller rejected output during verification window."
+        return _verification_handle_reject(
+            job_id=job_id, initialized=initialized, verification_status=verification_status,
+            caller_owner_id=caller["owner_id"], reason=body.reason, evidence=body.evidence, caller=caller,
         )
-        dispute_row = _ensure_output_rejection_dispute(
-            initialized,
-            filed_by_owner_id=caller["owner_id"],
-            reason=rejection_reason,
-            evidence=body.evidence,
-        )
-        decided = jobs.set_output_verification_decision(
-            job_id,
-            decision="reject",
-            decision_owner_id=caller["owner_id"],
-            reason=rejection_reason,
-        )
-        decided_job = decided or jobs.get_job(job_id) or initialized
-        _record_job_event(
-            decided_job,
-            "job.output_verification_rejected",
-            actor_owner_id=caller["owner_id"],
-            payload={"dispute_id": dispute_row["dispute_id"]},
-        )
-        _record_job_event(
-            decided_job,
-            "job.dispute_filed",
-            actor_owner_id=caller["owner_id"],
-            payload={
-                "dispute_id": dispute_row["dispute_id"],
-                "side": "caller",
-                "reason": rejection_reason,
-                "auto_opened": True,
-            },
-        )
-        return _job_response(decided_job, caller), 200
 
     return _run_idempotent_json_response(
         request=request,
