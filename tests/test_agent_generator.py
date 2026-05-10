@@ -89,7 +89,9 @@ def isolated_db(monkeypatch, tmp_path):
         monkeypatch.setattr(module, "DB_PATH", str(db_path), raising=False)
 
     from core.migrate import apply_migrations
-    apply_migrations()
+    # Explicit path: apply_migrations() default arg captures DB_PATH at
+    # module-load time, so the per-module monkeypatch above doesn't reach it.
+    apply_migrations(str(db_path))
     # Mirror the server's lifespan-time DB initialisation so every table the
     # generator pipeline touches exists before the test body runs.
     _reg.init_db()

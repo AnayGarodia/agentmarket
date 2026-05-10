@@ -1,4 +1,4 @@
-"""DB layer for the agent_generation_jobs table (migration 0041).
+"""DB layer for the agent_generation_jobs table (migration 0042).
 
 # OWNS: CRUD for agent_generation_jobs rows.
 # NOT OWNS: business logic, payment, the agents/hosted_skills tables.
