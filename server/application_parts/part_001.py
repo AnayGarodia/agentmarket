@@ -81,109 +81,120 @@ def _migrate_job_event_deliveries_status_schema(conn: _db.DbConnection) -> None:
     conn.execute("ALTER TABLE job_event_deliveries_new RENAME TO job_event_deliveries")
 
 
+_DDL_JOB_EVENTS = """
+CREATE TABLE IF NOT EXISTS job_events (
+    event_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id            TEXT NOT NULL,
+    agent_id          TEXT NOT NULL,
+    agent_owner_id    TEXT NOT NULL,
+    caller_owner_id   TEXT NOT NULL,
+    event_type        TEXT NOT NULL,
+    actor_owner_id    TEXT,
+    payload           TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT NOT NULL
+)
+"""
+
+_DDL_JOB_EVENT_HOOKS = """
+CREATE TABLE IF NOT EXISTS job_event_hooks (
+    hook_id            TEXT PRIMARY KEY,
+    owner_id           TEXT NOT NULL,
+    target_url         TEXT NOT NULL,
+    secret             TEXT,
+    is_active          INTEGER NOT NULL DEFAULT 1,
+    created_at         TEXT NOT NULL,
+    last_attempt_at    TEXT,
+    last_success_at    TEXT,
+    last_status_code   INTEGER,
+    last_error         TEXT
+)
+"""
+
+_DDL_JOB_EVENT_DELIVERIES = """
+CREATE TABLE IF NOT EXISTS job_event_deliveries (
+    delivery_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id            INTEGER NOT NULL,
+    hook_id             TEXT NOT NULL,
+    owner_id            TEXT NOT NULL,
+    target_url          TEXT NOT NULL,
+    secret              TEXT,
+    payload             TEXT NOT NULL,
+    status              TEXT NOT NULL CHECK(status IN ('pending', 'delivered', 'failed', 'cancelled')),
+    attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    next_attempt_at     TEXT NOT NULL,
+    last_attempt_at     TEXT,
+    last_success_at     TEXT,
+    last_status_code    INTEGER,
+    last_error          TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    UNIQUE(event_id, hook_id)
+)
+"""
+
+_DDL_IDEMPOTENCY_REQUESTS = """
+CREATE TABLE IF NOT EXISTS idempotency_requests (
+    request_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id         TEXT NOT NULL,
+    scope            TEXT NOT NULL,
+    idempotency_key  TEXT NOT NULL,
+    request_hash     TEXT NOT NULL,
+    status           TEXT NOT NULL CHECK(status IN ('in_progress', 'completed')),
+    response_status  INTEGER,
+    response_body    TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    UNIQUE(owner_id, scope, idempotency_key)
+)
+"""
+
+
+def _create_ops_tables(conn) -> None:
+    """Create the core ops event/hook/delivery/idempotency tables (SQLite only)."""
+    conn.execute(_DDL_JOB_EVENTS)
+    conn.execute(_DDL_JOB_EVENT_HOOKS)
+    conn.execute(_DDL_JOB_EVENT_DELIVERIES)
+    _migrate_job_event_deliveries_status_schema(conn)
+    conn.execute(_DDL_IDEMPOTENCY_REQUESTS)
+
+
+def _create_ops_indexes(conn) -> None:
+    """Create all secondary indexes for the ops tables (SQLite only)."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_events_owner_created ON job_events(caller_owner_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_events_agent_owner_created ON job_events(agent_owner_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_events_job_created ON job_events(job_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_hooks_owner_active ON job_event_hooks(owner_id, is_active)"
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_event_deliveries_status_due
+        ON job_event_deliveries(status, next_attempt_at, delivery_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_event_deliveries_owner_created
+        ON job_event_deliveries(owner_id, created_at DESC)
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_idempotency_updated ON idempotency_requests(updated_at DESC)"
+    )
+
+
 def _init_ops_db() -> None:
     if _db.IS_POSTGRES:
         return
     with jobs._conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS job_events (
-                event_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id            TEXT NOT NULL,
-                agent_id          TEXT NOT NULL,
-                agent_owner_id    TEXT NOT NULL,
-                caller_owner_id   TEXT NOT NULL,
-                event_type        TEXT NOT NULL,
-                actor_owner_id    TEXT,
-                payload           TEXT NOT NULL DEFAULT '{}',
-                created_at        TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS job_event_hooks (
-                hook_id            TEXT PRIMARY KEY,
-                owner_id           TEXT NOT NULL,
-                target_url         TEXT NOT NULL,
-                secret             TEXT,
-                is_active          INTEGER NOT NULL DEFAULT 1,
-                created_at         TEXT NOT NULL,
-                last_attempt_at    TEXT,
-                last_success_at    TEXT,
-                last_status_code   INTEGER,
-                last_error         TEXT
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS job_event_deliveries (
-                delivery_id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id            INTEGER NOT NULL,
-                hook_id             TEXT NOT NULL,
-                owner_id            TEXT NOT NULL,
-                target_url          TEXT NOT NULL,
-                secret              TEXT,
-                payload             TEXT NOT NULL,
-                status              TEXT NOT NULL CHECK(status IN ('pending', 'delivered', 'failed', 'cancelled')),
-                attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-                next_attempt_at     TEXT NOT NULL,
-                last_attempt_at     TEXT,
-                last_success_at     TEXT,
-                last_status_code    INTEGER,
-                last_error          TEXT,
-                created_at          TEXT NOT NULL,
-                updated_at          TEXT NOT NULL,
-                UNIQUE(event_id, hook_id)
-            )
-            """
-        )
-        _migrate_job_event_deliveries_status_schema(conn)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_job_events_owner_created ON job_events(caller_owner_id, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_job_events_agent_owner_created ON job_events(agent_owner_id, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_job_events_job_created ON job_events(job_id, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_job_hooks_owner_active ON job_event_hooks(owner_id, is_active)"
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_job_event_deliveries_status_due
-            ON job_event_deliveries(status, next_attempt_at, delivery_id)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_job_event_deliveries_owner_created
-            ON job_event_deliveries(owner_id, created_at DESC)
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS idempotency_requests (
-                request_id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_id         TEXT NOT NULL,
-                scope            TEXT NOT NULL,
-                idempotency_key  TEXT NOT NULL,
-                request_hash     TEXT NOT NULL,
-                status           TEXT NOT NULL CHECK(status IN ('in_progress', 'completed')),
-                response_status  INTEGER,
-                response_body    TEXT,
-                created_at       TEXT NOT NULL,
-                updated_at       TEXT NOT NULL,
-                UNIQUE(owner_id, scope, idempotency_key)
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_idempotency_updated ON idempotency_requests(updated_at DESC)"
-        )
+        _create_ops_tables(conn)
+        _create_ops_indexes(conn)
 
 
 def _init_stripe_db() -> None:
@@ -306,44 +317,31 @@ def _ensure_system_user() -> str:
         return user_id
 
 
-def ensure_builtin_agents_registered() -> None:
-    system_user_id = _ensure_system_user()
-    system_owner_id = f"user:{system_user_id}"
-    specs = _builtin_agent_specs()
-    managed_ids = {
-        str(spec.get("agent_id") or "").strip()
-        for spec in specs
-        if str(spec.get("agent_id") or "").strip()
-    }
-    # Self-heal: any curated built-in stuck in `suspended` from a prior
-    # run gets reactivated on startup. The auto-suspender now excludes
-    # curated builtins (see part_005._auto_suspend_low_performing_agents)
-    # but historic suspensions persist in the DB until cleared. Running
-    # this on every boot means a deploy is always sufficient to recover
-    # — no manual SQL UPDATE needed when an eval flips a builtin to
-    # suspended via failure-rate accumulation.
-    if managed_ids:
-        try:
-            with registry._conn() as conn:
-                placeholders = ",".join(["%s"] * len(managed_ids))
-                conn.execute(
-                    f"""
-                    UPDATE agents
-                    SET status = 'active', suspension_reason = NULL
-                    WHERE status = 'suspended'
-                      AND agent_id IN ({placeholders})
-                    """,
-                    tuple(managed_ids),
-                )
-        except Exception:
-            _LOG.exception(
-                "Failed to auto-heal suspended built-in agents at startup; "
-                "search may exclude them until manually cleared."
+def _heal_suspended_builtins(managed_ids: set[str]) -> None:
+    """Reactivate any curated built-in that was incorrectly suspended."""
+    if not managed_ids:
+        return
+    try:
+        with registry._conn() as conn:
+            placeholders = ",".join(["%s"] * len(managed_ids))
+            conn.execute(
+                f"""
+                UPDATE agents
+                SET status = 'active', suspension_reason = NULL
+                WHERE status = 'suspended'
+                  AND agent_id IN ({placeholders})
+                """,
+                tuple(managed_ids),
             )
-    # Install the per-agent match/block keyword overlay used by the search
-    # ranker so jargon queries (SBOM, IMDS, ReDoS, prototype pollution,
-    # log4shell, ...) route to the right agent. Overlay lives in core/
-    # but is sourced from the built-in specs the server owns.
+    except Exception:
+        _LOG.exception(
+            "Failed to auto-heal suspended built-in agents at startup; "
+            "search may exclude them until manually cleared."
+        )
+
+
+def _install_routing_overlay(specs: list[dict[str, Any]]) -> None:
+    """Push per-agent keyword match/block overlay into the search ranker."""
     try:
         from core.registry.agents_ops import set_routing_overlay
 
@@ -361,110 +359,119 @@ def ensure_builtin_agents_registered() -> None:
         )
     except Exception:
         _LOG.exception("Failed to install routing keyword overlay; search ranking degraded.")
-    now = _utc_now_iso()
 
-    for spec in specs:
-        existing = registry.get_agent(spec["agent_id"])
-        output_examples = spec.get("output_examples")
-        output_examples_json = None
-        if isinstance(output_examples, list):
-            output_examples_json = (
-                json.dumps([item for item in output_examples if isinstance(item, dict)])
-                or None
-            )
-        if existing is None:
-            # Historical guard: skip registration if another agent already
-            # uses this name. We keep it scoped to non-system owners so a
-            # stale user-registered agent doesn't block a curated builtin
-            # from being added on a later deploy. Builtins use deterministic
-            # UUID v5 IDs so the agent_id collision check above is the
-            # authoritative one — name uniqueness is enforced per-owner via
-            # DB constraints, not as a blanket gate here.
-            if _name_owned_by_other_user(spec["name"], system_owner_id):
-                continue
-            registry.register_agent(
-                agent_id=spec["agent_id"],
-                name=spec["name"],
-                description=spec["description"],
-                endpoint_url=spec["endpoint_url"],
-                price_per_call_usd=float(spec.get("price_per_call_usd", 0.01)),
-                tags=spec["tags"],
-                input_schema=spec["input_schema"],
-                output_schema=spec["output_schema"],
-                output_verifier_url=None,
-                output_examples=output_examples,
-                internal_only=bool(spec.get("internal_only", False)),
-                status="active",
-                owner_id=system_owner_id,
-                embed_listing=False,
-                model_provider="groq",
-                model_id="llama-3.3-70b-versatile",
-                kind="aztea_built",
-                cacheable=spec.get("cacheable"),
-            )
-            continue
 
-        with registry._conn() as conn:
-            conn.execute(
-                """
-                UPDATE agents
-                SET owner_id = %s,
-                    name = %s,
-                    description = %s,
-                    endpoint_url = %s,
-                    price_per_call_usd = %s,
-                    tags = %s,
-                    input_schema = %s,
-                    output_schema = %s,
-                    output_examples = %s,
-                    internal_only = %s,
-                    cacheable = %s,
-                    status = 'active',
-                    review_status = 'approved',
-                    reviewed_by = %s,
-                    reviewed_at = %s,
-                    model_provider = %s,
-                    model_id = %s,
-                    kind = 'aztea_built'
-                WHERE agent_id = %s
-                """,
-                (
-                    system_owner_id,
-                    spec["name"],
-                    spec["description"],
-                    spec["endpoint_url"],
-                    float(spec.get("price_per_call_usd", 0.01)),
-                    json.dumps(spec.get("tags") or []),
-                    json.dumps(spec.get("input_schema") or {}, sort_keys=True),
-                    json.dumps(spec.get("output_schema") or {}, sort_keys=True),
-                    output_examples_json,
-                    1 if bool(spec.get("internal_only", False)) else 0,
-                    None
-                    if spec.get("cacheable") is None
-                    else (1 if bool(spec.get("cacheable")) else 0),
-                    _SYSTEM_USERNAME,
-                    now,
-                    "groq",
-                    "llama-3.3-70b-versatile",
-                    spec["agent_id"],
-                ),
-            )
-
-    registry.backfill_agent_signing_keys(list(managed_ids), now)
-
-    # Defensive idempotent re-activation: every agent in the curated public
-    # set must have status=active, review_status=approved, internal_only=0.
-    # Without this, a single past deploy that suspended a curated builtin
-    # leaves it stranded in 'suspended' state forever — the UPDATE path in
-    # the main loop sets status='active' but only fires when the spec row is
-    # newly inserted; if the row already existed and was simply marked
-    # suspended later, the resurrection never happened. (Bug found in prod:
-    # shell_executor was suspended despite being in CURATED_PUBLIC.)
+def _update_existing_builtin(
+    spec: dict[str, Any],
+    system_owner_id: str,
+    now: str,
+    output_examples_json: str | None,
+) -> None:
+    """UPDATE an existing built-in agent row to the current spec."""
     with registry._conn() as conn:
-        # Seed every managed builtin (public + sunset). Sunset agents are
-        # hidden from list_agents but must remain approved/active so direct
-        # slug/agent_id calls (and historical receipts referencing them)
-        # continue to resolve cleanly.
+        conn.execute(
+            """
+            UPDATE agents
+            SET owner_id = %s,
+                name = %s,
+                description = %s,
+                endpoint_url = %s,
+                price_per_call_usd = %s,
+                tags = %s,
+                input_schema = %s,
+                output_schema = %s,
+                output_examples = %s,
+                internal_only = %s,
+                cacheable = %s,
+                status = 'active',
+                review_status = 'approved',
+                reviewed_by = %s,
+                reviewed_at = %s,
+                model_provider = %s,
+                model_id = %s,
+                kind = 'aztea_built'
+            WHERE agent_id = %s
+            """,
+            (
+                system_owner_id,
+                spec["name"],
+                spec["description"],
+                spec["endpoint_url"],
+                float(spec.get("price_per_call_usd", 0.01)),
+                json.dumps(spec.get("tags") or []),
+                json.dumps(spec.get("input_schema") or {}, sort_keys=True),
+                json.dumps(spec.get("output_schema") or {}, sort_keys=True),
+                output_examples_json,
+                1 if bool(spec.get("internal_only", False)) else 0,
+                None
+                if spec.get("cacheable") is None
+                else (1 if bool(spec.get("cacheable")) else 0),
+                _SYSTEM_USERNAME,
+                now,
+                "groq",
+                "llama-3.3-70b-versatile",
+                spec["agent_id"],
+            ),
+        )
+
+
+def _register_one_builtin(
+    spec: dict[str, Any],
+    system_owner_id: str,
+    now: str,
+) -> None:
+    """Insert or update a single built-in agent spec in the registry."""
+    output_examples = spec.get("output_examples")
+    output_examples_json = None
+    if isinstance(output_examples, list):
+        output_examples_json = (
+            json.dumps([item for item in output_examples if isinstance(item, dict)])
+            or None
+        )
+
+    existing = registry.get_agent(spec["agent_id"])
+    if existing is None:
+        if _name_owned_by_other_user(spec["name"], system_owner_id):
+            return
+        registry.register_agent(
+            agent_id=spec["agent_id"],
+            name=spec["name"],
+            description=spec["description"],
+            endpoint_url=spec["endpoint_url"],
+            price_per_call_usd=float(spec.get("price_per_call_usd", 0.01)),
+            tags=spec["tags"],
+            input_schema=spec["input_schema"],
+            output_schema=spec["output_schema"],
+            output_verifier_url=None,
+            output_examples=output_examples,
+            internal_only=bool(spec.get("internal_only", False)),
+            status="active",
+            owner_id=system_owner_id,
+            embed_listing=False,
+            model_provider="groq",
+            model_id="llama-3.3-70b-versatile",
+            kind="aztea_built",
+            cacheable=spec.get("cacheable"),
+        )
+        return
+
+    _update_existing_builtin(
+        spec=spec,
+        system_owner_id=system_owner_id,
+        now=now,
+        output_examples_json=output_examples_json,
+    )
+
+
+def _reactivate_curated_builtins() -> None:
+    """Ensure every curated public built-in is active/approved/public.
+
+    Guards against past deploy suspensions that were never recovered — the
+    UPDATE in _register_one_builtin only fires on the first insert path;
+    a row that existed but was later suspended would never get resurrected
+    without this explicit pass.
+    """
+    with registry._conn() as conn:
         for curated_id in _CURATED_BUILTIN_AGENT_IDS - {_QUALITY_JUDGE_AGENT_ID}:
             conn.execute(
                 """
@@ -480,6 +487,30 @@ def ensure_builtin_agents_registered() -> None:
                 (curated_id,),
             )
 
+
+def ensure_builtin_agents_registered() -> None:
+    system_user_id = _ensure_system_user()
+    system_owner_id = f"user:{system_user_id}"
+    specs = _builtin_agent_specs()
+    managed_ids = {
+        str(spec.get("agent_id") or "").strip()
+        for spec in specs
+        if str(spec.get("agent_id") or "").strip()
+    }
+    # Self-heal: any curated built-in stuck in `suspended` from a prior run
+    # gets reactivated on startup.
+    _heal_suspended_builtins(managed_ids)
+    # Install search-ranker keyword overlay.
+    _install_routing_overlay(specs)
+
+    now = _utc_now_iso()
+    for spec in specs:
+        _register_one_builtin(spec, system_owner_id=system_owner_id, now=now)
+
+    registry.backfill_agent_signing_keys(list(managed_ids), now)
+    # Defensive idempotent re-activation for curated public set.
+    _reactivate_curated_builtins()
+
     deprecated_ids = _BUILTIN_AGENT_IDS - managed_ids
     for agent_id in deprecated_ids:
         stale = registry.get_agent(agent_id, include_unapproved=True)
@@ -490,23 +521,28 @@ def ensure_builtin_agents_registered() -> None:
             registry.set_agent_status(agent_id, "suspended")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    if _ENVIRONMENT == "production" and not _ADMIN_IP_ALLOWLIST_NETWORKS:
+def _warn_production_config() -> None:
+    """Log warnings / raise for insecure production configs."""
+    if _ENVIRONMENT != "production":
+        return
+    if not _ADMIN_IP_ALLOWLIST_NETWORKS:
         _LOG.warning(
             "ADMIN_IP_ALLOWLIST is not set. Admin routes are accessible from any IP. "
             "Set ADMIN_IP_ALLOWLIST=<cidr>,... to restrict access in production."
         )
-    if _ENVIRONMENT == "production":
-        if not os.environ.get("API_KEY", "").strip():
-            raise RuntimeError("API_KEY must be set when ENVIRONMENT=production.")
-        _sbu = (os.environ.get("SERVER_BASE_URL", "") or "").strip()
-        if _sbu and not _sbu.lower().startswith("https://"):
-            _LOG.warning(
-                "SERVER_BASE_URL should use https in production (current: %s). "
-                "Behind TLS-terminating reverse proxies, set this to the public https URL.",
-                _sbu[:64],
-            )
+    if not os.environ.get("API_KEY", "").strip():
+        raise RuntimeError("API_KEY must be set when ENVIRONMENT=production.")
+    _sbu = (os.environ.get("SERVER_BASE_URL", "") or "").strip()
+    if _sbu and not _sbu.lower().startswith("https://"):
+        _LOG.warning(
+            "SERVER_BASE_URL should use https in production (current: %s). "
+            "Behind TLS-terminating reverse proxies, set this to the public https URL.",
+            _sbu[:64],
+        )
+
+
+def _setup_databases() -> None:
+    """Run all DB migrations and schema init in dependency order."""
     apply_migrations(jobs.DB_PATH)
     registry.init_db()
     payments.init_payments_db()
@@ -518,17 +554,16 @@ async def lifespan(app: FastAPI):
     pipelines.init_db()
     _init_ops_db()
     _init_stripe_db()
+
+
+def _seed_builtins() -> None:
+    """Register/update all built-in agents and recipes."""
     ensure_builtin_agents_registered()
     recipes.ensure_builtin_recipes()
 
-    # Optional warm-up of sentence-transformers MiniLM. With uvicorn's 3
-    # worker processes each independently loading ~80MB of weights at
-    # startup, a t-class EC2 instance OOM-kills the workers (silent
-    # SIGKILL — no Python traceback, just "Child process died" in the
-    # uvicorn supervisor). Default OFF so prod stays stable; opt in via
-    # AZTEA_WARM_EMBEDDINGS=1 on hosts with enough RAM, or pre-load a
-    # singleton in a forked-once pattern under gunicorn for the real
-    # cache-miss-latency win. Lazy load on first request still works.
+
+def _maybe_warm_embeddings() -> None:
+    """Optionally pre-load the MiniLM model and warm OpenAI embeddings."""
     if (
         _feature_flags.flag("AZTEA_WARM_EMBEDDINGS", default=False)
         and not _feature_flags.DISABLE_EMBEDDINGS
@@ -539,113 +574,113 @@ async def lifespan(app: FastAPI):
             _LOG.exception(
                 "Embedding model warm-up failed; semantic search will degrade gracefully on first hit."
             )
+    if os.environ.get("OPENAI_API_KEY"):
+        try:
+            embeddings.embed_text("warmup")
+        except Exception as exc:
+            _LOG.warning("Embedding warmup failed: %s", exc)
+
+
+def _maybe_start_thread(
+    enabled: bool,
+    target,
+    name: str,
+) -> tuple[threading.Event | None, threading.Thread | None]:
+    """Start a daemon thread with a stop_event if enabled; return (stop_event, thread)."""
+    if not enabled:
+        return None, None
+    stop_event = threading.Event()
+    thread = threading.Thread(target=target, args=(stop_event,), daemon=True, name=name)
+    thread.start()
+    return stop_event, thread
+
+
+def _start_workers(
+    is_leader: bool,
+) -> dict[str, tuple[threading.Event | None, threading.Thread | None]]:
+    """Start all background worker threads for the leader process.
+
+    Returns a dict mapping worker name → (stop_event, thread). Disabled
+    workers have their state flags set immediately.
+    """
+    workers: dict[str, tuple[threading.Event | None, threading.Thread | None]] = {}
+
+    workers["sweeper"] = _maybe_start_thread(
+        is_leader and _SWEEPER_ENABLED, _jobs_sweeper_loop, "aztea-job-sweeper"
+    )
+    if not (is_leader and _SWEEPER_ENABLED):
+        _set_sweeper_state(running=False)
+
+    workers["hook"] = _maybe_start_thread(
+        is_leader and _HOOK_DELIVERY_ENABLED, _hook_delivery_loop, "aztea-hook-delivery"
+    )
+    if not (is_leader and _HOOK_DELIVERY_ENABLED):
+        _set_hook_worker_state(running=False)
+
+    workers["builtin"] = _maybe_start_thread(
+        is_leader and _BUILTIN_JOB_WORKER_ENABLED,
+        _builtin_worker_loop,
+        "aztea-builtin-worker",
+    )
+    if not (is_leader and _BUILTIN_JOB_WORKER_ENABLED):
+        _set_builtin_worker_state(running=False)
+
+    workers["dispute"] = _maybe_start_thread(
+        is_leader and _DISPUTE_JUDGE_ENABLED, _dispute_judge_loop, "aztea-dispute-judge"
+    )
+    if not (is_leader and _DISPUTE_JUDGE_ENABLED):
+        _set_dispute_judge_state(running=False)
+
+    workers["agent_health"] = _maybe_start_thread(
+        is_leader and _AGENT_HEALTH_CHECK_ENABLED,
+        _agent_health_loop,
+        "aztea-agent-health",
+    )
+
+    workers["watchers"] = _maybe_start_thread(
+        is_leader and _watchers_sweeper.WATCHERS_ENABLED,
+        _watchers_sweeper.watchers_sweeper_loop,
+        "aztea-watchers-sweeper",
+    )
+
+    workers["payments_recon"] = _maybe_start_thread(
+        is_leader and _PAYMENTS_RECONCILIATION_ENABLED,
+        _payments_reconciliation_loop,
+        "aztea-payments-reconciliation",
+    )
+    if not (is_leader and _PAYMENTS_RECONCILIATION_ENABLED):
+        _set_payments_reconciliation_state(running=False)
+
+    return workers
+
+
+def _shutdown_workers(
+    workers: dict[str, tuple[threading.Event | None, threading.Thread | None]],
+) -> None:
+    """Signal all worker threads to stop and join them."""
+    for stop_event, thread in workers.values():
+        if stop_event is not None:
+            stop_event.set()
+    for stop_event, thread in workers.values():
+        if thread is not None:
+            thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _warn_production_config()
+    _setup_databases()
+    _seed_builtins()
+    _maybe_warm_embeddings()
 
     _set_server_shutting_down(False)
-    stop_event: threading.Event | None = None
-    sweeper_thread: threading.Thread | None = None
-    hook_stop_event: threading.Event | None = None
-    hook_thread: threading.Thread | None = None
-    builtin_stop_event: threading.Event | None = None
-    builtin_thread: threading.Thread | None = None
-    dispute_judge_stop_event: threading.Event | None = None
-    dispute_judge_thread: threading.Thread | None = None
-    payments_reconciliation_stop_event: threading.Event | None = None
-    payments_reconciliation_thread: threading.Thread | None = None
     is_background_worker_leader = _acquire_background_worker_lock()
     if not is_background_worker_leader:
         _LOG.info(
             "Background workers disabled in this process; another worker owns the lock."
         )
 
-    if is_background_worker_leader and _SWEEPER_ENABLED:
-        stop_event = threading.Event()
-        sweeper_thread = threading.Thread(
-            target=_jobs_sweeper_loop,
-            args=(stop_event,),
-            daemon=True,
-            name="aztea-job-sweeper",
-        )
-        sweeper_thread.start()
-    else:
-        _set_sweeper_state(running=False)
-
-    if is_background_worker_leader and _HOOK_DELIVERY_ENABLED:
-        hook_stop_event = threading.Event()
-        hook_thread = threading.Thread(
-            target=_hook_delivery_loop,
-            args=(hook_stop_event,),
-            daemon=True,
-            name="aztea-hook-delivery",
-        )
-        hook_thread.start()
-    else:
-        _set_hook_worker_state(running=False)
-
-    if is_background_worker_leader and _BUILTIN_JOB_WORKER_ENABLED:
-        builtin_stop_event = threading.Event()
-        builtin_thread = threading.Thread(
-            target=_builtin_worker_loop,
-            args=(builtin_stop_event,),
-            daemon=True,
-            name="aztea-builtin-worker",
-        )
-        builtin_thread.start()
-    else:
-        _set_builtin_worker_state(running=False)
-
-    if is_background_worker_leader and _DISPUTE_JUDGE_ENABLED:
-        dispute_judge_stop_event = threading.Event()
-        dispute_judge_thread = threading.Thread(
-            target=_dispute_judge_loop,
-            args=(dispute_judge_stop_event,),
-            daemon=True,
-            name="aztea-dispute-judge",
-        )
-        dispute_judge_thread.start()
-    else:
-        _set_dispute_judge_state(running=False)
-
-    agent_health_stop_event: threading.Event | None = None
-    agent_health_thread: threading.Thread | None = None
-    if is_background_worker_leader and _AGENT_HEALTH_CHECK_ENABLED:
-        agent_health_stop_event = threading.Event()
-        agent_health_thread = threading.Thread(
-            target=_agent_health_loop,
-            args=(agent_health_stop_event,),
-            daemon=True,
-            name="aztea-agent-health",
-        )
-        agent_health_thread.start()
-
-    watchers_stop_event: threading.Event | None = None
-    watchers_thread: threading.Thread | None = None
-    if is_background_worker_leader and _watchers_sweeper.WATCHERS_ENABLED:
-        watchers_stop_event = threading.Event()
-        watchers_thread = threading.Thread(
-            target=_watchers_sweeper.watchers_sweeper_loop,
-            args=(watchers_stop_event,),
-            daemon=True,
-            name="aztea-watchers-sweeper",
-        )
-        watchers_thread.start()
-
-    if is_background_worker_leader and _PAYMENTS_RECONCILIATION_ENABLED:
-        payments_reconciliation_stop_event = threading.Event()
-        payments_reconciliation_thread = threading.Thread(
-            target=_payments_reconciliation_loop,
-            args=(payments_reconciliation_stop_event,),
-            daemon=True,
-            name="aztea-payments-reconciliation",
-        )
-        payments_reconciliation_thread.start()
-    else:
-        _set_payments_reconciliation_state(running=False)
-
-    if os.environ.get("OPENAI_API_KEY"):
-        try:
-            embeddings.embed_text("warmup")
-        except Exception as exc:
-            _LOG.warning("Embedding warmup failed: %s", exc)
+    workers = _start_workers(is_leader=is_background_worker_leader)
 
     try:
         yield
@@ -656,36 +691,7 @@ async def lifespan(app: FastAPI):
             if _inflight_requests_count() <= 0:
                 break
             await asyncio.sleep(0.05)
-        if stop_event is not None:
-            stop_event.set()
-        if sweeper_thread is not None:
-            sweeper_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
-        if hook_stop_event is not None:
-            hook_stop_event.set()
-        if hook_thread is not None:
-            hook_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
-        if builtin_stop_event is not None:
-            builtin_stop_event.set()
-        if builtin_thread is not None:
-            builtin_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
-        if dispute_judge_stop_event is not None:
-            dispute_judge_stop_event.set()
-        if dispute_judge_thread is not None:
-            dispute_judge_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
-        if payments_reconciliation_stop_event is not None:
-            payments_reconciliation_stop_event.set()
-        if payments_reconciliation_thread is not None:
-            payments_reconciliation_thread.join(
-                timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS
-            )
-        if agent_health_stop_event is not None:
-            agent_health_stop_event.set()
-        if agent_health_thread is not None:
-            agent_health_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
-        if watchers_stop_event is not None:
-            watchers_stop_event.set()
-        if watchers_thread is not None:
-            watchers_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
+        _shutdown_workers(workers)
         if is_background_worker_leader:
             _release_background_worker_lock()
         _close_all_db_connections()
