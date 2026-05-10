@@ -535,77 +535,30 @@ def wallet_spend_summary(
 # ---------------------------------------------------------------------------
 
 
-@app.get(
-    "/wallets/audit",
-    responses=_error_responses(401, 403, 422, 429, 500),
-    tags=["Wallets"],
-    summary="Auditor-grade rollup: spend + signed receipts + optional bulk Ed25519 verification + digest.",
-)
-@limiter.limit("30/minute")
-def wallet_audit(
-    request: Request,
-    period: str = "1d",
-    since: str | None = None,
-    until: str | None = None,
-    limit: int = 100,
-    verify_all: bool = False,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> JSONResponse:
-    """Single-call audit surface: spend rollup + signed receipts + aggregate
-    digest + optional bulk Ed25519 verification across the caller's recent
-    completed jobs.
+def _audit_parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 string to an aware datetime; return None on failure."""
+    if not value:
+        return None
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        return datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
 
-    Query params:
-      * ``period``  — ``1d``/``7d``/``30d``/``90d`` (default 1d).
-      * ``since``   — ISO-8601 lower bound on settled_at; receipts older are excluded.
-      * ``until``   — ISO-8601 upper bound on settled_at; receipts newer are excluded.
-      * ``limit``   — receipts to include (1–200, default 100).
-      * ``verify_all`` — when true, run Ed25519 verification on every signed
-        receipt in the window and return aggregate verified/failed counts +
-        first-failure detail. In-process verification, sub-50ms per receipt.
 
-    The ``receipts_digest`` is a SHA-256 fingerprint of (job_id|output_hash|signed)
-    rows joined by newline. A different digest on a subsequent poll means
-    something material in the audit window changed — caller can pin the
-    digest in storage and re-verify on demand without re-walking receipts.
+def _audit_fetch_snapshot(
+    *,
+    caller_owner_id: str,
+    period_since_iso: str,
+    job_limit: int,
+) -> tuple[list, Any, list]:
+    """Query spend rows, period totals, and receipt rows in one connection.
+
+    Returns (spend_rows, totals_row, receipt_rows).
+    Read-only — no mutations.
     """
-    import hashlib as _hashlib
-
-    _require_scope(caller, "caller")
-
-    period_normalized = str(period or "1d").strip().lower()
-    if period_normalized not in {"1d", "7d", "30d", "90d"}:
-        period_normalized = "1d"
-    days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
-    days = days_map[period_normalized]
-
-    def _parse_iso(value: str | None) -> datetime | None:
-        if not value:
-            return None
-        try:
-            text = str(value).strip().replace("Z", "+00:00")
-            return datetime.fromisoformat(text)
-        except (TypeError, ValueError):
-            return None
-
-    since_dt = _parse_iso(since)
-    until_dt = _parse_iso(until)
-    job_limit = max(1, min(200, int(limit or 100)))
-
-    period_since_dt = datetime.now(timezone.utc) - timedelta(days=days)
-    period_since_iso = period_since_dt.isoformat()
-
-    caller_owner_id = _caller_owner_id(request)
-    wallet = payments.get_or_create_wallet(caller_owner_id)
-    wallet_id = wallet["wallet_id"]
-
-    # Spend rollup (mirrors /wallets/spend-summary so callers don't need a
-    # second endpoint). Same SQL shape — kept inline rather than refactored
-    # into a shared helper because the spend response above also exposes
-    # legacy fields (sunset_by_agent, include_sunset) that aren't needed
-    # by the audit response.
     with jobs._conn() as conn:
-        rows = conn.execute(
+        spend_rows = conn.execute(
             """
             SELECT agent_id, SUM(price_cents) AS total_cents, COUNT(*) AS job_count
             FROM jobs
@@ -626,12 +579,7 @@ def wallet_audit(
             """,
             (caller_owner_id, period_since_iso),
         ).fetchone()
-
-        # Receipts: completed jobs ordered by settled_at desc, narrowed by
-        # since/until if supplied. We pull a slightly larger window than
-        # `limit` so the aggregate digest is stable when the caller
-        # paginates (digest covers the same set of receipts each call for
-        # the same window).
+        # Pull a 2× window so digest is stable across paginated calls.
         receipt_rows = conn.execute(
             """
             SELECT job_id, agent_id, price_cents, caller_charge_cents,
@@ -646,10 +594,23 @@ def wallet_audit(
             """,
             (caller_owner_id, job_limit * 2),
         ).fetchall()
+    return spend_rows, totals, receipt_rows
+
+
+def _audit_build_spend(
+    *,
+    spend_rows: list,
+    totals: Any,
+    period_normalized: str,
+    days: int,
+    wallet_id: str,
+) -> dict[str, Any]:
+    """Build the spend section of the audit response. Read-only."""
+    import hashlib as _hashlib  # noqa: F401 — imported for sibling callers in scope
 
     sunset_ids = set(_builtin_constants.SUNSET_DEPRECATED_AGENT_IDS)
     by_agent_live: list[dict[str, Any]] = []
-    for row in rows:
+    for row in spend_rows:
         agent_id = row["agent_id"]
         if agent_id in sunset_ids:
             continue
@@ -671,7 +632,7 @@ def wallet_audit(
                 "job_count": int(row["job_count"] or 0),
             }
         )
-    spend = {
+    return {
         "period": period_normalized,
         "days": days,
         "total_cents": int((totals["total_cents"] or 0) if totals else 0),
@@ -681,13 +642,28 @@ def wallet_audit(
         "wallet_id": wallet_id,
     }
 
-    # Filter receipts by since/until and shape for response. Receipt
-    # rendering matches the existing /jobs/{id}/signature shape so MCP
-    # clients can pass any single receipt straight back to verify.
+
+def _audit_fold_receipts(
+    *,
+    receipt_rows: list,
+    since_dt: datetime | None,
+    until_dt: datetime | None,
+    job_limit: int,
+) -> list[dict[str, Any]]:
+    """Filter and shape receipt DB rows into the public receipt list.
+
+    Filter receipts by since/until and shape for response. Receipt
+    rendering matches the existing /jobs/{id}/signature shape so MCP
+    clients can pass any single receipt straight back to verify.
+    """
+    import hashlib as _hashlib
+
+    from core import crypto as _crypto
+
     receipts: list[dict[str, Any]] = []
     for row in receipt_rows:
         settled_at_value = row.get("settled_at")
-        settled_dt = _parse_iso(
+        settled_dt = _audit_parse_iso(
             settled_at_value.isoformat()
             if hasattr(settled_at_value, "isoformat")
             else settled_at_value
@@ -702,8 +678,6 @@ def wallet_audit(
         # output_payload (matches what jobs_signature returns).
         output_hash = None
         try:
-            from core import crypto as _crypto
-
             output_hash = _hashlib.sha256(
                 _crypto.canonical_json(row.get("output_payload"))
             ).hexdigest()
@@ -738,20 +712,185 @@ def wallet_audit(
         )
         if len(receipts) >= job_limit:
             break
+    return receipts
 
-    # Aggregate digest: SHA-256 over a canonical newline-joined string.
-    # NOT a Merkle root — receipts are still individually signed by their
-    # agents — but it gives auditors a single fingerprint they can pin and
-    # detect tampering with without re-walking every receipt.
+
+def _audit_compute_digest(receipts: list[dict[str, Any]]) -> str | None:
+    """SHA-256 fingerprint over canonical receipt lines.
+
+    Aggregate digest: SHA-256 over a canonical newline-joined string.
+    NOT a Merkle root — receipts are still individually signed by their
+    agents — but it gives auditors a single fingerprint they can pin and
+    detect tampering with without re-walking every receipt.
+    """
+    import hashlib as _hashlib
+
     digest_lines = [
         f"{r.get('job_id')}|{r.get('output_hash') or ''}|{1 if r.get('signed') else 0}"
         for r in receipts
     ]
-    receipts_digest = (
+    return (
         _hashlib.sha256("\n".join(digest_lines).encode("utf-8")).hexdigest()
         if digest_lines
         else None
     )
+
+
+def _audit_bulk_verify(
+    receipts: list[dict[str, Any]],
+    receipt_rows: list,
+) -> dict[str, Any]:
+    """Run Ed25519 verification on each signed receipt in-process.
+
+    Bulk Ed25519 verification — runs in-process, no HTTP round-trips.
+    Public keys are cached per agent_id within this call so an audit
+    window with N receipts touching K agents loads K public keys, not N.
+    Each verify is sub-50ms; we still cap the call by the receipt
+    window via `limit`, so the worst case is bounded.
+    """
+    from core import crypto as _crypto
+
+    verified = 0
+    failed = 0
+    first_failure: dict[str, Any] | None = None
+    public_key_cache: dict[str, str | None] = {}
+    for r, row in zip(receipts, receipt_rows[: len(receipts)]):
+        if not r.get("signed"):
+            continue
+        agent_id = r.get("agent_id") or ""
+        if agent_id not in public_key_cache:
+            try:
+                ag = registry.get_agent(agent_id, include_unapproved=True)
+                public_key_cache[agent_id] = ag.get("signing_public_key") if ag else None
+            except Exception:
+                public_key_cache[agent_id] = None
+        public_pem = public_key_cache.get(agent_id)
+        if not public_pem:
+            failed += 1
+            if first_failure is None:
+                first_failure = {
+                    "job_id": r.get("job_id"),
+                    "agent_id": agent_id,
+                    "verification_error": "agent_public_key_unavailable",
+                }
+            continue
+        try:
+            ok = _crypto.verify_signature(
+                public_pem,
+                row.get("output_payload"),
+                row.get("output_signature") or "",
+            )
+        except Exception as exc:
+            failed += 1
+            if first_failure is None:
+                first_failure = {
+                    "job_id": r.get("job_id"),
+                    "agent_id": agent_id,
+                    "verification_error": f"verify_raised: {exc!r}",
+                }
+            continue
+        if ok:
+            verified += 1
+        else:
+            failed += 1
+            if first_failure is None:
+                first_failure = {
+                    "job_id": r.get("job_id"),
+                    "agent_id": agent_id,
+                    "verification_error": "signature_mismatch",
+                }
+    if verified == 0 and failed == 0:
+        verdict = "no_signed_receipts"
+    elif failed == 0:
+        verdict = "all_verified"
+    else:
+        verdict = "verification_failed"
+    return {
+        "verified": verified,
+        "failed": failed,
+        "first_failure": first_failure,
+        "verdict": verdict,
+    }
+
+
+@app.get(
+    "/wallets/audit",
+    responses=_error_responses(401, 403, 422, 429, 500),
+    tags=["Wallets"],
+    summary="Auditor-grade rollup: spend + signed receipts + optional bulk Ed25519 verification + digest.",
+)
+@limiter.limit("30/minute")
+def wallet_audit(
+    request: Request,
+    period: str = "1d",
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 100,
+    verify_all: bool = False,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Single-call audit surface: spend rollup + signed receipts + aggregate
+    digest + optional bulk Ed25519 verification across the caller's recent
+    completed jobs.
+
+    Query params:
+      * ``period``  — ``1d``/``7d``/``30d``/``90d`` (default 1d).
+      * ``since``   — ISO-8601 lower bound on settled_at; receipts older are excluded.
+      * ``until``   — ISO-8601 upper bound on settled_at; receipts newer are excluded.
+      * ``limit``   — receipts to include (1–200, default 100).
+      * ``verify_all`` — when true, run Ed25519 verification on every signed
+        receipt in the window and return aggregate verified/failed counts +
+        first-failure detail. In-process verification, sub-50ms per receipt.
+
+    The ``receipts_digest`` is a SHA-256 fingerprint of (job_id|output_hash|signed)
+    rows joined by newline. A different digest on a subsequent poll means
+    something material in the audit window changed — caller can pin the
+    digest in storage and re-verify on demand without re-walking receipts.
+    """
+    _require_scope(caller, "caller")
+
+    period_normalized = str(period or "1d").strip().lower()
+    if period_normalized not in {"1d", "7d", "30d", "90d"}:
+        period_normalized = "1d"
+    days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
+    days = days_map[period_normalized]
+
+    since_dt = _audit_parse_iso(since)
+    until_dt = _audit_parse_iso(until)
+    job_limit = max(1, min(200, int(limit or 100)))
+
+    period_since_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    caller_owner_id = _caller_owner_id(request)
+    wallet = payments.get_or_create_wallet(caller_owner_id)
+    wallet_id = wallet["wallet_id"]
+
+    # Spend rollup (mirrors /wallets/spend-summary so callers don't need a
+    # second endpoint). Same SQL shape — kept inline rather than refactored
+    # into a shared helper because the spend response above also exposes
+    # legacy fields (sunset_by_agent, include_sunset) that aren't needed
+    # by the audit response.
+    spend_rows, totals, receipt_rows = _audit_fetch_snapshot(
+        caller_owner_id=caller_owner_id,
+        period_since_iso=period_since_iso,
+        job_limit=job_limit,
+    )
+
+    spend = _audit_build_spend(
+        spend_rows=spend_rows,
+        totals=totals,
+        period_normalized=period_normalized,
+        days=days,
+        wallet_id=wallet_id,
+    )
+
+    receipts = _audit_fold_receipts(
+        receipt_rows=receipt_rows,
+        since_dt=since_dt,
+        until_dt=until_dt,
+        job_limit=job_limit,
+    )
+
+    receipts_digest = _audit_compute_digest(receipts)
 
     aggregates = {
         "receipts_total": len(receipts),
@@ -793,76 +932,7 @@ def wallet_audit(
     }
 
     if verify_all:
-        # Bulk Ed25519 verification — runs in-process, no HTTP round-trips.
-        # Public keys are cached per agent_id within this call so an audit
-        # window with N receipts touching K agents loads K public keys, not
-        # N. Each verify is sub-50ms; we still cap the call by the receipt
-        # window via `limit`, so the worst case is bounded.
-        from core import crypto as _crypto
-
-        verified = 0
-        failed = 0
-        first_failure: dict[str, Any] | None = None
-        public_key_cache: dict[str, str | None] = {}
-        for r, row in zip(receipts, receipt_rows[: len(receipts)]):
-            if not r.get("signed"):
-                continue
-            agent_id = r.get("agent_id") or ""
-            if agent_id not in public_key_cache:
-                try:
-                    ag = registry.get_agent(agent_id, include_unapproved=True)
-                    public_key_cache[agent_id] = (
-                        ag.get("signing_public_key") if ag else None
-                    )
-                except Exception:
-                    public_key_cache[agent_id] = None
-            public_pem = public_key_cache.get(agent_id)
-            if not public_pem:
-                failed += 1
-                if first_failure is None:
-                    first_failure = {
-                        "job_id": r.get("job_id"),
-                        "agent_id": agent_id,
-                        "verification_error": "agent_public_key_unavailable",
-                    }
-                continue
-            try:
-                ok = _crypto.verify_signature(
-                    public_pem,
-                    row.get("output_payload"),
-                    row.get("output_signature") or "",
-                )
-            except Exception as exc:
-                failed += 1
-                if first_failure is None:
-                    first_failure = {
-                        "job_id": r.get("job_id"),
-                        "agent_id": agent_id,
-                        "verification_error": f"verify_raised: {exc!r}",
-                    }
-                continue
-            if ok:
-                verified += 1
-            else:
-                failed += 1
-                if first_failure is None:
-                    first_failure = {
-                        "job_id": r.get("job_id"),
-                        "agent_id": agent_id,
-                        "verification_error": "signature_mismatch",
-                    }
-        if verified == 0 and failed == 0:
-            verdict = "no_signed_receipts"
-        elif failed == 0:
-            verdict = "all_verified"
-        else:
-            verdict = "verification_failed"
-        response["bulk_verification"] = {
-            "verified": verified,
-            "failed": failed,
-            "first_failure": first_failure,
-            "verdict": verdict,
-        }
+        response["bulk_verification"] = _audit_bulk_verify(receipts, receipt_rows)
     else:
         response["bulk_verification_hint"] = (
             "Pass verify_all=true to Ed25519-verify every signed receipt in this window in-process."
