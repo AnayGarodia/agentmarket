@@ -319,6 +319,52 @@ def test_topup_session_enforces_daily_limit(client, monkeypatch):
     assert allowed.json()["session_id"] == "cs_test_123"
 
 
+def test_topup_session_passes_deterministic_idempotency_key(client, monkeypatch):
+    """A double-click on top-up within the same ~60s window must collapse to
+    the same Stripe session via a deterministic idempotency_key, so the user
+    can't accidentally create two billable checkout rows."""
+    user = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+
+    captured_kwargs: list[dict] = []
+
+    def _fake_create(**kwargs):
+        captured_kwargs.append(kwargs)
+        return SimpleNamespace(
+            url="https://checkout.example/session", id="cs_test_idem"
+        )
+
+    fake_checkout = SimpleNamespace(Session=SimpleNamespace(create=_fake_create))
+    monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
+    monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(
+        server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout)
+    )
+
+    body = {"wallet_id": wallet["wallet_id"], "amount_cents": 1500}
+    headers = _auth_headers(user["raw_api_key"])
+
+    first = client.post("/wallets/topup/session", headers=headers, json=body)
+    assert first.status_code == 200, first.text
+    second = client.post("/wallets/topup/session", headers=headers, json=body)
+    assert second.status_code == 200, second.text
+
+    assert len(captured_kwargs) == 2
+    keys = [kw.get("idempotency_key") for kw in captured_kwargs]
+    assert all(isinstance(k, str) and k.startswith("aztea-topup-") for k in keys), keys
+    assert keys[0] == keys[1], "idempotency_key must be deterministic within a minute"
+
+    # A different amount must produce a different key (otherwise Stripe would
+    # collapse legitimately distinct top-ups).
+    other = client.post(
+        "/wallets/topup/session",
+        headers=headers,
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 1600},
+    )
+    assert other.status_code == 200, other.text
+    assert captured_kwargs[-1].get("idempotency_key") != keys[0]
+
+
 def test_wallet_deposit_enforces_minimum_amount(client):
     user = _register_user()
     wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
