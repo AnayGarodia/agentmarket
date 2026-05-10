@@ -359,112 +359,110 @@ def _parse_job_message_protocol_fallback(
     raise ValueError(f"Unsupported job message type: {msg_type}")
 
 
+def _validate_progress_payload(normalized: dict) -> dict:
+    percent_raw = normalized.get("percent")
+    if percent_raw is None:
+        raise ValueError("progress payload.percent is required.")
+    try:
+        percent = int(percent_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "progress payload.percent must be an integer between 0 and 100."
+        ) from exc
+    if percent < 0 or percent > 100:
+        raise ValueError("progress payload.percent must be an integer between 0 and 100.")
+    normalized["percent"] = percent
+    note = str(normalized.get("note") or "").strip()
+    if note:
+        normalized["note"] = note
+    return normalized
+
+
+def _validate_agent_message_payload(normalized: dict) -> dict:
+    channel = str(normalized.get("channel") or "").strip()
+    if not channel:
+        raise ValueError("agent_message payload.channel is required.")
+    normalized["channel"] = channel
+    body = normalized.get("body")
+    if isinstance(body, str):
+        body_text = body.strip()
+        if not body_text:
+            raise ValueError("agent_message payload.body must not be empty.")
+        normalized["body"] = body_text
+    elif isinstance(body, dict):
+        normalized["body"] = dict(body)
+    else:
+        raise ValueError("agent_message payload.body must be an object or non-empty string.")
+    to_id = str(normalized.get("to_id") or "").strip()
+    if to_id:
+        normalized["to_id"] = to_id
+    else:
+        normalized.pop("to_id", None)
+    return normalized
+
+
+def _validate_tool_call_payload(normalized: dict) -> dict:
+    tool_name = str(normalized.get("tool_name") or normalized.get("name") or "").strip()
+    if not tool_name:
+        raise ValueError("tool_call payload.tool_name is required.")
+    normalized["tool_name"] = tool_name
+    args = normalized.get("args")
+    if args is None:
+        normalized["args"] = {}
+    elif not isinstance(args, dict):
+        raise ValueError("tool_call payload.args must be an object.")
+    correlation_id = str(normalized.get("correlation_id") or "").strip()
+    if correlation_id:
+        normalized["correlation_id"] = correlation_id
+    else:
+        normalized.pop("correlation_id", None)
+    return normalized
+
+
+def _validate_tool_result_payload(normalized: dict) -> dict:
+    correlation_id = str(normalized.get("correlation_id") or "").strip()
+    if not correlation_id:
+        raise ValueError("tool_result payload.correlation_id is required.")
+    normalized["correlation_id"] = correlation_id
+    result_payload = normalized.get("payload")
+    if result_payload is None:
+        normalized["payload"] = {}
+    elif not isinstance(result_payload, dict):
+        raise ValueError("tool_result payload.payload must be an object.")
+    return normalized
+
+
 def _validate_typed_job_message_payload(msg_type: str, payload: dict) -> dict:
     normalized = dict(payload)
 
-    def _required_text(field: str, label: str | None = None) -> str:
-        key = label or field
+    def _required_text(field: str) -> str:
         value = str(normalized.get(field, "")).strip()
         if not value:
-            raise ValueError(f"{msg_type} payload.{key} is required.")
+            raise ValueError(f"{msg_type} payload.{field} is required.")
         return value
 
     if msg_type == "clarification_request":
         normalized["question"] = _required_text("question")
         return normalized
-
     if msg_type == "clarification_response":
         normalized["answer"] = _required_text("answer")
         return normalized
-
     if msg_type == "note":
         text = str(
-            normalized.get("message")
-            or normalized.get("note")
-            or normalized.get("text")
-            or ""
+            normalized.get("message") or normalized.get("note") or normalized.get("text") or ""
         ).strip()
         if not text:
             raise ValueError("note payload.text is required.")
         normalized["text"] = text
         return normalized
-
     if msg_type == "progress":
-        percent_raw = normalized.get("percent")
-        if percent_raw is None:
-            raise ValueError("progress payload.percent is required.")
-        if percent_raw is not None:
-            try:
-                percent = int(percent_raw)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "progress payload.percent must be an integer between 0 and 100."
-                ) from exc
-            if percent < 0 or percent > 100:
-                raise ValueError(
-                    "progress payload.percent must be an integer between 0 and 100."
-                )
-            normalized["percent"] = percent
-        note = str(normalized.get("note") or "").strip()
-        if note:
-            normalized["note"] = note
-        return normalized
-
+        return _validate_progress_payload(normalized)
     if msg_type == "agent_message":
-        channel = str(normalized.get("channel") or "").strip()
-        if not channel:
-            raise ValueError("agent_message payload.channel is required.")
-        normalized["channel"] = channel
-        body = normalized.get("body")
-        if isinstance(body, str):
-            body_text = body.strip()
-            if not body_text:
-                raise ValueError("agent_message payload.body must not be empty.")
-            normalized["body"] = body_text
-        elif isinstance(body, dict):
-            normalized["body"] = dict(body)
-        else:
-            raise ValueError(
-                "agent_message payload.body must be an object or non-empty string."
-            )
-        to_id = str(normalized.get("to_id") or "").strip()
-        if to_id:
-            normalized["to_id"] = to_id
-        else:
-            normalized.pop("to_id", None)
-        return normalized
-
+        return _validate_agent_message_payload(normalized)
     if msg_type == "tool_call":
-        tool_name = str(
-            normalized.get("tool_name") or normalized.get("name") or ""
-        ).strip()
-        if not tool_name:
-            raise ValueError("tool_call payload.tool_name is required.")
-        normalized["tool_name"] = tool_name
-        args = normalized.get("args")
-        if args is None:
-            normalized["args"] = {}
-        elif not isinstance(args, dict):
-            raise ValueError("tool_call payload.args must be an object.")
-        correlation_id = str(normalized.get("correlation_id") or "").strip()
-        if correlation_id:
-            normalized["correlation_id"] = correlation_id
-        else:
-            normalized.pop("correlation_id", None)
-        return normalized
-
+        return _validate_tool_call_payload(normalized)
     if msg_type == "tool_result":
-        correlation_id = str(normalized.get("correlation_id") or "").strip()
-        if not correlation_id:
-            raise ValueError("tool_result payload.correlation_id is required.")
-        normalized["correlation_id"] = correlation_id
-        result_payload = normalized.get("payload")
-        if result_payload is None:
-            normalized["payload"] = {}
-        elif not isinstance(result_payload, dict):
-            raise ValueError("tool_result payload.payload must be an object.")
-        return normalized
-
+        return _validate_tool_result_payload(normalized)
     raise ValueError(f"Unsupported typed message type: {msg_type}")
 
 
@@ -624,6 +622,55 @@ def _idempotency_inprogress_is_stale(created_at_iso: str, now_iso: str) -> bool:
     return (now_dt - created_dt).total_seconds() > _IDEMPOTENCY_INPROGRESS_TTL_SECONDS
 
 
+def _idempotency_select_row(
+    conn,
+    owner_id: str,
+    scope: str,
+    idempotency_key: str,
+) -> dict | None:
+    return conn.execute(
+        """
+        SELECT request_hash, status, response_status, response_body, created_at
+        FROM idempotency_requests
+        WHERE owner_id = %s AND scope = %s AND idempotency_key = %s
+        """,
+        (owner_id, scope, idempotency_key),
+    ).fetchone()
+
+
+def _idempotency_interpret_row(
+    row: dict,
+    request_hash: str,
+    now: str,
+) -> dict | None:
+    """Return replay dict for completed rows, raise on mismatch/live-in-progress,
+    or None if the row is a stale in_progress the caller may overwrite."""
+    if row["request_hash"] != request_hash:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{_IDEMPOTENCY_KEY_HEADER} was already used for a different request payload.",
+        )
+    if row["status"] == "completed":
+        try:
+            replay_body = json.loads(row["response_body"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            replay_body = error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "Stored idempotent response is invalid.",
+            )
+        return {
+            "replay": True,
+            "status_code": int(row["response_status"] or 200),
+            "body": replay_body,
+        }
+    if _idempotency_inprogress_is_stale(str(row["created_at"] or ""), now):
+        return None  # stale — caller may overwrite
+    raise HTTPException(
+        status_code=409,
+        detail=f"A request with this {_IDEMPOTENCY_KEY_HEADER} is still in progress.",
+    )
+
+
 def _idempotency_begin(
     request: Request,
     caller: core_models.CallerContext,
@@ -639,65 +686,19 @@ def _idempotency_begin(
         )
 
     owner_id = caller["owner_id"]
-    request_hash = hashlib.sha256(
-        _stable_json_text(payload).encode("utf-8")
-    ).hexdigest()
+    request_hash = hashlib.sha256(_stable_json_text(payload).encode("utf-8")).hexdigest()
     now = _utc_now_iso()
-
-    def _select_row(conn) -> dict | None:
-        return conn.execute(
-            """
-            SELECT request_hash, status, response_status, response_body, created_at
-            FROM idempotency_requests
-            WHERE owner_id = %s AND scope = %s AND idempotency_key = %s
-            """,
-            (owner_id, scope, idempotency_key),
-        ).fetchone()
-
-    def _interpret_row(row: dict) -> dict | None:
-        """Return a replay dict for completed rows, raise on payload mismatch
-        or live in_progress, or return ``None`` if the row is a stale
-        in_progress that the caller should overwrite."""
-        if row["request_hash"] != request_hash:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"{_IDEMPOTENCY_KEY_HEADER} was already used for a different request payload."
-                ),
-            )
-        if row["status"] == "completed":
-            try:
-                replay_body = json.loads(row["response_body"] or "{}")
-            except (TypeError, json.JSONDecodeError):
-                replay_body = error_codes.make_error(
-                    error_codes.INVALID_INPUT,
-                    "Stored idempotent response is invalid.",
-                )
-            return {
-                "replay": True,
-                "status_code": int(row["response_status"] or 200),
-                "body": replay_body,
-            }
-        if _idempotency_inprogress_is_stale(str(row["created_at"] or ""), now):
-            return None  # caller may overwrite the stale row
-        raise HTTPException(
-            status_code=409,
-            detail=f"A request with this {_IDEMPOTENCY_KEY_HEADER} is still in progress.",
-        )
 
     with jobs._conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = _select_row(conn)
+        row = _idempotency_select_row(conn, owner_id, scope, idempotency_key)
         if row is not None:
-            replay = _interpret_row(row)
+            replay = _idempotency_interpret_row(row, request_hash, now)
             if replay is not None:
                 return replay
             # Stale in_progress: delete and fall through to INSERT.
             conn.execute(
-                """
-                DELETE FROM idempotency_requests
-                WHERE owner_id = %s AND scope = %s AND idempotency_key = %s
-                """,
+                "DELETE FROM idempotency_requests WHERE owner_id = %s AND scope = %s AND idempotency_key = %s",
                 (owner_id, scope, idempotency_key),
             )
         try:
@@ -710,17 +711,12 @@ def _idempotency_begin(
                 (owner_id, scope, idempotency_key, request_hash, now, now),
             )
         except _db.IntegrityError:
-            # Race: another request inserted the same key after our SELECT
-            # (BEGIN IMMEDIATE serializes on SQLite, but Postgres READ COMMITTED
-            # does not). Re-SELECT and treat the winner's state as authoritative.
-            winner = _select_row(conn)
+            winner = _idempotency_select_row(conn, owner_id, scope, idempotency_key)
             if winner is None:
                 raise
-            replay = _interpret_row(winner)
+            replay = _idempotency_interpret_row(winner, request_hash, now)
             if replay is not None:
                 return replay
-            # Winner is also stale — extremely unlikely (would mean both rows
-            # are >5min old). Surface as 409 rather than retrying forever.
             raise HTTPException(
                 status_code=409,
                 detail=f"A request with this {_IDEMPOTENCY_KEY_HEADER} is still in progress.",
@@ -927,45 +923,25 @@ def _probe_register_endpoint_or_400(url: str) -> None:
 _LISTING_SAFETY_PROBE_TIMEOUT = 3.0
 
 
-def _run_listing_safety_probe(
-    url: str,
-    *,
-    input_schema: dict | None,
-    output_schema: dict | None,
-) -> None:
-    """Stage-3 behavioural probe for an external agent endpoint.
-
-    Posts (a) one schema-conformant synthetic input and (b) up to three
-    adversarial inputs from ``listing_safety.adversarial_probes()``. Refuses
-    to register if any response leaks an API key prefix or echoes the probe
-    string verbatim.
-
-    Network errors are intentionally non-fatal: the basic liveness check
-    above has already validated reachability, and a single flaky probe
-    shouldn't block a legitimate listing. Only behavioural findings
-    (`probe.leaked_api_key`, `probe.shape_mismatch` at block level) refuse.
-    """
-    # Skip rules:
-    #   AZTEA_SKIP_REGISTER_SAFETY_PROBE=1 → off (production override)
-    #   AZTEA_SKIP_REGISTER_ENDPOINT_PROBE=1 → off by default (matches the
-    #     test-suite assumption that the registered endpoint isn't actually
-    #     reachable from the test harness), unless tests opt back in via
-    #     AZTEA_RUN_REGISTER_SAFETY_PROBE=1 (monkey-patches http.post to
-    #     return canned responses without real network).
+def _should_skip_safety_probe() -> bool:
+    """Return True when the safety probe should be bypassed."""
     if os.environ.get("AZTEA_SKIP_REGISTER_SAFETY_PROBE"):
-        return
+        return True
     if os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE") and not os.environ.get(
         "AZTEA_RUN_REGISTER_SAFETY_PROBE"
     ):
-        return
+        return True
+    return False
 
+
+def _probe_endpoint_for_findings(
+    url: str,
+    payloads: list[dict],
+    synthetic_payload: dict | None,
+    output_schema: dict | None,
+) -> list:
+    """POST each payload to the endpoint and collect safety findings."""
     findings: list = []
-    payloads: list[dict] = []
-    synthetic = _listing_safety.synthesize_input_from_schema(input_schema)
-    if synthetic:
-        payloads.append(synthetic)
-    payloads.extend(_listing_safety.adversarial_probes())
-
     for payload in payloads:
         try:
             resp = http.post(
@@ -976,30 +952,49 @@ def _run_listing_safety_probe(
                 headers={"Content-Type": "application/json"},
             )
         except Exception:  # noqa: BLE001 — best-effort
-            _LOG.debug(
-                "listing safety probe POST failed (non-fatal)", exc_info=True
-            )
+            _LOG.debug("listing safety probe POST failed (non-fatal)", exc_info=True)
             continue
-        body: object
         try:
-            body = resp.json()
+            body: object = resp.json()
         except Exception:  # noqa: BLE001
             body = resp.text
-        # Only the synthetic call is shape-checked; adversarial calls would
-        # always fail shape simply because their payload is unrelated to the
-        # schema, so we'd produce noise. Pass output_schema=None for those.
-        is_synthetic = payload is (payloads[0] if synthetic else object())
+        is_synthetic = payload is synthetic_payload
         findings.extend(
             _listing_safety.evaluate_probe_response(
                 body,
                 output_schema=output_schema if is_synthetic else None,
             )
         )
+    return findings
 
-    block = next(
-        (f for f in findings if f.level == _listing_safety.LEVEL_BLOCK),
-        None,
+
+def _run_listing_safety_probe(
+    url: str,
+    *,
+    input_schema: dict | None,
+    output_schema: dict | None,
+) -> None:
+    """Stage-3 behavioural probe for an external agent endpoint.
+
+    Posts (a) one schema-conformant synthetic input and (b) adversarial probes.
+    Refuses to register on block-level findings only; network errors are non-fatal.
+    """
+    if _should_skip_safety_probe():
+        return
+
+    synthetic = _listing_safety.synthesize_input_from_schema(input_schema)
+    payloads: list[dict] = []
+    if synthetic:
+        payloads.append(synthetic)
+    payloads.extend(_listing_safety.adversarial_probes())
+
+    findings = _probe_endpoint_for_findings(
+        url=url,
+        payloads=payloads,
+        synthetic_payload=synthetic,
+        output_schema=output_schema,
     )
+    block = next((f for f in findings if f.level == _listing_safety.LEVEL_BLOCK), None)
     if block is not None:
         raise HTTPException(
             status_code=400,
