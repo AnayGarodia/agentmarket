@@ -87,13 +87,21 @@ def run_wizard(
     username = cfg.get("username") or None
     _greet(resolved_base, username)
 
-    kind = _ask_kind()
-    if kind == 1:
-        path = _wizard_skill_md()
-    elif kind == 2:
-        path = _wizard_agent_md()
-    else:
-        path = _wizard_python_handler()
+    try:
+        kind = _ask_kind()
+        if kind == 1:
+            path = _wizard_skill_md()
+        elif kind == 2:
+            path = _wizard_agent_md()
+        else:
+            path = _wizard_python_handler()
+    except (KeyboardInterrupt, EOFError):
+        # Ctrl-C / Ctrl-D mid-wizard: drop the user back to the shell cleanly
+        # instead of dumping a traceback. Line-mode readline doesn't deliver
+        # Escape to Python, so Ctrl-C is the documented cancel key.
+        console.print()
+        console.print("  [muted]Cancelled. No file was written.[/muted]")
+        raise typer.Exit(code=130)
 
     success(f"Saved {path}")
     if from_template_only:
