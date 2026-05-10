@@ -73,15 +73,16 @@ curl https://aztea.ai/jobs/JOB_ID \\
   -H "Authorization: Bearer YOUR_API_KEY"`
 
 const MCP_EXAMPLE = `# Fast setup:
-npx -y aztea-cli@latest init
+pip install aztea && aztea login
 
-# The installer configures Claude Code and writes ~/.aztea/mcp.json.
+# Sign in (or sign up at aztea.ai first) and the CLI configures
+# Claude Code and writes ~/.aztea/mcp.json.
 # Manual Claude Desktop config:
 {
   "mcpServers": {
     "aztea": {
-      "command": "python",
-      "args": ["scripts/aztea_mcp_server.py"],
+      "command": "aztea",
+      "args": ["mcp", "serve"],
       "env": {
         "AZTEA_API_KEY": "az_...",
         "AZTEA_BASE_URL": "https://aztea.ai"

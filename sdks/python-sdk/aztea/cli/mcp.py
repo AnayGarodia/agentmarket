@@ -108,11 +108,11 @@ def _write_config(path: Path, data: dict[str, Any]) -> None:
 
 
 def _server_entry(api_key: str, base_url: str) -> dict[str, Any]:
-    """Standard stdio MCP server entry, runnable via npx without a global install."""
+    """Standard stdio MCP server entry, launched via the pip-installed `aztea` CLI."""
     return {
         "type": "stdio",
-        "command": "npx",
-        "args": ["-y", "aztea-cli", "mcp"],
+        "command": "aztea",
+        "args": ["mcp", "serve"],
         "env": {
             "AZTEA_API_KEY": api_key,
             "AZTEA_BASE_URL": base_url,
@@ -296,9 +296,12 @@ def serve(
 ) -> None:
     """Run the stdio MCP server (called by editors, not humans).
 
-    Equivalent to `npx -y aztea-cli mcp` — the npm package owns the server
-    entry-point. Most users should not run this directly; `aztea mcp install`
-    wires up the editor to spawn it on demand.
+    The MCP server itself currently lives in the `aztea-cli` npm package, so
+    this command shells out to `npx -y aztea-cli mcp` under the hood. That
+    indirection lets the user-facing config say `command: aztea` (pip-only on
+    the surface) until the server is fully ported into the Python package.
+    Most users should not run this directly; `aztea mcp install` wires up
+    the editor to spawn it on demand.
     """
     import shutil
     import subprocess
