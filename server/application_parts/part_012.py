@@ -693,3 +693,262 @@ def registry_auto_hire(
             "rendered_output_format", body.output_format
         )
     return JSONResponse(content=response_body)
+
+
+# ---------------------------------------------------------------------------
+# Diff-watchers: /watch/* — register a target + agent + budget; sweeper fires
+# the agent only when the target's fingerprint changes.
+# ---------------------------------------------------------------------------
+
+
+def _watcher_or_404(watcher_id: str, caller: core_models.CallerContext) -> dict:
+    row = _watchers.get_watcher(watcher_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Watcher '{watcher_id}' not found.")
+    if caller["type"] != "master" and row["owner_user_id"] != caller["owner_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized for this watcher.")
+    return row
+
+
+def _validate_watcher_target_url(target_kind: str, target_url: str) -> str:
+    try:
+        return _url_security.validate_outbound_url(target_url, "target_url")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                f"target_url is invalid: {exc}",
+                {"field": "target_url", "target_kind": target_kind},
+            ),
+        )
+
+
+def _validate_watcher_webhook_url(webhook_url: str | None) -> None:
+    if not webhook_url:
+        return
+    try:
+        _validate_hook_url(webhook_url)
+    except (ValueError, HTTPException) as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                f"delivery_webhook_url is invalid: {exc}",
+                {"field": "delivery_webhook_url"},
+            ),
+        )
+
+
+@app.post(
+    "/watch",
+    status_code=201,
+    responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500),
+    tags=["Watchers"],
+    summary="Register a diff-watcher: fire an agent only when a target changes.",
+)
+@limiter.limit("20/minute")
+def watcher_create(
+    request: Request,
+    body: _watchers.WatcherCreate,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    agent = registry.get_agent(body.agent_id, include_unapproved=True)
+    if agent is None or not _caller_can_access_agent(caller, agent):
+        raise HTTPException(
+            status_code=404, detail=f"Agent '{body.agent_id}' not found."
+        )
+    _assert_agent_callable(body.agent_id, agent)
+    safe_target = _validate_watcher_target_url(body.target_kind, body.target_url)
+    _validate_watcher_webhook_url(body.delivery_webhook_url)
+
+    # Reject watchers whose budget can't even fund a single fire — it would
+    # accept the row, then immediately trip 'budget_exhausted' on the first
+    # tick. Better to fail loudly at create time.
+    raw_price = (
+        agent.get("price_per_call_cents")
+        if agent.get("price_per_call_cents") is not None
+        else int(round(float(agent.get("price_per_call_usd") or 0) * 100))
+    )
+    try:
+        per_call_cents = int(raw_price or 0)
+    except (TypeError, ValueError):
+        per_call_cents = 0
+    if per_call_cents > 0 and body.budget_per_day_cents < per_call_cents:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                (
+                    f"budget_per_day_cents ({body.budget_per_day_cents}c) is "
+                    f"below this agent's per-call price ({per_call_cents}c)."
+                ),
+                {
+                    "budget_per_day_cents": body.budget_per_day_cents,
+                    "price_per_call_cents": per_call_cents,
+                },
+            ),
+        )
+
+    caller_owner_id = _caller_owner_id(request)
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    row = _watchers.create_watcher(
+        owner_user_id=caller["owner_id"],
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_id=body.agent_id,
+        target_kind=body.target_kind,
+        target_url=safe_target,
+        target_meta=body.target_meta,
+        on_change_policy=body.on_change_policy,
+        tick_interval_seconds=body.tick_interval_seconds,
+        budget_per_day_cents=body.budget_per_day_cents,
+        delivery_webhook_url=body.delivery_webhook_url,
+        delivery_email=body.delivery_email,
+        payload=body.payload,
+    )
+    return JSONResponse(
+        content=_watchers.watcher_to_view(row), status_code=201
+    )
+
+
+@app.get(
+    "/watch",
+    responses=_error_responses(401, 429, 500),
+    tags=["Watchers"],
+    summary="List the caller's watchers.",
+)
+@limiter.limit("60/minute")
+def watcher_list(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    rows = _watchers.list_watchers_for_owner(caller["owner_id"], limit=limit)
+    return JSONResponse(
+        content={"watchers": [_watchers.watcher_to_view(r) for r in rows]}
+    )
+
+
+@app.get(
+    "/watch/{watcher_id}",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Watchers"],
+    summary="Get one watcher.",
+)
+@limiter.limit("60/minute")
+def watcher_get(
+    request: Request,
+    watcher_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    row = _watcher_or_404(watcher_id, caller)
+    return JSONResponse(content=_watchers.watcher_to_view(row))
+
+
+@app.patch(
+    "/watch/{watcher_id}",
+    responses=_error_responses(400, 401, 403, 404, 422, 429, 500),
+    tags=["Watchers"],
+    summary="Update a watcher (status / budget / interval / delivery).",
+)
+@limiter.limit("30/minute")
+def watcher_update(
+    request: Request,
+    watcher_id: str,
+    body: _watchers.WatcherUpdate,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    _watcher_or_404(watcher_id, caller)
+    if body.delivery_webhook_url is not None:
+        _validate_watcher_webhook_url(body.delivery_webhook_url)
+    updated = _watchers.update_watcher(
+        watcher_id,
+        status=body.status,
+        tick_interval_seconds=body.tick_interval_seconds,
+        budget_per_day_cents=body.budget_per_day_cents,
+        delivery_webhook_url=body.delivery_webhook_url,
+        delivery_email=body.delivery_email,
+        on_change_policy=body.on_change_policy,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Watcher '{watcher_id}' not found.")
+    return JSONResponse(content=_watchers.watcher_to_view(updated))
+
+
+@app.delete(
+    "/watch/{watcher_id}",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Watchers"],
+    summary="Delete a watcher and its run history.",
+)
+@limiter.limit("30/minute")
+def watcher_delete(
+    request: Request,
+    watcher_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    _watcher_or_404(watcher_id, caller)
+    _watchers.delete_watcher(watcher_id)
+    return JSONResponse(content={"deleted": True, "watcher_id": watcher_id})
+
+
+@app.get(
+    "/watch/{watcher_id}/runs",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Watchers"],
+    summary="List recent runs for a watcher (most recent first).",
+)
+@limiter.limit("60/minute")
+def watcher_runs(
+    request: Request,
+    watcher_id: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    _watcher_or_404(watcher_id, caller)
+    runs = _watchers.list_watcher_runs(watcher_id, limit=limit)
+    return JSONResponse(content={"runs": runs})
+
+
+@app.post(
+    "/watch/{watcher_id}/test",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Watchers"],
+    summary="Compute the watcher's fingerprint right now without firing or billing.",
+)
+@limiter.limit("20/minute")
+def watcher_test(
+    request: Request,
+    watcher_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    row = _watcher_or_404(watcher_id, caller)
+    target_meta = json.loads(row.get("target_meta_json") or "{}")
+    fp, err = _watchers.fingerprint_target(
+        row["target_kind"], row["target_url"], target_meta
+    )
+    would_fire = (
+        err is None
+        and (
+            row.get("on_change_policy") == "always"
+            or fp != (row.get("last_fingerprint") or None)
+        )
+    )
+    return JSONResponse(
+        content={
+            "watcher_id": watcher_id,
+            "fingerprint": fp,
+            "previous_fingerprint": row.get("last_fingerprint"),
+            "would_fire": bool(would_fire),
+            "error": err,
+        }
+    )

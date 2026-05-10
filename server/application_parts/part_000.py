@@ -139,6 +139,8 @@ from core import models as core_models
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
 from core import url_security as _url_security
+from core import watchers as _watchers
+from core.watchers import sweeper as _watchers_sweeper
 from core.db import close_all_connections as _close_all_db_connections
 from core.db import get_db_connection
 from core.migrate import apply_migrations

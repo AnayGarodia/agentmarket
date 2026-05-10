@@ -617,6 +617,18 @@ async def lifespan(app: FastAPI):
         )
         agent_health_thread.start()
 
+    watchers_stop_event: threading.Event | None = None
+    watchers_thread: threading.Thread | None = None
+    if is_background_worker_leader and _watchers_sweeper.WATCHERS_ENABLED:
+        watchers_stop_event = threading.Event()
+        watchers_thread = threading.Thread(
+            target=_watchers_sweeper.watchers_sweeper_loop,
+            args=(watchers_stop_event,),
+            daemon=True,
+            name="aztea-watchers-sweeper",
+        )
+        watchers_thread.start()
+
     if is_background_worker_leader and _PAYMENTS_RECONCILIATION_ENABLED:
         payments_reconciliation_stop_event = threading.Event()
         payments_reconciliation_thread = threading.Thread(
@@ -670,6 +682,10 @@ async def lifespan(app: FastAPI):
             agent_health_stop_event.set()
         if agent_health_thread is not None:
             agent_health_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
+        if watchers_stop_event is not None:
+            watchers_stop_event.set()
+        if watchers_thread is not None:
+            watchers_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
         if is_background_worker_leader:
             _release_background_worker_lock()
         _close_all_db_connections()
