@@ -155,6 +155,67 @@ def _check_payload_size(payload: dict[str, Any]) -> None:
         )
 
 
+def _build_completion_request(
+    skill: dict[str, Any], payload: dict[str, Any]
+) -> tuple[CompletionRequest, list[Any] | None]:
+    """Build the CompletionRequest + chain override from the skill row."""
+    body = str(skill.get("system_prompt") or "").strip()
+    if not body:
+        raise SkillExecutionError("Hosted skill has no system_prompt.")
+    temperature = float(
+        skill.get("temperature") if skill.get("temperature") is not None else 0.2
+    )
+    max_tokens = int(skill.get("max_output_tokens") or 1500)
+    chain = skill.get("model_chain") or None
+    if chain is not None and not isinstance(chain, list):
+        chain = None
+    req = CompletionRequest(
+        model="",  # filled in by run_with_fallback
+        messages=build_messages(body, payload),
+        temperature=temperature,
+        max_tokens=max_tokens,
+        json_mode=True,
+        timeout_seconds=60.0,
+    )
+    return req, chain
+
+
+def _safe_heartbeat(heartbeat_cb: Callable[[], None] | None) -> None:
+    if heartbeat_cb is None:
+        return
+    try:
+        heartbeat_cb()
+    except Exception:
+        # Heartbeat failures must never abort skill execution. The lease may
+        # still be valid; if not the supervisor will recover.
+        _LOG.warning("Heartbeat callback failed during skill execution", exc_info=True)
+
+
+def _apply_nested_calls(
+    parsed: dict[str, Any],
+    *,
+    caller_context: Any,
+    max_cost_cents: int,
+    execution_id: str,
+) -> dict[str, Any]:
+    """Resolve aztea_call() markers; mutate parsed["result"], return nested meta."""
+    try:
+        new_result, nested_meta = _resolve_nested_calls(
+            parsed.get("result", ""),
+            caller_context=caller_context,
+            max_cost_cents=int(max_cost_cents),
+        )
+        parsed["result"] = _truncate(new_result)
+        return nested_meta
+    except Exception as exc:
+        # Composition is best-effort: a registry lookup failure must not
+        # take down the outer skill response.
+        _LOG.warning(
+            "skill_executor.composition_failed reason=%s exec_id=%s", exc, execution_id,
+        )
+        return {"composition_error": str(exc)[:200]}
+
+
 def execute_hosted_skill(
     skill: dict[str, Any],
     payload: dict[str, Any],
@@ -190,36 +251,8 @@ def execute_hosted_skill(
     payload = dict(payload or {})
     _check_payload_size(payload)
 
-    body = str(skill.get("system_prompt") or "").strip()
-    if not body:
-        raise SkillExecutionError("Hosted skill has no system_prompt.")
-
-    temperature = float(
-        skill.get("temperature") if skill.get("temperature") is not None else 0.2
-    )
-    max_tokens = int(skill.get("max_output_tokens") or 1500)
-    chain = skill.get("model_chain") or None
-    if chain is not None and not isinstance(chain, list):
-        chain = None
-
-    messages = build_messages(body, payload)
-
-    req = CompletionRequest(
-        model="",  # filled in by run_with_fallback
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        json_mode=True,
-        timeout_seconds=60.0,
-    )
-
-    if heartbeat_cb is not None:
-        try:
-            heartbeat_cb()
-        except Exception:
-            # Heartbeat failures must never abort skill execution. The lease
-            # may still be valid; if not the supervisor will recover.
-            _LOG.warning("Heartbeat callback failed during skill execution", exc_info=True)
+    req, chain = _build_completion_request(skill, payload)
+    _safe_heartbeat(heartbeat_cb)
 
     try:
         resp = run_with_fallback(req, model_chain=chain)
@@ -235,29 +268,13 @@ def execute_hosted_skill(
     parse_path = parsed.pop("__parse_path", "raw_text_fallback")
     nested_meta: dict[str, Any] = {}
     if caller_context is not None:
-        # Resolve any aztea_call(slug, {...}) markers the skill body emitted
-        # against the live registry; each resolved call settles against the
-        # caller's wallet, not the platform's.  See _resolve_nested_calls
-        # below for the dispatch contract and the ledger guarantees.
-        try:
-            new_result, nested_meta = _resolve_nested_calls(
-                parsed.get("result", ""),
-                caller_context=caller_context,
-                max_cost_cents=int(max_cost_cents),
-            )
-            parsed["result"] = _truncate(new_result)
-        except Exception as exc:
-            # Composition is best-effort: a registry lookup failure must not
-            # take down the outer skill response.
-            _LOG.warning(
-                "skill_executor.composition_failed reason=%s exec_id=%s",
-                exc, execution_id,
-            )
-            nested_meta = {"composition_error": str(exc)[:200]}
-    parsed["_meta"] = {
-        "execution_id": execution_id,
-        "parse_path": parse_path,
-    }
+        nested_meta = _apply_nested_calls(
+            parsed,
+            caller_context=caller_context,
+            max_cost_cents=max_cost_cents,
+            execution_id=execution_id,
+        )
+    parsed["_meta"] = {"execution_id": execution_id, "parse_path": parse_path}
     if nested_meta:
         parsed["_meta"]["nested_calls"] = nested_meta
     return parsed

@@ -294,6 +294,83 @@ def generate_agent(
     return result
 
 
+def _attempt_one_iteration(
+    *,
+    request: dict[str, Any],
+    catalog_rendered: str,
+    prior_failures: list[str],
+) -> tuple[str, int, Any | None]:
+    """Run one generate→safety→parse→self-test cycle.
+
+    Returns (raw_md, iter_cents, parsed_or_None_if_should_retry).
+    Raises _Terminal on safety-block or LLM failure.
+    """
+    try:
+        raw_md, iter_cents = _generate_one(
+            request=request,
+            catalog_rendered=catalog_rendered,
+            prior_failures=prior_failures,
+        )
+    except Exception as exc:
+        raise _Terminal("llm_failure", f"LLM generation failed: {exc}")
+
+    block_finding = _safety_block(raw_md)
+    if block_finding is not None:
+        raise _Terminal(
+            "safety_block",
+            f"Safety scan blocked the generated SKILL.md: {block_finding.message}",
+            hint={"code": block_finding.code, "detail": block_finding.detail},
+        )
+
+    try:
+        parsed = _skill_parser.parse_skill_md(raw_md, source="agent_generator")
+    except _skill_parser.SkillParseError as exc:
+        prior_failures.append(f"Parser rejected output: {exc}")
+        return raw_md, iter_cents, None
+
+    passed, _, failure_notes = _qa.self_test(
+        parsed_skill_body=parsed.body,
+        example_inputs=request["example_inputs"],
+        ideal_outputs=request["ideal_outputs"],
+    )
+    if passed:
+        return raw_md, iter_cents, parsed
+    prior_failures.extend(failure_notes)
+    return raw_md, iter_cents, None
+
+
+def _generate_with_self_test_loop(
+    *,
+    request: dict[str, Any],
+    catalog_rendered: str,
+    max_total_cost_cents: int,
+) -> tuple[str, Any, int, int]:
+    """Iterate generation+self-test until passing. Returns (raw_md, parsed, iters, cost)."""
+    cost_used = 0
+    prior_failures: list[str] = []
+    raw_md = ""
+    max_iters = int(request.get("max_self_test_iters", 3))
+    for attempt in range(1, max_iters + 1):
+        if cost_used >= max_total_cost_cents:
+            raise _Terminal(
+                "budget_exceeded",
+                f"Generation budget of {max_total_cost_cents} cents exhausted at iter {attempt}.",
+            )
+        raw_md, iter_cents, parsed = _attempt_one_iteration(
+            request=request,
+            catalog_rendered=catalog_rendered,
+            prior_failures=prior_failures,
+        )
+        cost_used += iter_cents
+        if parsed is not None:
+            return raw_md, parsed, attempt, cost_used
+    raise _Terminal(
+        "self_test_exhausted",
+        f"Self-test failed after {max_iters} attempts.",
+        hint={"failures": prior_failures[-3:]},
+    )
+
+
 def _run_pipeline(
     *,
     generation_job_id: str,
@@ -308,59 +385,11 @@ def _run_pipeline(
 
     catalog = _approved_listings()
     catalog_rendered = _prompts.format_catalog_for_prompt(catalog)
-    cost_used = 0
-    iters_used = 0
-    prior_failures: list[str] = []
-    parsed = None
-    raw_md = ""
-    max_iters = int(request.get("max_self_test_iters", 3))
-    for attempt in range(1, max_iters + 1):
-        if cost_used >= max_total_cost_cents:
-            raise _Terminal(
-                "budget_exceeded",
-                f"Generation budget of {max_total_cost_cents} cents exhausted at iter {attempt}.",
-            )
-        try:
-            raw_md, iter_cents = _generate_one(
-                request=request,
-                catalog_rendered=catalog_rendered,
-                prior_failures=prior_failures,
-            )
-        except Exception as exc:
-            raise _Terminal("llm_failure", f"LLM generation failed: {exc}")
-        cost_used += iter_cents
-        iters_used = attempt
-
-        block_finding = _safety_block(raw_md)
-        if block_finding is not None:
-            raise _Terminal(
-                "safety_block",
-                f"Safety scan blocked the generated SKILL.md: {block_finding.message}",
-                hint={"code": block_finding.code, "detail": block_finding.detail},
-            )
-        try:
-            parsed = _skill_parser.parse_skill_md(raw_md, source="agent_generator")
-        except _skill_parser.SkillParseError as exc:
-            prior_failures.append(f"Parser rejected output: {exc}")
-            continue
-        passed, _, failure_notes = _qa.self_test(
-            parsed_skill_body=parsed.body,
-            example_inputs=request["example_inputs"],
-            ideal_outputs=request["ideal_outputs"],
-        )
-        if passed:
-            break
-        prior_failures.extend(failure_notes)
-    else:
-        raise _Terminal(
-            "self_test_exhausted",
-            f"Self-test failed after {max_iters} attempts.",
-            hint={"failures": prior_failures[-3:]},
-        )
-
-    if parsed is None:
-        # Defensive: parser failed every iteration.
-        raise _Terminal("self_test_exhausted", "No iteration produced a parseable SKILL.md.")
+    raw_md, parsed, iters_used, cost_used = _generate_with_self_test_loop(
+        request=request,
+        catalog_rendered=catalog_rendered,
+        max_total_cost_cents=max_total_cost_cents,
+    )
 
     clone_id, clone_score = _qa.detect_near_clone(
         candidate_name=parsed.name,
