@@ -1524,6 +1524,68 @@ def _sync_call_finalize_response(
     return JSONResponse(content=response_payload)
 
 
+def _sanitize_validation_errors(errors: list) -> list:
+    """Strip exception context from pydantic validation errors for safe wire format."""
+    clean = []
+    for e in errors:
+        entry = {k: v for k, v in e.items() if k != "ctx"}
+        ctx = e.get("ctx")
+        if ctx:
+            entry["ctx"] = {k: str(v) for k, v in ctx.items()}
+        clean.append(entry)
+    return clean
+
+
+def _sync_builtin_fail_job(
+    *,
+    job: dict,
+    caller_owner_id: str,
+    error_message: str,
+    event_type: str,
+) -> dict | None:
+    """Mark a sync builtin job failed and settle. Returns the failed row or None."""
+    failed = jobs.update_job_status(
+        job["job_id"], "failed", error_message=error_message, completed=True
+    )
+    if failed is not None:
+        _settle_failed_job(failed, actor_owner_id=caller_owner_id, event_type=event_type)
+    return failed
+
+
+def _sync_builtin_dispatch_output(
+    *,
+    builtin_agent_id: str | None,
+    hosted_skill_row: dict | None,
+    payload: dict,
+    job: dict,
+    caller_owner_id: str,
+) -> Any:
+    """Execute the builtin or hosted-skill and return output. Raises HTTPException on slot cap."""
+    if hosted_skill_row is not None:
+        return _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
+    try:
+        return _execute_builtin_agent(builtin_agent_id, payload)
+    except _AgentSlotUnavailable as slot_exc:
+        _sync_builtin_fail_job(
+            job=job, caller_owner_id=caller_owner_id,
+            error_message=(
+                f"Agent '{slot_exc.agent_id}' is at capacity "
+                f"({slot_exc.limit} in flight). Refunded; retry shortly."
+            ),
+            event_type="job.failed_rate_limited",
+        )
+        raise HTTPException(
+            status_code=429,
+            headers={"Retry-After": "1"},
+            detail=error_codes.make_error(
+                error_codes.AGENT_UPSTREAM_TIMEOUT,
+                f"Agent is at capacity ({slot_exc.limit} concurrent in flight). You were not charged. Retry in ~1s.",
+                {"agent_id": slot_exc.agent_id, "concurrency_limit": slot_exc.limit,
+                 "refunded_cents": int(job.get("caller_charge_cents") or 0)},
+            ),
+        )
+
+
 def _sync_call_execute_builtin(
     *,
     builtin_agent_id: str | None,
@@ -1587,43 +1649,14 @@ def _sync_call_execute_builtin(
         payload={"source": "registry_call_sync", "max_attempts": 1},
     )
 
-    def _sanitize_validation_errors(errors: list) -> list:
-        clean = []
-        for e in errors:
-            entry = {k: v for k, v in e.items() if k != "ctx"}
-            ctx = e.get("ctx")
-            if ctx:
-                entry["ctx"] = {k: str(v) for k, v in ctx.items()}
-            clean.append(entry)
-        return clean
-
     try:
-        if hosted_skill_row is not None:
-            output = _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
-        else:
-            try:
-                output = _execute_builtin_agent(builtin_agent_id, payload)
-            except _AgentSlotUnavailable as slot_exc:
-                failed = jobs.update_job_status(
-                    job["job_id"], "failed",
-                    error_message=(
-                        f"Agent '{slot_exc.agent_id}' is at capacity "
-                        f"({slot_exc.limit} in flight). Refunded; retry shortly."
-                    ),
-                    completed=True,
-                )
-                if failed is not None:
-                    _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_rate_limited")
-                raise HTTPException(
-                    status_code=429,
-                    headers={"Retry-After": "1"},
-                    detail=error_codes.make_error(
-                        error_codes.AGENT_UPSTREAM_TIMEOUT,
-                        f"Agent is at capacity ({slot_exc.limit} concurrent in flight). You were not charged. Retry in ~1s.",
-                        {"agent_id": slot_exc.agent_id, "concurrency_limit": slot_exc.limit,
-                         "refunded_cents": int(job.get("caller_charge_cents") or 0)},
-                    ),
-                )
+        output = _sync_builtin_dispatch_output(
+            builtin_agent_id=builtin_agent_id,
+            hosted_skill_row=hosted_skill_row,
+            payload=payload,
+            job=job,
+            caller_owner_id=caller["owner_id"],
+        )
         output = _normalize_output_protocol_for_response(output, requested_output_formats=requested_output_formats)
         if _is_unchargeable_degraded_output(str(builtin_agent_id), output):
             output = _degraded_unchargeable_error(str(builtin_agent_id))
@@ -1659,11 +1692,10 @@ def _sync_call_execute_builtin(
             charge_tx_id=charge_tx_id, payload=payload,
         )
     except ValidationError as exc:
-        failed = jobs.update_job_status(
-            job["job_id"], "failed", error_message="Request validation failed.", completed=True
+        _sync_builtin_fail_job(
+            job=job, caller_owner_id=caller["owner_id"],
+            error_message="Request validation failed.", event_type="job.failed_validation",
         )
-        if failed is not None:
-            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_validation")
         raise HTTPException(
             status_code=422,
             detail=error_codes.make_error(
@@ -1672,31 +1704,137 @@ def _sync_call_execute_builtin(
             ),
         )
     except ValueError as exc:
-        failed = jobs.update_job_status(
-            job["job_id"], "failed", error_message=str(exc), completed=True
+        _sync_builtin_fail_job(
+            job=job, caller_owner_id=caller["owner_id"],
+            error_message=str(exc), event_type="job.failed_input",
         )
-        if failed is not None:
-            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_input")
         message = str(exc)
         status = 422 if message.startswith("Invalid ticker symbol:") else 400
         raise HTTPException(status_code=status, detail=message)
     except _groq.RateLimitError as exc:
-        failed = jobs.update_job_status(
-            job["job_id"], "failed", error_message=f"All LLM models rate-limited. ({exc})", completed=True
+        _sync_builtin_fail_job(
+            job=job, caller_owner_id=caller["owner_id"],
+            error_message=f"All LLM models rate-limited. ({exc})", event_type="job.failed_rate_limit",
         )
-        if failed is not None:
-            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_rate_limit")
         raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({exc})")
     except HTTPException:
         raise
     except Exception:
         _LOG.exception("Built-in agent execution failed for %s.", builtin_agent_id)
+        _sync_builtin_fail_job(
+            job=job, caller_owner_id=caller["owner_id"],
+            error_message="Agent execution failed.", event_type="job.failed_builtin",
+        )
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
+
+
+def _sync_http_fail_and_raise(
+    *,
+    job: dict,
+    caller_owner_id: str,
+    event_type: str,
+    http_status: int,
+    error_code: str,
+    message: str,
+    extra: dict | None = None,
+) -> None:
+    """Mark job failed, settle, and raise an HTTPException. Never returns."""
+    failed = jobs.update_job_status(
+        job["job_id"], "failed", error_message=message, completed=True
+    )
+    if failed is not None:
+        _settle_failed_job(failed, actor_owner_id=caller_owner_id, event_type=event_type)
+    raise HTTPException(
+        status_code=http_status,
+        detail=error_codes.make_error(error_code, message, extra or {}),
+    )
+
+
+def _sync_http_handle_error_status(
+    *, job: dict, resp: Any, caller_owner_id: str, agent_id: str, status_code: int
+) -> None:
+    """Fail/settle the job and raise on non-2xx HTTP status from agent."""
+    event_type = (
+        "job.failed_rejected_request" if 400 <= status_code < 500
+        else "job.failed_internal_error"
+    )
+    failed = jobs.update_job_status(
+        job["job_id"], "failed",
+        error_message=f"Agent returned HTTP {status_code}.", completed=True,
+    )
+    if failed is not None:
+        _settle_failed_job(failed, actor_owner_id=caller_owner_id, event_type=event_type)
+    if 400 <= status_code < 500:
+        try:
+            agent_err = resp.json()
+            agent_msg = str(
+                agent_err.get("error") or agent_err.get("message") or agent_err.get("detail") or ""
+            )[:500]
+        except Exception:
+            agent_msg = ""
+        msg = "Agent rejected the request. You were not charged."
+        if agent_msg:
+            msg = f"Agent rejected the request: {agent_msg}. You were not charged."
+        raise HTTPException(
+            status_code=status_code,
+            detail=error_codes.make_error(
+                error_codes.AGENT_REJECTED_REQUEST, msg,
+                {"agent_id": agent_id, "agent_status": status_code},
+            ),
+        )
+    raise HTTPException(
+        status_code=502,
+        detail=error_codes.make_error(
+            error_codes.AGENT_INTERNAL_ERROR,
+            "Agent is experiencing errors. You were not charged.",
+            {"agent_id": agent_id, "agent_status": status_code},
+        ),
+    )
+
+
+def _sync_http_validate_response(
+    *,
+    job: dict,
+    resp: Any,
+    caller_owner_id: str,
+    agent_id: str,
+) -> bytes:
+    """Validate HTTP status code and content size. Returns raw_content bytes."""
+    status_code = int(resp.status_code)
+    if not (200 <= status_code < 300):
+        _sync_http_handle_error_status(
+            job=job, resp=resp, caller_owner_id=caller_owner_id,
+            agent_id=agent_id, status_code=status_code,
+        )
+    raw_content = resp.content
+    if len(raw_content) > 1_048_576:
         failed = jobs.update_job_status(
-            job["job_id"], "failed", error_message="Agent execution failed.", completed=True
+            job["job_id"], "failed",
+            error_message="Agent returned a response larger than 1 MB.", completed=True,
         )
         if failed is not None:
-            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_builtin")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
+            _settle_failed_job(failed, actor_owner_id=caller_owner_id, event_type="job.failed_response_too_large")
+        raise HTTPException(
+            status_code=502,
+            detail=error_codes.make_error(
+                error_codes.AGENT_RESPONSE_TOO_LARGE,
+                "Agent returned a response larger than 1 MB. You were not charged. Contact the agent owner.",
+                {"agent_id": agent_id, "size_bytes": len(raw_content)},
+            ),
+        )
+    content_type = resp.headers.get("content-type", "").lower()
+    if "application/json" not in content_type and "text/json" not in content_type:
+        try:
+            json.loads(raw_content)
+        except Exception:
+            _sync_http_fail_and_raise(
+                job=job, caller_owner_id=caller_owner_id,
+                event_type="job.failed_invalid_response", http_status=502,
+                error_code=error_codes.AGENT_INVALID_RESPONSE,
+                message="Agent returned a malformed response (not valid JSON). You were not charged.",
+                extra={"agent_id": agent_id},
+            )
+    return raw_content
 
 
 def _sync_call_execute_http(
@@ -1789,109 +1927,27 @@ def _sync_call_execute_http(
             allow_redirects=False,
         )
     except http.exceptions.Timeout:
-        failed = jobs.update_job_status(job["job_id"], "failed", error_message="Agent timed out.", completed=True)
-        if failed is not None:
-            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_timeout")
         _LOG.warning("Agent call timed out for %s", agent_id)
-        raise HTTPException(
-            status_code=504,
-            detail=error_codes.make_error(
-                error_codes.AGENT_CALL_TIMEOUT,
-                "Agent didn't respond within 120 seconds. You were not charged.",
-                {"agent_id": agent_id},
-            ),
+        _sync_http_fail_and_raise(
+            job=job, caller_owner_id=caller["owner_id"],
+            event_type="job.failed_timeout", http_status=504,
+            error_code=error_codes.AGENT_CALL_TIMEOUT,
+            message="Agent didn't respond within 120 seconds. You were not charged.",
+            extra={"agent_id": agent_id},
         )
     except http.RequestException as e:
-        failed = jobs.update_job_status(
-            job["job_id"], "failed",
-            error_message=f"Agent endpoint unreachable ({type(e).__name__}).",
-            completed=True,
-        )
-        if failed is not None:
-            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_endpoint_offline")
         _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, type(e).__name__)
-        raise HTTPException(
-            status_code=502,
-            detail=error_codes.make_error(
-                error_codes.AGENT_ENDPOINT_OFFLINE,
-                "This agent's endpoint is offline or unreachable. You were not charged.",
-                {"agent_id": agent_id},
-            ),
+        _sync_http_fail_and_raise(
+            job=job, caller_owner_id=caller["owner_id"],
+            event_type="job.failed_endpoint_offline", http_status=502,
+            error_code=error_codes.AGENT_ENDPOINT_OFFLINE,
+            message="This agent's endpoint is offline or unreachable. You were not charged.",
+            extra={"agent_id": agent_id},
         )
-    # --- HTTP response validation ---
-    status_code = int(resp.status_code)
-    success = 200 <= status_code < 300
-    if not success:
-        failed = jobs.update_job_status(
-            job["job_id"], "failed", error_message=f"Agent returned HTTP {status_code}.", completed=True
-        )
-        if failed is not None:
-            _settle_failed_job(
-                failed,
-                actor_owner_id=caller["owner_id"],
-                event_type="job.failed_rejected_request" if 400 <= status_code < 500 else "job.failed_internal_error",
-            )
-        if 400 <= status_code < 500:
-            try:
-                agent_err = resp.json()
-                agent_msg = str(
-                    agent_err.get("error") or agent_err.get("message") or agent_err.get("detail") or ""
-                )[:500]
-            except Exception:
-                agent_msg = ""
-            msg = "Agent rejected the request. You were not charged."
-            if agent_msg:
-                msg = f"Agent rejected the request: {agent_msg}. You were not charged."
-            raise HTTPException(
-                status_code=status_code,
-                detail=error_codes.make_error(
-                    error_codes.AGENT_REJECTED_REQUEST, msg,
-                    {"agent_id": agent_id, "agent_status": status_code},
-                ),
-            )
-        raise HTTPException(
-            status_code=502,
-            detail=error_codes.make_error(
-                error_codes.AGENT_INTERNAL_ERROR,
-                "Agent is experiencing errors. You were not charged.",
-                {"agent_id": agent_id, "agent_status": status_code},
-            ),
-        )
-    # --- Output size cap (1 MB) ---
-    raw_content = resp.content
-    if len(raw_content) > 1_048_576:
-        failed = jobs.update_job_status(
-            job["job_id"], "failed", error_message="Agent returned a response larger than 1 MB.", completed=True
-        )
-        if failed is not None:
-            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_response_too_large")
-        raise HTTPException(
-            status_code=502,
-            detail=error_codes.make_error(
-                error_codes.AGENT_RESPONSE_TOO_LARGE,
-                "Agent returned a response larger than 1 MB. You were not charged. Contact the agent owner.",
-                {"agent_id": agent_id, "size_bytes": len(raw_content)},
-            ),
-        )
-    # --- Non-JSON response handling ---
-    content_type = resp.headers.get("content-type", "").lower()
-    if "application/json" not in content_type and "text/json" not in content_type:
-        try:
-            json.loads(raw_content)
-        except Exception:
-            failed = jobs.update_job_status(
-                job["job_id"], "failed", error_message="Agent returned malformed JSON.", completed=True
-            )
-            if failed is not None:
-                _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_invalid_response")
-            raise HTTPException(
-                status_code=502,
-                detail=error_codes.make_error(
-                    error_codes.AGENT_INVALID_RESPONSE,
-                    "Agent returned a malformed response (not valid JSON). You were not charged.",
-                    {"agent_id": agent_id},
-                ),
-            )
+    # --- HTTP response validation, size cap, and JSON parsing ---
+    raw_content = _sync_http_validate_response(
+        job=job, resp=resp, caller_owner_id=caller["owner_id"], agent_id=agent_id
+    )
     result_payload = json.loads(raw_content)
     result_payload = _normalize_output_protocol_for_response(
         result_payload, requested_output_formats=requested_output_formats
