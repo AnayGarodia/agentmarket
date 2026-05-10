@@ -613,7 +613,13 @@ def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> 
     # core/registry/auto_hire.py (rank penalty + $1.00 price cap on
     # unsolicited auto-invoke). Treating probation as inaccessible here
     # would amount to silently rejecting them, which defeats the purpose.
-    if review_status not in {"approved", "probation"}:
+    #
+    # 'sunset' is also accessible at this gate so the call hot path can
+    # reach _assert_agent_callable and emit a clean HTTP 410 ``agent.sunset``
+    # — matching the legacy frozenset behavior. Without this, sunset agents
+    # would surface a 404 ``agent.not_found`` which is misleading (the row
+    # exists; it has been retired).
+    if review_status not in {"approved", "probation", "sunset"}:
         return False
     if str(agent.get("status") or "").strip().lower() == "banned":
         return False
@@ -630,7 +636,10 @@ def _assert_agent_callable(agent_id: str, agent: dict) -> None:
     # for receipt resolution but have no internal endpoint. Without this check
     # we'd dispatch into a missing handler and surface a confusing 502
     # `agent.endpoint_misconfigured`. Return a clean 410 Gone instead.
-    if agent_id_str in _SUNSET_DEPRECATED_AGENT_IDS:
+    sunset_via_review_status = (
+        str(agent.get("review_status") or "").strip().lower() == "sunset"
+    )
+    if agent_id_str in _SUNSET_DEPRECATED_AGENT_IDS or sunset_via_review_status:
         raise HTTPException(
             status_code=410,
             detail=error_codes.make_error(

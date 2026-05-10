@@ -826,6 +826,116 @@ def set_agent_review_decision(
     return get_agent(agent_id, include_unapproved=True)
 
 
+def sunset_agent(
+    agent_id: str,
+    *,
+    actor_owner_id: str,
+    reason: str | None = None,
+) -> dict | None:
+    """Mark an agent as sunset (review_status='sunset'). Caller must already
+    be authorized (owner or admin) — this function only does the DB write.
+
+    Sunset is the user-facing "removed" state: the call hot path returns
+    HTTP 410 ``agent.sunset`` and list/search filters hide the row. Reversible
+    via ``reactivate_agent``. Receipts and signed history remain intact.
+    """
+    normalized_actor = str(actor_owner_id or "").strip()
+    if not normalized_actor:
+        raise ValueError("actor_owner_id must be a non-empty string.")
+    note = (str(reason).strip()[:500] if reason else None) or "self-retracted"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _conn() as conn:
+        updated = conn.execute(
+            """
+            UPDATE agents
+            SET review_status = 'sunset',
+                review_note   = %s,
+                reviewed_at   = %s,
+                reviewed_by   = %s
+            WHERE agent_id = %s
+            """,
+            (note, now_iso, normalized_actor, agent_id),
+        ).rowcount
+    if updated == 0:
+        return None
+    return get_agent(agent_id, include_unapproved=True)
+
+
+def reactivate_agent(
+    agent_id: str,
+    *,
+    actor_owner_id: str,
+) -> dict | None:
+    """Reverse a prior sunset, restoring ``review_status='approved'``. Caller
+    must already be authorized — owners can reverse their own ``sunset``,
+    admins can reverse anyone's. Banned agents must use ``set_agent_status``."""
+    normalized_actor = str(actor_owner_id or "").strip()
+    if not normalized_actor:
+        raise ValueError("actor_owner_id must be a non-empty string.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _conn() as conn:
+        updated = conn.execute(
+            """
+            UPDATE agents
+            SET review_status = 'approved',
+                review_note   = NULL,
+                reviewed_at   = %s,
+                reviewed_by   = %s
+            WHERE agent_id = %s AND review_status = 'sunset'
+            """,
+            (now_iso, normalized_actor, agent_id),
+        ).rowcount
+    if updated == 0:
+        return None
+    return get_agent(agent_id, include_unapproved=True)
+
+
+def delete_agent(agent_id: str) -> bool:
+    """Hard-delete an agent row. Admin-only — caller must enforce auth.
+
+    Receipts (``jobs.output_signature``, ``jobs.output_signed_by_did``) reference
+    ``agent_id`` as a denormalized string with no FK cascade, so historical
+    job rows and signed receipts continue to verify after deletion. The agent's
+    DID document at ``/agents/{id}/did.json`` will start returning 404 — that
+    is the intended provenance signal that the agent has been retired.
+
+    In-flight jobs must be cancelled and refunded BEFORE calling this; this
+    function only performs the DELETE.
+    """
+    with _conn() as conn:
+        updated = conn.execute(
+            "DELETE FROM agents WHERE agent_id = %s",
+            (agent_id,),
+        ).rowcount
+    return bool(updated)
+
+
+def is_agent_sunset(agent: dict | None) -> bool:
+    """Unified sunset check used by the call hot path and list filters.
+
+    True when the agent is in either:
+    - the legacy hardcoded ``SUNSET_DEPRECATED_AGENT_IDS`` frozenset
+      (kept for one release while built-in entries are migrated to DB rows), or
+    - ``review_status == 'sunset'`` (owner self-retract or admin sunset).
+
+    Importing the frozenset lazily avoids a circular import at module load:
+    ``server.builtin_agents.constants`` imports from this package.
+    """
+    if not isinstance(agent, dict):
+        return False
+    review_status = str(agent.get("review_status") or "").strip().lower()
+    if review_status == "sunset":
+        return True
+    agent_id = str(agent.get("agent_id") or "").strip()
+    if not agent_id:
+        return False
+    try:
+        from server.builtin_agents.constants import SUNSET_DEPRECATED_AGENT_IDS
+    except ImportError:
+        return False
+    return agent_id in SUNSET_DEPRECATED_AGENT_IDS
+
+
 _TERMINAL_DISPUTE_STATUSES = ("resolved", "final")
 
 

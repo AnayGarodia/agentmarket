@@ -456,3 +456,32 @@ def list_jobs_for_agent(
             tuple(params),
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def list_jobs_for_agent_in_states(
+    agent_id: str,
+    *,
+    states: tuple[str, ...],
+    limit: int = 200,
+) -> list:
+    """Return jobs for an agent currently in any of the given statuses.
+
+    Used by admin agent-delete to enumerate in-flight jobs that must be
+    cancelled and refunded before the agent row can be removed.
+    """
+    if not states:
+        return []
+    capped = min(max(1, int(limit)), 1000)
+    placeholders = ", ".join(["%s"] * len(states))
+    params: list = [agent_id, *states, capped]
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM jobs
+            WHERE agent_id = %s AND status IN ({placeholders})
+            ORDER BY created_at DESC, job_id DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]

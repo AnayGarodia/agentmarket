@@ -484,22 +484,29 @@ def wallet_spend_summary(
     for row in rows:
         agent_id = row["agent_id"]
         agent_name = agent_id
+        agent_review_status = ""
         if agent_id:
             try:
                 ag = registry.get_agent(agent_id, include_unapproved=True)
                 if ag:
                     agent_name = ag.get("name") or agent_id
+                    agent_review_status = (
+                        str(ag.get("review_status") or "").strip().lower()
+                    )
             except Exception:
                 _LOG.warning("Failed to resolve agent name for %s in spending report", agent_id, exc_info=True)
+        is_sunset = (
+            agent_id in sunset_ids or agent_review_status == "sunset"
+        )
         item = {
             "agent_id": agent_id,
             "agent_name": agent_name,
             "total_cents": int(row["total_cents"] or 0),
             "job_count": int(row["job_count"] or 0),
-            "is_sunset": agent_id in sunset_ids,
-            "catalog_visibility": "sunset" if agent_id in sunset_ids else "live",
+            "is_sunset": is_sunset,
+            "catalog_visibility": "sunset" if is_sunset else "live",
         }
-        if agent_id in sunset_ids:
+        if is_sunset:
             sunset_by_agent.append(item)
             if include_sunset:
                 by_agent.append(item)
@@ -663,15 +670,21 @@ def wallet_audit(
         if agent_id in sunset_ids:
             continue
         agent_name = agent_id
+        agent_review_status = ""
         if agent_id:
             try:
                 ag = registry.get_agent(agent_id, include_unapproved=True)
                 if ag:
                     agent_name = ag.get("name") or agent_id
+                    agent_review_status = (
+                        str(ag.get("review_status") or "").strip().lower()
+                    )
             except Exception:
                 _LOG.warning(
                     "Failed to resolve agent name for %s in audit", agent_id, exc_info=True
                 )
+        if agent_review_status == "sunset":
+            continue
         by_agent_live.append(
             {
                 "agent_id": agent_id,
