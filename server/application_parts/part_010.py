@@ -913,26 +913,12 @@ app.add_api_route(
 )
 
 
-@app.post(
-    "/jobs/{job_id}/dispute",
-    status_code=201,
-    response_model=core_models.DisputeResponse,
-    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
-)
-@limiter.limit("20/minute")
-def jobs_dispute(
-    request: Request,
+def _dispute_check_eligibility(
+    *,
+    job: dict,
     job_id: str,
-    body: JobDisputeRequest,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DisputeResponse:
-    if not (_caller_has_scope(caller, "caller") or _caller_has_scope(caller, "worker")):
-        raise HTTPException(
-            status_code=403, detail="This endpoint requires caller or worker scope."
-        )
-    job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+) -> None:
+    """Raise HTTPException if the job is not disputable. Pure — no side effects."""
     # Ownership check (caller filed the job OR is the agent owner) happens
     # downstream in dispute creation. We split 404/403 here so the same
     # job_id returns the same status across status/cancel/dispute — the
@@ -953,9 +939,9 @@ def jobs_dispute(
     if reason is not None:
         raise HTTPException(status_code=reason.status_code, detail=reason.message)
 
-    side = _dispute_side_for_caller(caller, job)
 
-    # Block self-disputes (caller and agent have same owner)
+def _dispute_check_self_dispute(*, job: dict, job_id: str) -> None:
+    """Raise 400 if the caller is disputing their own agent. Pure guard."""
     if (
         job.get("caller_owner_id")
         and job.get("agent_owner_id")
@@ -970,33 +956,48 @@ def jobs_dispute(
             ),
         )
 
-    filing_deposit_cents = _compute_dispute_filing_deposit_cents(
-        int(job.get("price_cents") or 0)
-    )
+
+def _dispute_insert_with_funds(
+    *,
+    job_id: str,
+    caller_owner_id: str,
+    side: str,
+    reason: str,
+    evidence: Any,
+    filing_deposit_cents: int,
+    phase_ref: list,  # single-element list used as mutable ref for phase tracking
+) -> tuple[dict, dict, dict]:
+    """Open the dispute row and lock escrow funds in one atomic transaction.
+
+    Returns (created_dispute, deposit_summary, lock_summary).
+    Raises HTTPException on all known failure modes; caller should not catch.
+    phase_ref[0] is updated as each sub-phase completes so the outer except
+    block can report which phase failed.
+    """
     conn = payments._conn()
     lock_summary: dict[str, Any] = {}
     deposit_summary: dict[str, Any] = {}
-    insufficient_phase = "dispute_create"
     _committed = False
     try:
         conn.execute("BEGIN IMMEDIATE")
+        phase_ref[0] = "dispute_create"
         created = disputes.create_dispute(
             job_id=job_id,
-            filed_by_owner_id=caller["owner_id"],
+            filed_by_owner_id=caller_owner_id,
             side=side,
-            reason=body.reason,
-            evidence=body.evidence,
+            reason=reason,
+            evidence=evidence,
             filing_deposit_cents=filing_deposit_cents,
             conn=conn,
         )
-        insufficient_phase = "filing_deposit"
+        phase_ref[0] = "filing_deposit"
         deposit_summary = payments.collect_dispute_filing_deposit(
             created["dispute_id"],
-            filed_by_owner_id=caller["owner_id"],
+            filed_by_owner_id=caller_owner_id,
             amount_cents=filing_deposit_cents,
             conn=conn,
         )
-        insufficient_phase = "clawback_lock"
+        phase_ref[0] = "clawback_lock"
         lock_summary = payments.lock_dispute_funds(created["dispute_id"], conn=conn)
         conn.execute("COMMIT")
         _committed = True
@@ -1015,7 +1016,7 @@ def jobs_dispute(
         conn.execute("ROLLBACK")
         error_code = (
             error_codes.DISPUTE_FILING_DEPOSIT_INSUFFICIENT_BALANCE
-            if insufficient_phase == "filing_deposit"
+            if phase_ref[0] == "filing_deposit"
             else error_codes.DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE
         )
         raise HTTPException(
@@ -1040,13 +1041,62 @@ def jobs_dispute(
         # opaque errors are a recourse-trust violation.
         detail = {
             "error": "DISPUTE_FILING_FAILED",
-            "phase": insufficient_phase,
+            "phase": phase_ref[0],
             "exception_type": type(exc).__name__,
             "message": str(exc) or "Failed to file dispute.",
             "job_id": job_id,
             "next_step": "Retry once. If it persists, contact support with this request_id.",
         }
         raise HTTPException(status_code=500, detail=detail)
+    return created, deposit_summary, lock_summary
+
+
+def _dispute_notify_parties(*, job: dict, job_id: str, dispute_id: str) -> None:
+    """Send dispute-opened emails to both job parties. Swallows send failures."""
+    for _party_owner_id in {job.get("caller_owner_id"), job.get("agent_owner_id")}:
+        _party_email = _get_owner_email(_party_owner_id or "")
+        if _party_email:
+            _email.send_dispute_opened(_party_email, job_id, dispute_id)
+
+
+@app.post(
+    "/jobs/{job_id}/dispute",
+    status_code=201,
+    response_model=core_models.DisputeResponse,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("20/minute")
+def jobs_dispute(
+    request: Request,
+    job_id: str,
+    body: JobDisputeRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DisputeResponse:
+    if not (_caller_has_scope(caller, "caller") or _caller_has_scope(caller, "worker")):
+        raise HTTPException(
+            status_code=403, detail="This endpoint requires caller or worker scope."
+        )
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+
+    _dispute_check_eligibility(job=job, job_id=job_id)
+    side = _dispute_side_for_caller(caller, job)
+    _dispute_check_self_dispute(job=job, job_id=job_id)
+
+    filing_deposit_cents = _compute_dispute_filing_deposit_cents(
+        int(job.get("price_cents") or 0)
+    )
+    phase_ref: list = ["dispute_create"]
+    created, deposit_summary, lock_summary = _dispute_insert_with_funds(
+        job_id=job_id,
+        caller_owner_id=caller["owner_id"],
+        side=side,
+        reason=body.reason,
+        evidence=body.evidence,
+        filing_deposit_cents=filing_deposit_cents,
+        phase_ref=phase_ref,
+    )
     _record_job_event(
         job,
         "job.dispute_filed",
@@ -1058,11 +1108,7 @@ def jobs_dispute(
             "lock": lock_summary,
         },
     )
-    # Notify both parties about the dispute
-    for _party_owner_id in {job.get("caller_owner_id"), job.get("agent_owner_id")}:
-        _party_email = _get_owner_email(_party_owner_id or "")
-        if _party_email:
-            _email.send_dispute_opened(_party_email, job_id, created["dispute_id"])
+    _dispute_notify_parties(job=job, job_id=job_id, dispute_id=created["dispute_id"])
     return JSONResponse(content=_dispute_view(created), status_code=201)
 
 
