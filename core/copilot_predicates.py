@@ -27,12 +27,12 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
 
 import jmespath
 from jmespath import exceptions as jmespath_exceptions
-from jmespath import ast as jmespath_ast
 
 _LOG = logging.getLogger(__name__)
 
@@ -75,34 +75,48 @@ def validate_stop_when(raw: list[dict] | None) -> list[dict]:
     seen_labels: set[str] = set()
     out: list[dict] = []
     for idx, item in enumerate(raw):
-        if not isinstance(item, dict):
-            raise StopWhenInvalid(f"stop_when[{idx}] must be an object")
-        label = str(item.get("label") or "").strip()
-        expr = str(item.get("expr") or "").strip()
-        if not label:
-            raise StopWhenInvalid(f"stop_when[{idx}].label is required")
-        if len(label) > STOP_WHEN_MAX_LABEL_LEN:
-            raise StopWhenInvalid(
-                f"stop_when[{idx}].label exceeds {STOP_WHEN_MAX_LABEL_LEN} chars"
-            )
-        if label in seen_labels:
-            raise StopWhenInvalid(f"stop_when label {label!r} is duplicated")
-        seen_labels.add(label)
-        if not expr:
-            raise StopWhenInvalid(f"stop_when[{label}].expr is required")
-        if len(expr) > STOP_WHEN_MAX_EXPR_LEN:
-            raise StopWhenInvalid(
-                f"stop_when[{label}].expr exceeds {STOP_WHEN_MAX_EXPR_LEN} chars"
-            )
-        try:
-            compiled = jmespath.compile(expr)
-        except jmespath_exceptions.ParseError as exc:
-            raise StopWhenInvalid(
-                f"stop_when[{label}].expr is not valid JMESPath: {exc}"
-            ) from exc
-        _check_complexity(compiled.parsed, label=label)
-        out.append({"label": label, "expr": expr})
+        normalized = _validate_one_predicate(idx, item, seen_labels)
+        seen_labels.add(normalized["label"])
+        out.append(normalized)
     return out
+
+
+def _validate_one_predicate(
+    idx: int, item: object, seen_labels: set[str]
+) -> dict:
+    """Validate a single {label, expr} entry; return the normalized dict.
+
+    Split out from validate_stop_when so the outer function stays under
+    the cyclomatic-complexity budget. Raises StopWhenInvalid on the first
+    failure; the offending label / index is included so the API caller
+    can fix it without a second round-trip.
+    """
+    if not isinstance(item, dict):
+        raise StopWhenInvalid(f"stop_when[{idx}] must be an object")
+    label = str(item.get("label") or "").strip()
+    expr = str(item.get("expr") or "").strip()
+    if not label:
+        raise StopWhenInvalid(f"stop_when[{idx}].label is required")
+    if len(label) > STOP_WHEN_MAX_LABEL_LEN:
+        raise StopWhenInvalid(
+            f"stop_when[{idx}].label exceeds {STOP_WHEN_MAX_LABEL_LEN} chars"
+        )
+    if label in seen_labels:
+        raise StopWhenInvalid(f"stop_when label {label!r} is duplicated")
+    if not expr:
+        raise StopWhenInvalid(f"stop_when[{label}].expr is required")
+    if len(expr) > STOP_WHEN_MAX_EXPR_LEN:
+        raise StopWhenInvalid(
+            f"stop_when[{label}].expr exceeds {STOP_WHEN_MAX_EXPR_LEN} chars"
+        )
+    try:
+        compiled = jmespath.compile(expr)
+    except jmespath_exceptions.ParseError as exc:
+        raise StopWhenInvalid(
+            f"stop_when[{label}].expr is not valid JMESPath: {exc}"
+        ) from exc
+    _check_complexity(compiled.parsed, label=label)
+    return {"label": label, "expr": expr}
 
 
 def _check_complexity(node: dict, *, label: str) -> None:
