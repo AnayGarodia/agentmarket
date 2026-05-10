@@ -320,7 +320,12 @@ def serve(
     from aztea.mcp.server import main as _serve
 
     try:
-        _serve()
+        # Pass an explicit empty argv so the inner argparse doesn't try to
+        # re-parse Typer's "mcp serve" tokens still living in sys.argv —
+        # would crash with "unrecognized arguments: mcp serve" before any
+        # stdio handshake. The Typer layer already extracted api_key /
+        # base_url and exported them as env above.
+        _serve(argv=[])
     except KeyboardInterrupt:
         raise typer.Exit(code=130)
 

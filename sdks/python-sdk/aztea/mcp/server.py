@@ -2756,7 +2756,11 @@ def _env_with_legacy(new_name: str, legacy_name: str, default: str) -> str:
     return os.environ.get(new_name) or os.environ.get(legacy_name) or default
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse argv. ``argv=None`` reads sys.argv; pass ``[]`` from in-process
+    callers (e.g. ``aztea mcp serve`` Typer dispatch) so Typer's command
+    line ("mcp serve") doesn't get re-interpreted as argparse positionals
+    and crash the server before stdio handshake."""
     parser = argparse.ArgumentParser(
         description="Expose Aztea registry as MCP tools over stdio."
     )
@@ -2797,7 +2801,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fetch and print current MCP tool manifest, then exit.",
     )
-    return parser.parse_args()
+    return parser.parse_args(args=argv)
 
 
 _NO_API_KEY_BANNER_LINES: tuple[str, ...] = (
@@ -2839,11 +2843,15 @@ def _emit_no_api_key_banner(base_url: str) -> None:
     sys.stderr.flush()
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    """Entrypoint. ``argv=None`` reads sys.argv (standalone use). When
+    invoked from Typer's ``aztea mcp serve``, the Typer wrapper passes
+    ``[]`` so the inner argparse doesn't choke on Typer's subcommand
+    tokens still living in sys.argv."""
     logging.basicConfig(
         level=logging.INFO, stream=sys.stderr, format="[aztea-mcp] %(message)s"
     )
-    args = _parse_args()
+    args = _parse_args(argv)
     api_key = str(args.api_key or "").strip()
     base_url = str(args.base_url or "").strip() or "http://localhost:8000"
     if not api_key:
