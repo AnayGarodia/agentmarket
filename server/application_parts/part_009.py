@@ -1464,18 +1464,50 @@ def jobs_list(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobsListResponse:
     _require_scope(caller, "caller")
-    if status and status not in jobs.VALID_STATUSES:
-        raise HTTPException(status_code=422, detail=f"Invalid status: {status}")
+    # Accept either a single status or a comma-separated list (e.g.
+    # "complete,failed") so callers building a dispute picker can ask for
+    # only terminal jobs in one round-trip. Empty entries are dropped.
+    requested_statuses: list[str] = []
+    if status:
+        requested_statuses = [s.strip() for s in status.split(",") if s.strip()]
+        for s in requested_statuses:
+            if s not in jobs.VALID_STATUSES:
+                raise HTTPException(status_code=422, detail=f"Invalid status: {s}")
     page_size = min(max(1, limit), 200)
     before_created_at, before_job_id = _decode_jobs_cursor(cursor)
     owner_id = _caller_owner_id(request)
-    items = jobs.list_jobs_for_owner(
-        owner_id,
-        limit=page_size + 1,
-        status=status,
-        before_created_at=before_created_at,
-        before_job_id=before_job_id,
-    )
+    if len(requested_statuses) > 1:
+        # Fan out per-status, merge by created_at desc, then truncate. Avoids
+        # touching the storage layer's single-status SQL while keeping the
+        # picker case fast: page_size is capped at 200 and each list_jobs call
+        # is a single indexed query.
+        merged: list[dict] = []
+        seen: set[str] = set()
+        for s in requested_statuses:
+            for row in jobs.list_jobs_for_owner(
+                owner_id,
+                limit=page_size + 1,
+                status=s,
+                before_created_at=before_created_at,
+                before_job_id=before_job_id,
+            ):
+                jid = row.get("job_id")
+                if jid and jid not in seen:
+                    seen.add(jid)
+                    merged.append(row)
+        merged.sort(
+            key=lambda j: (str(j.get("created_at") or ""), str(j.get("job_id") or "")),
+            reverse=True,
+        )
+        items = merged[: page_size + 1]
+    else:
+        items = jobs.list_jobs_for_owner(
+            owner_id,
+            limit=page_size + 1,
+            status=requested_statuses[0] if requested_statuses else None,
+            before_created_at=before_created_at,
+            before_job_id=before_job_id,
+        )
     next_cursor = None
     if len(items) > page_size:
         page_items = items[:page_size]

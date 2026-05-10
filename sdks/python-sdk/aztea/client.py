@@ -720,8 +720,37 @@ class AzteaClient:
         body = dict(input_payload or {})
         return self._request_json("POST", f"/agents/{agent_id}/estimate", json_body=body)
 
-    def list_jobs(self, *, limit: int = 50) -> JSONObject:
-        return self._request_json("GET", "/jobs", params={"limit": str(int(limit))})
+    def list_jobs(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+        cursor: str | None = None,
+    ) -> JSONObject:
+        """Paginated list of the caller's jobs.
+
+        ``status`` accepts a single status (``"complete"``) or a comma-list
+        (``"complete,failed"``) — the latter lets the CLI dispute picker
+        fetch only terminal jobs in one round-trip.
+        """
+        params: dict[str, str] = {"limit": str(int(limit))}
+        if status:
+            params["status"] = status
+        if cursor:
+            params["cursor"] = cursor
+        return self._request_json("GET", "/jobs", params=params)
+
+    def get_dispute_policy(self) -> JSONObject:
+        """Public read-only view of the dispute filing policy.
+
+        Returns ``{filing_deposit_bps, filing_deposit_min_cents,
+        default_dispute_window_hours, judges_required, judges_total, formula}``.
+        Used by the CLI dispute wizard to quote the exact deposit amount
+        before the user confirms. No auth required.
+        """
+        return self._request_json(
+            "GET", "/ops/dispute-policy", require_api_key=False
+        )
 
     # ─── Identity & verifiable receipts (the moat) ───────────────────────────
 
