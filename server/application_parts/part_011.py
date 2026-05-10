@@ -35,6 +35,7 @@ def admin_get_dispute(
     "/admin/disputes/{dispute_id}/rule",
     response_model=core_models.DisputeJudgeResponse,
     responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+    dependencies=[Depends(_require_admin_caller)],
 )
 @limiter.limit("30/minute")
 def disputes_admin_rule(
@@ -43,6 +44,10 @@ def disputes_admin_rule(
     body: AdminDisputeRuleRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DisputeJudgeResponse:
+    # Belt-and-braces: route-level dep above already 403s non-admin callers
+    # before body parse, so this in-handler check is redundant for fresh
+    # requests. Kept so future refactors that move the route can't silently
+    # drop the scope guard.
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
     dispute_row = disputes.get_dispute(dispute_id)
