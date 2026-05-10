@@ -1752,3 +1752,77 @@ def admin_platform_withdraw(
             "admin_wallet_id": dest_wallet["wallet_id"],
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Watchers — minimal JSON discovery surface (1.6.1)
+# ---------------------------------------------------------------------------
+# The watcher CRUD module shipped with PR #15 / #16 but never gained a public
+# JSON route. Tools probing /watchers, /api/watchers, /v1/watchers all hit the
+# SPA fallback and got HTML. This GET makes the surface discoverable; mutating
+# operations stay in the dedicated owner-scoped routes (kept in core/watchers
+# for now until the schema stabilises further).
+
+@app.get(
+    "/watchers",
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Watchers"],
+    summary="List watchers owned by the calling user.",
+)
+@limiter.limit("60/minute")
+def watchers_list(
+    request: Request,
+    limit: int = 100,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_any_scope(caller, "caller", "worker")
+    from core import watchers as _watchers
+
+    owner_id = caller.get("owner_id") or ""
+    rows = _watchers.crud.list_watchers_for_owner(owner_id, limit=int(limit))
+    return JSONResponse(content={"watchers": rows, "count": len(rows)})
+
+
+# ---------------------------------------------------------------------------
+# Caller self-reconcile (1.6.1)
+# ---------------------------------------------------------------------------
+# /ops/payments/reconcile is admin-only (system-wide audit). Callers couldn't
+# verify their own wallet drift without root creds. This endpoint lets a
+# caller-scoped key reconcile only their own wallet.
+
+@app.get(
+    "/wallets/me/reconcile",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Wallets"],
+    summary="Reconcile the caller's own wallet (cached balance vs ledger sum).",
+)
+@limiter.limit("10/minute")
+def wallet_self_reconcile(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_any_scope(caller, "caller", "worker")
+    owner_id = caller.get("owner_id") or ""
+    wallet = payments.get_or_create_wallet(owner_id)
+    wallet_id = wallet["wallet_id"]
+    cached = int(wallet.get("balance_cents") or 0)
+    with get_db_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(amount_cents), 0) AS net
+            FROM transactions
+            WHERE wallet_id = %s
+            """,
+            (wallet_id,),
+        ).fetchone()
+    ledger = int((dict(row) if row else {}).get("net") or 0)
+    drift = cached - ledger
+    return JSONResponse(
+        content={
+            "wallet_id": wallet_id,
+            "cached_balance_cents": cached,
+            "ledger_sum_cents": ledger,
+            "drift_cents": drift,
+            "invariant_ok": drift == 0,
+        }
+    )
