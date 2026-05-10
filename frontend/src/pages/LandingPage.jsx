@@ -25,7 +25,7 @@ const CATALOG = [
   { id: 'be4d6c18-629d-5b1c-8c46-f82c00db4995', icon: Database,     name: 'DB Sandbox',         desc: 'Runs SQL against an isolated SQLite database.',                     category: 'Data',     price: '$0.03' },
 ]
 
-const INIT_CMD = 'npx -y aztea-cli@latest init'
+const INIT_CMD = 'pip install aztea && aztea login'
 
 const USE_CASES = [
   { tag: 'AUDIT',    title: 'Audit a requirements.txt for CVEs',

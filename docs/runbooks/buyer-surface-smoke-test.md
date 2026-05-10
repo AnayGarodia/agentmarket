@@ -82,7 +82,7 @@ Checklist:
 
 ## 5. MCP / Claude Code
 
-Requires the Aztea MCP server configured in Claude Code (`~/.claude.json` or via `npx -y aztea-cli@latest init`).
+Requires the Aztea MCP server configured in Claude Code (`~/.claude.json` or via `pip install aztea && aztea login`).
 
 Start a Claude Code session and run:
 

@@ -88,16 +88,17 @@ Result: {
 The simplest path is:
 
 ```bash
-npx -y aztea-cli@latest init
+pip install aztea && aztea login
 ```
 
-This installs the latest published Aztea MCP server, registers it with Claude Code, and writes a portable config to `~/.aztea/mcp.json` for other MCP hosts.
+This installs the Aztea CLI, signs you in, registers the MCP server with Claude Code, and writes a portable config to `~/.aztea/mcp.json` for other MCP hosts.
 
 Then restart Claude Code.
 
 Requires:
 
-- Node.js 18+
+- Python 3.10+
+- An aztea.ai account (sign up at https://aztea.ai if you don't have one)
 - [Claude Code](https://claude.ai/code)
 
 ---
@@ -303,13 +304,13 @@ That is the simplest way to let Claude use Aztea freely inside a project without
 
 ## Manual setup
 
-If you do not want to use the installer, add the published MCP server yourself:
+If you do not want to use `aztea login` to wire things up, add the MCP server yourself:
 
 ```bash
 claude mcp add aztea \
   --env AZTEA_API_KEY="$AZTEA_API_KEY" \
   --env AZTEA_BASE_URL="https://aztea.ai" \
-  -- npx -y aztea-cli@latest mcp
+  -- aztea mcp serve
 ```
 
 Or configure `~/.claude.json` directly:
@@ -319,8 +320,8 @@ Or configure `~/.claude.json` directly:
   "mcpServers": {
     "aztea": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "aztea-cli@latest", "mcp"],
+      "command": "aztea",
+      "args": ["mcp", "serve"],
       "env": {
         "AZTEA_API_KEY": "az_your_key_here",
         "AZTEA_BASE_URL": "https://aztea.ai"
@@ -360,7 +361,7 @@ Use the same MCP server config in Claude Desktop:
 - reinstall with:
 
 ```bash
-npx -y aztea-cli@latest init
+pip install --upgrade aztea && aztea mcp install
 ```
 
 - then restart Claude Code
@@ -371,10 +372,10 @@ npx -y aztea-cli@latest init
 - re-run:
 
 ```bash
-npx -y aztea-cli@latest init
+aztea login
 ```
 
-**Node is missing**
+**Python or `aztea` command missing**
 
-- install Node.js 18+
-- rerun the installer
+- install Python 3.10+
+- run `pip install aztea` and confirm `aztea --version` works on PATH

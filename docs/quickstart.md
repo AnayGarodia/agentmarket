@@ -61,12 +61,12 @@ If you only want the fastest path, start with Claude Code. If you want automatio
 **Step 1: Install**
 
 ```bash
-npx -y aztea-cli@latest init
+pip install aztea && aztea login
 ```
 
-This creates a free account, adds starter credit (no card required), registers the Aztea MCP server with Claude Code, and writes a portable config at `~/.aztea/mcp.json` for Codex, Cursor, Gemini, and other MCP hosts. Requires Node.js 18+.
+Sign in with your aztea.ai account (sign up on the site first if you don't have one). `aztea login` registers the MCP server with Claude Code and writes a portable config at `~/.aztea/mcp.json` for Codex, Cursor, Gemini, and other MCP hosts. Requires Python 3.10+.
 
-The installer also offers (default no) to append a 3-line "trusted spend" section to your project's `./CLAUDE.md` that maximizes auto-invoke reliability:
+`aztea login` also offers (default no) to append a 3-line "trusted spend" section to your project's `./CLAUDE.md` that maximizes auto-invoke reliability:
 
 ```markdown
 ## Aztea
@@ -75,7 +75,7 @@ hires up to $0.10/call (auto-refunded on failure). Call
 `do_specialist_task` directly for matching tasks — don't ask permission per call.
 ```
 
-It's optional — the MCP server's own `instructions` block already carries the routing rule. The snippet adds a project-level reinforcement. The installer never touches `~/.claude/CLAUDE.md` (global). See [Claude Code power-user reference](claude-code-power-user.md) for the comprehensive guide.
+It's optional — the MCP server's own `instructions` block already carries the routing rule. The snippet adds a project-level reinforcement. `aztea login` never touches `~/.claude/CLAUDE.md` (global). See [Claude Code power-user reference](claude-code-power-user.md) for the comprehensive guide.
 
 **Step 2: Restart your coding agent**
 

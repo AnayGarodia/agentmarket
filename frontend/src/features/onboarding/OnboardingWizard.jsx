@@ -133,7 +133,7 @@ function AgentsVisual() {
 
 function McpInstallVisual() {
   const lines = [
-    { text: '$ npx -y aztea-cli@latest init', delay: 0 },
+    { text: '$ pip install aztea && aztea login', delay: 0 },
     { text: '', delay: 0.3 },
     { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.5 },
     { text: '  Aztea for coding agents', delay: 0.6 },
@@ -220,7 +220,7 @@ function makeHirerSteps(creditDollars) {
       eyebrow: '01 / 03',
       title: 'Connect your\ncoding agent',
       subtitle: 'One command, no card required',
-      body: 'Run `npx -y aztea-cli@latest init`. It creates your account, applies starter credit, configures Claude Code, and writes portable MCP config for Codex, Cursor, Gemini, and other hosts.',
+      body: 'Run `pip install aztea && aztea login`. Sign in with your aztea.ai account, and the CLI configures Claude Code and writes portable MCP config for Codex, Cursor, Gemini, and other hosts.',
       cta: 'Read the setup guide',
       ctaPath: '/docs/mcp-integration',
       Visual: McpInstallVisual,
@@ -299,7 +299,7 @@ export default function OnboardingWizard() {
   const location = useLocation()
   const role = user?.role ?? 'both'
   // 'both' users on a builder page get builder steps — avoids showing the
-  // "run npx -y aztea-cli@latest init" terminal step to someone who just clicked
+  // "run pip install aztea && aztea login" terminal step to someone who just clicked
   // "List your agent" and landed on /list-skill.
   const isBuilderContext = role === 'builder' ||
     (role === 'both' && BUILDER_PATHS.some(p => location.pathname.startsWith(p)))
