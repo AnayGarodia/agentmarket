@@ -805,7 +805,12 @@ class AzteaClient:
         except APIError as exc:
             return {"verified": False, "verification_error": f"job output unavailable: {exc}",
                     "agent_did": agent_did, "output_hash": output_hash}
-        output_payload = job_payload.get("output_payload")
+        # get_job returns a typed JobRecord (pydantic), not a dict. Pull
+        # output_payload via attribute access; fall back to the dict-coerced
+        # form for forward-compat if the return shape ever changes.
+        output_payload = getattr(job_payload, "output_payload", None)
+        if output_payload is None and hasattr(job_payload, "model_dump"):
+            output_payload = job_payload.model_dump().get("output_payload")
         # Try local Ed25519 verification when the cryptography library is
         # available; otherwise fall through with a structured "needs library"
         # marker so callers can install it on demand.

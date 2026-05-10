@@ -135,6 +135,7 @@ def _render_plain(meta: dict[str, Any] | None) -> None:
         console.print(f"  {CHECK} signed in as {meta.get('username') or 'user'} ({meta.get('base_url')})")
         console.print("  aztea agents list      browse the marketplace")
         console.print("  aztea hire <slug>      hire a specialist")
+        console.print("  aztea publish          list a new agent (interactive wizard)")
         console.print("  aztea wallet balance   inspect funds")
         console.print("  aztea status           dashboard")
     else:

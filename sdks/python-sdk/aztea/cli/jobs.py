@@ -367,7 +367,7 @@ def verify(
 
 @app.command()
 def estimate(
-    agent_id: str,
+    agent: str = typer.Argument(..., help="Agent slug or full UUID."),
     input_value: Optional[str] = typer.Option(
         None, "--input", help="@file.json, '-', inline JSON, or k=v pairs."
     ),
@@ -379,6 +379,10 @@ def estimate(
     try:
         payload = parse_input(input_value)
         with build_client(api_key=api_key, base_url=base_url) as client:
+            # Mirror `aztea hire`: accept slug OR UUID. Without slug
+            # resolution here, slug forms hit /registry/agents/{slug}/estimate
+            # and 404 because the route expects a UUID.
+            agent_id = find_agent_id(client, agent)
             with spinner("Estimating", json_mode=json_mode):
                 result = client.estimate_cost(agent_id, payload)
             emit(result, json_mode=json_mode)

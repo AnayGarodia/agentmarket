@@ -90,6 +90,56 @@ _DEFAULT_AGENT_MD_PRICE_USD = 0.05
 _DEFAULT_PY_HANDLER_PRICE_USD = 0.05
 
 
+def _write_template_stub(kind: str) -> None:
+    """Non-interactive `--from-template <kind>` path: write a placeholder
+    starter file with stand-in values, then return. The user edits and
+    re-runs `aztea publish <file>`.
+    """
+    from string import Template
+    kind_lower = (kind or "").strip().lower()
+    if kind_lower not in {"skill", "agent", "python"}:
+        from .output import error
+        error(
+            f"Unknown template kind {kind!r}. Use one of: skill, agent, python.",
+            code="publish.template_kind",
+        )
+        raise typer.Exit(code=2)
+
+    template_map = {
+        "skill":  ("skill_md.template",  "my_new_skill.skill.md"),
+        "agent":  ("agent_md.template",  "agent.md"),
+        "python": ("handler_py.template", "my_new_agent.py"),
+    }
+    template_name, out_filename = template_map[kind_lower]
+    templates_dir = Path(__file__).parent / "templates"
+    raw = (templates_dir / template_name).read_text()
+
+    # Placeholder substitutions — user will edit before publishing.
+    subs = {
+        "name":        "my-new-skill" if kind_lower == "skill" else "my_new_agent",
+        "description": "TODO: describe what this agent does in one sentence.",
+        "emoji_line":  "",
+        "body":        "TODO: write the skill body here. See https://aztea.ai/docs/skill-md for the format.",
+    }
+    rendered = Template(raw).safe_substitute(subs)
+
+    target = Path.cwd() / out_filename
+    if target.exists():
+        from .output import error
+        error(
+            f"{target.name} already exists in cwd; refusing to overwrite. "
+            "Move it aside or run from a different directory.",
+            code="publish.template_exists",
+        )
+        raise typer.Exit(code=1)
+    target.write_text(rendered)
+    from .output import success
+    success(
+        f"Wrote {target.name}",
+        detail=f"Edit it, then `aztea publish {target.name}` to list.",
+    )
+
+
 def publish(
     path: Optional[Path] = typer.Argument(
         None,
@@ -152,14 +202,20 @@ def publish(
         raise typer.Exit(code=1)
 
     if path is None:
+        # `--from-template <kind>` is the non-interactive starter-file path:
+        # write a placeholder file using the bundled template (no prompts,
+        # no TTY needed) and exit. The user edits and re-runs `aztea publish
+        # <file>` to actually list. Bypasses the wizard which would still
+        # require a TTY for the slug/description prompts.
+        if from_template is not None:
+            _write_template_stub(from_template)
+            return
         path = _wizard.run_wizard(
             api_key=api_key,
             base_url=base_url,
             json_mode=json_mode,
-            from_template_only=from_template is not None,
+            from_template_only=False,
         )
-        if from_template is not None:
-            return
 
     try:
         detection = detect(path)

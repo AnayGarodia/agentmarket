@@ -62,7 +62,16 @@ def list_cmd(
                         agents = [a for a in agents if a.trust_score >= min_trust]
 
             if json_mode:
-                emit(agents, json_mode=True)
+                # Inject the kebab-cased slug into each row so programmatic
+                # consumers can hire by slug. The server response only has
+                # agent_id + name; we derive slug client-side via slugify(name).
+                from .common import slugify
+                rows = []
+                for a in agents:
+                    raw = a.model_dump() if hasattr(a, "model_dump") else dict(a)
+                    raw.setdefault("slug", slugify(str(raw.get("name") or "")))
+                    rows.append(raw)
+                emit(rows, json_mode=True)
                 return
 
             _render_agent_table(agents, query=search)
