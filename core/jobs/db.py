@@ -62,16 +62,19 @@ _ACTIVE_CLAIM_EVENT_TYPES = {
 _LEASE_BEHAVIOR_EXTEND = "extend"
 _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING = "extend_and_mark_awaiting"
 _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING = "extend_and_resume_running"
+_LEASE_BEHAVIOR_NONE = "none"
 MESSAGE_TYPE_LEASE_BEHAVIOR = {
     "clarification_request": _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
     "clarification_response": _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
     "progress": _LEASE_BEHAVIOR_EXTEND,
     "partial_result": _LEASE_BEHAVIOR_EXTEND,
+    "partial_output": _LEASE_BEHAVIOR_EXTEND,
     "artifact": _LEASE_BEHAVIOR_EXTEND,
     "agent_message": _LEASE_BEHAVIOR_EXTEND,
     "tool_call": _LEASE_BEHAVIOR_EXTEND,
     "tool_result": _LEASE_BEHAVIOR_EXTEND,
     "note": _LEASE_BEHAVIOR_EXTEND,
+    "steer": _LEASE_BEHAVIOR_NONE,
 }
 _LEGACY_MESSAGE_TYPE_LEASE_BEHAVIOR = {
     "clarification_needed": _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
@@ -86,7 +89,13 @@ VALID_STATUSES = {
     "awaiting_clarification",
     "complete",
     "failed",
+    "stopped",
 }
+
+# Terminal states — used by sweepers, rating windows, dispute deadlines, SDK
+# wait_for_completion, MCP manage_job, frontend timeline, and metrics labels.
+# Adding 'stopped' here is the single source of truth for the boy-scout sweep.
+TERMINAL_STATUSES = frozenset({"complete", "failed", "stopped"})
 
 PARENT_CASCADE_POLICIES = {
     "detach",
