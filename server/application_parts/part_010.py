@@ -232,41 +232,10 @@ def jobs_message_create(
 
     # Clarification loop cap: max 20 unanswered clarification_requests per job
     if msg_type == "clarification_request":
-        open_clarifications = jobs.count_open_clarification_requests(job_id)
-        if open_clarifications >= 20:
-            raise HTTPException(
-                status_code=429,
-                detail=error_codes.make_error(
-                    error_codes.RATE_LIMITED,
-                    "This job has too many unanswered clarification requests (max 20). "
-                    "Respond to pending clarifications before sending more.",
-                    {"job_id": job_id, "open_count": open_clarifications},
-                ),
-            )
+        _message_check_clarification_cap(job_id=job_id)
 
-    if caller["type"] == "master":
-        from_id = f"agent:{job['agent_id']}"
-    elif caller["owner_id"] == job["caller_owner_id"]:
-        from_id = job["caller_owner_id"]
-    else:
-        from_id = caller["owner_id"]
-
-    if msg_type == "tool_call":
-        correlation_id = str(payload.get("correlation_id") or "").strip()
-        if not correlation_id:
-            payload["correlation_id"] = str(uuid.uuid4())
-    elif msg_type == "tool_result":
-        correlation_id = str(payload.get("correlation_id") or "").strip()
-        if not correlation_id:
-            raise HTTPException(
-                status_code=400,
-                detail="tool_result payload.correlation_id is required.",
-            )
-        if not _job_has_tool_call_correlation(job_id, correlation_id):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown tool_result correlation_id '{correlation_id}'.",
-            )
+    from_id = _message_derive_from_id(caller=caller, job=job)
+    _message_validate_correlation(job_id=job_id, msg_type=msg_type, payload=payload)
 
     msg = jobs.add_message(
         job_id,
@@ -289,6 +258,92 @@ def jobs_message_create(
     )
 
     return JSONResponse(content=msg, status_code=201)
+
+
+def _message_derive_from_id(*, caller: Any, job: dict) -> str:
+    """Derive the from_id for a job message from the authenticated caller."""
+    if caller["type"] == "master":
+        return f"agent:{job['agent_id']}"
+    if caller["owner_id"] == job["caller_owner_id"]:
+        return job["caller_owner_id"]
+    return caller["owner_id"]
+
+
+def _message_validate_correlation(*, job_id: str, msg_type: str, payload: dict) -> None:
+    """Validate correlation_id for tool_call / tool_result messages. Raises on error."""
+    if msg_type == "tool_call":
+        if not str(payload.get("correlation_id") or "").strip():
+            payload["correlation_id"] = str(uuid.uuid4())
+        return
+    if msg_type != "tool_result":
+        return
+    correlation_id = str(payload.get("correlation_id") or "").strip()
+    if not correlation_id:
+        raise HTTPException(
+            status_code=400,
+            detail="tool_result payload.correlation_id is required.",
+        )
+    if not _job_has_tool_call_correlation(job_id, correlation_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown tool_result correlation_id '{correlation_id}'.",
+        )
+
+
+def _message_check_clarification_cap(*, job_id: str) -> None:
+    """Raise 429 if the job has too many open clarification requests."""
+    open_clarifications = jobs.count_open_clarification_requests(job_id)
+    if open_clarifications >= 20:
+        raise HTTPException(
+            status_code=429,
+            detail=error_codes.make_error(
+                error_codes.RATE_LIMITED,
+                "This job has too many unanswered clarification requests (max 20). "
+                "Respond to pending clarifications before sending more.",
+                {"job_id": job_id, "open_count": open_clarifications},
+            ),
+        )
+
+
+def _rate_apply_five_star_milestone(*, caller_owner_id: str, rating: int) -> None:
+    """Adjust caller trust on 5-star milestones (every 10 five-star ratings)."""
+    if rating != 5:
+        return
+    five_star_count = reputation.count_caller_given_ratings(caller_owner_id, rating=5)
+    if five_star_count >= 10:
+        milestone = five_star_count // 10
+        payments.adjust_caller_trust_once(
+            caller_owner_id,
+            delta=0.02,
+            reason="five_star_milestone",
+            related_id=f"milestone:{milestone}",
+        )
+
+
+def _rate_apply_payout_curve_clawback(*, job: dict, agent: dict | None, rating: int) -> dict | None:
+    """Apply payout curve clawback if the agent has a curve and the job is settled."""
+    if not agent or not job.get("settled_at"):
+        return None
+    from core import payout_curve as _pc
+    raw_curve = agent.get("payout_curve")
+    curve = _pc.parse_curve(raw_curve) if raw_curve else None
+    fraction = _pc.fraction_for_rating(curve, rating)
+    if fraction >= 1.0:
+        return None
+    distribution = payments.compute_success_distribution(
+        int(job.get("price_cents") or 0),
+        platform_fee_pct=int(job.get("platform_fee_pct_at_create") or payments.PLATFORM_FEE_PCT),
+        fee_bearer_policy=str(job.get("fee_bearer_policy") or "caller"),
+    )
+    agent_payout_cents = int(distribution["agent_payout_cents"])
+    return _pc.apply_curve_clawback(
+        job_id=job["job_id"],
+        agent_id=str(job["agent_id"]),
+        agent_wallet_id=str(job["agent_wallet_id"]),
+        caller_wallet_id=str(job["caller_wallet_id"]),
+        agent_payout_cents=agent_payout_cents,
+        payout_fraction=fraction,
+    )
 
 
 def _extract_job_message_filters(
@@ -615,44 +670,8 @@ def jobs_rate(
             )
 
         metrics = reputation.compute_trust_metrics(job["agent_id"])
-        if body.rating == 5:
-            five_star_count = reputation.count_caller_given_ratings(
-                caller["owner_id"], rating=5
-            )
-            if five_star_count >= 10:
-                milestone = five_star_count // 10
-                payments.adjust_caller_trust_once(
-                    caller["owner_id"],
-                    delta=0.02,
-                    reason="five_star_milestone",
-                    related_id=f"milestone:{milestone}",
-                )
-
-        clawback_result = None
-        if agent and job.get("settled_at"):
-            from core import payout_curve as _pc
-
-            raw_curve = agent.get("payout_curve")
-            curve = _pc.parse_curve(raw_curve) if raw_curve else None
-            fraction = _pc.fraction_for_rating(curve, body.rating)
-            if fraction < 1.0:
-                distribution = payments.compute_success_distribution(
-                    int(job.get("price_cents") or 0),
-                    platform_fee_pct=int(
-                        job.get("platform_fee_pct_at_create")
-                        or payments.PLATFORM_FEE_PCT
-                    ),
-                    fee_bearer_policy=str(job.get("fee_bearer_policy") or "caller"),
-                )
-                agent_payout_cents = int(distribution["agent_payout_cents"])
-                clawback_result = _pc.apply_curve_clawback(
-                    job_id=job_id,
-                    agent_id=str(job["agent_id"]),
-                    agent_wallet_id=str(job["agent_wallet_id"]),
-                    caller_wallet_id=str(job["caller_wallet_id"]),
-                    agent_payout_cents=agent_payout_cents,
-                    payout_fraction=fraction,
-                )
+        _rate_apply_five_star_milestone(caller_owner_id=caller["owner_id"], rating=body.rating)
+        clawback_result = _rate_apply_payout_curve_clawback(job=job, agent=agent, rating=body.rating)
 
         _record_job_event(
             job,
