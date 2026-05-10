@@ -57,7 +57,13 @@ scripts/release_publish_local.sh
 
 # Tool caches (user-local; never committed)
 .qwen/
-.agents/
+# .agents/ is user-local, EXCEPT TODO.md — that file is the team-tracked source
+# of truth for launch blockers and is referenced from every agent-onboarding
+# doc (CLAUDE.md, AGENTS.md, CODEX.md, GEMINI.md). To make the negation work,
+# we cannot wholesale-ignore the directory; instead ignore its contents and
+# carve out TODO.md.
+.agents/*
+!.agents/TODO.md
 .superpowers/
 skills/
 skills-lock.json
