@@ -4,6 +4,8 @@ import os
 
 os.environ.setdefault("API_KEY", "test-master-key")
 
+import pytest  # noqa: E402
+
 from server.builtin_agents.specs import (  # noqa: E402
     builtin_agent_specs,
     builtin_catalog_metadata,
@@ -40,6 +42,35 @@ def test_builtin_catalog_metadata_returns_none_for_removed_agents():
     removed_github_fetcher = "5896576f-bbe6-59e4-83c1-5106002e7d10"
     metadata = builtin_catalog_metadata(removed_github_fetcher)
     assert metadata is None
+
+
+def test_jsonschema_shape_validator_rejects_obvious_breakage():
+    """The shape validator runs at module load, so a malformed schema in
+    a spec file would crash import. Exercise it directly with hostile
+    inputs to make sure it catches the cases we care about — a typo in
+    a future spec must not pass silently into the MCP manifest."""
+    from server.builtin_agents.specs import _validate_jsonschema_shape
+
+    # Happy paths — must not raise.
+    _validate_jsonschema_shape({}, field="input_schema", agent_id="x")
+    _validate_jsonschema_shape({"type": "object"}, field="input_schema", agent_id="x")
+    _validate_jsonschema_shape(
+        {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+        field="input_schema",
+        agent_id="x",
+    )
+
+    bad_inputs = [
+        ("not-a-dict", "must be a dict"),
+        ({"type": "array"}, "type must be 'object'"),
+        ({"properties": "not-a-dict"}, "properties must be a dict"),
+        ({"required": "not-a-list"}, "required must be a list of strings"),
+        ({"required": [1, 2]}, "required must be a list of strings"),
+    ]
+    for bad, expect_in_msg in bad_inputs:
+        with pytest.raises(ValueError) as exc_info:
+            _validate_jsonschema_shape(bad, field="input_schema", agent_id="x")
+        assert expect_in_msg in str(exc_info.value), str(exc_info.value)
 
 
 def test_builtin_dispatch_table_covers_every_internal_endpoint():
