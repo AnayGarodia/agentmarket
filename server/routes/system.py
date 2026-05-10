@@ -116,6 +116,7 @@ def health() -> core_models.HealthResponse:
         agent
         for agent in registry.get_agents(include_internal=False)
         if str(agent.get("agent_id") or "") not in sunset_ids
+        and str(agent.get("review_status") or "").strip().lower() != "sunset"
         and (
             str(agent.get("status") or "").strip().lower() == "active"
             or str(agent.get("agent_id") or "") in curated_public

@@ -296,7 +296,12 @@ def registry_search(
     # They stay callable by direct slug, just not discoverable.
     if not include_unapproved:
         sunset = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
-        ranked = [item for item in ranked if item["agent"].get("agent_id") not in sunset]
+        ranked = [
+            item
+            for item in ranked
+            if item["agent"].get("agent_id") not in sunset
+            and str(item["agent"].get("review_status") or "").strip().lower() != "sunset"
+        ]
 
     search_stats = _compute_bulk_agent_stats(
         [item["agent"]["agent_id"] for item in ranked]
@@ -404,6 +409,231 @@ def registry_agent_work_history(
             "total": len(examples),
             "limit": capped_limit,
             "offset": capped_offset,
+        }
+    )
+
+
+# --- Agent removal: owner self-sunset + admin sunset/reactivate/hard-delete ---
+#
+# Sunset writes review_status='sunset' on the agent row. The call hot path
+# (server/application_parts/part_002.py::_assert_agent_callable) returns HTTP
+# 410 ``agent.sunset`` for sunset rows, and list/search filters hide them from
+# non-admin callers. Reversible via /reactivate. Receipts and signed history
+# remain intact regardless. The hardcoded SUNSET_DEPRECATED_AGENT_IDS frozenset
+# remains as a fallback so existing built-in sunsets keep working without DB
+# writes; ``core.registry.agents_ops.is_agent_sunset`` unifies both.
+
+def _invalidate_agents_list_cache() -> None:
+    """Drop the 15s ``GET /registry/agents`` cache after a registry mutation.
+
+    Without this, a freshly-sunset agent stays visible in /registry/agents for
+    up to 15 seconds — confusing UX (`aztea unpublish foo` says success, then
+    `aztea agents list` still shows foo). The cache is module-level state in
+    part_007's ``registry_list``; we just clear both halves.
+    """
+    global _agents_list_cache, _agents_list_cache_at  # noqa: PLW0603
+    _agents_list_cache = None
+    _agents_list_cache_at = 0.0
+
+
+class AgentSunsetRequest(BaseModel):
+    reason: str | None = None
+
+
+@app.post(
+    "/registry/agents/{agent_id}/sunset",
+    status_code=200,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+    tags=["Registry"],
+    summary="Soft-remove an agent you own from the catalog (reversible).",
+)
+@limiter.limit("30/minute")
+def registry_agent_sunset(
+    request: Request,
+    agent_id: str,
+    body: AgentSunsetRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Mark the agent as sunset. Owner-callable for own listings; admins can
+    sunset any agent. Returns the updated agent row. Idempotent."""
+    _require_scope(caller, "worker")
+    if caller["type"] in {"agent_key", "agent_caller"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent-scoped keys cannot manage listings.",
+        )
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if not _caller_can_manage_agent(caller, agent):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+    actor_owner_id = (
+        "master"
+        if caller.get("type") == "master"
+        else str(caller.get("owner_id") or "").strip() or "unknown"
+    )
+    updated = registry.sunset_agent(
+        agent_id, actor_owner_id=actor_owner_id, reason=body.reason
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    _invalidate_agents_list_cache()
+    return JSONResponse(
+        content={
+            "ok": True,
+            "agent_id": agent_id,
+            "review_status": updated.get("review_status"),
+            "review_note": updated.get("review_note"),
+            "reviewed_by": updated.get("reviewed_by"),
+            "reviewed_at": updated.get("reviewed_at"),
+            "message": (
+                f"Agent '{agent_id}' is sunset. Callers receive HTTP 410. "
+                "Reactivate via POST /registry/agents/{id}/reactivate."
+            ),
+        }
+    )
+
+
+@app.post(
+    "/registry/agents/{agent_id}/reactivate",
+    status_code=200,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+    tags=["Registry"],
+    summary="Reverse a prior sunset, restoring the agent to the catalog.",
+)
+@limiter.limit("30/minute")
+def registry_agent_reactivate(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Restore review_status='approved' for a sunset agent. Owner-callable for
+    own listings; admins can reactivate any agent. Refuses if the row is not
+    currently in sunset state."""
+    _require_scope(caller, "worker")
+    if caller["type"] in {"agent_key", "agent_caller"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent-scoped keys cannot manage listings.",
+        )
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if not _caller_can_manage_agent(caller, agent):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+    if str(agent.get("review_status") or "").strip().lower() != "sunset":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Agent '{agent_id}' is not sunset "
+                f"(current review_status: {agent.get('review_status')!r})."
+            ),
+        )
+    actor_owner_id = (
+        "master"
+        if caller.get("type") == "master"
+        else str(caller.get("owner_id") or "").strip() or "unknown"
+    )
+    updated = registry.reactivate_agent(agent_id, actor_owner_id=actor_owner_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    _invalidate_agents_list_cache()
+    return JSONResponse(
+        content={
+            "ok": True,
+            "agent_id": agent_id,
+            "review_status": updated.get("review_status"),
+            "reviewed_by": updated.get("reviewed_by"),
+            "reviewed_at": updated.get("reviewed_at"),
+            "message": f"Agent '{agent_id}' is back in the catalog.",
+        }
+    )
+
+
+@app.delete(
+    "/admin/agents/{agent_id}",
+    status_code=200,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+    tags=["Admin"],
+    summary="Hard-delete an agent. Admin only. Receipts preserved by design.",
+    dependencies=[Depends(_require_admin_caller)],
+)
+@limiter.limit("10/minute")
+def admin_agent_delete(
+    request: Request,
+    agent_id: str,
+    force: bool = False,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Remove the agent row entirely. Receipts (jobs.output_signature, did
+    document) reference agent_id as a denormalized string with no FK cascade,
+    so historical receipts continue to verify after deletion.
+
+    Refuses if the agent has in-flight jobs (status in pending|running|
+    awaiting_clarification). Pass ``?force=true`` to cancel and refund those
+    jobs before deleting.
+    """
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    inflight = jobs.list_jobs_for_agent_in_states(
+        agent_id, states=("pending", "running", "awaiting_clarification")
+    )
+    cancelled_count = 0
+    refunded_cents = 0
+    if inflight:
+        if not force:
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    "agent.has_inflight_jobs",
+                    (
+                        f"Agent '{agent_id}' has {len(inflight)} in-flight job(s). "
+                        "Pass ?force=true to cancel and refund them before deleting."
+                    ),
+                    {"agent_id": agent_id, "inflight_count": len(inflight)},
+                ),
+            )
+        actor = (
+            "master"
+            if caller.get("type") == "master"
+            else str(caller.get("owner_id") or "admin").strip()
+        )
+        for job in inflight:
+            job_id = str(job.get("job_id") or "").strip()
+            if not job_id:
+                continue
+            cancelled = jobs.update_job_status(
+                job_id,
+                "failed",
+                error_message=f"Agent deleted by admin ({actor}).",
+                completed=True,
+            )
+            if cancelled is None:
+                continue
+            settled = _settle_failed_job(cancelled, actor_owner_id=actor)
+            cancelled_count += 1
+            refunded_cents += int(
+                (settled or cancelled).get("caller_charge_cents") or 0
+            )
+
+    deleted = registry.delete_agent(agent_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    _invalidate_agents_list_cache()
+    return JSONResponse(
+        content={
+            "ok": True,
+            "agent_id": agent_id,
+            "deleted": True,
+            "jobs_cancelled": cancelled_count,
+            "refund_cents": refunded_cents,
+            "message": (
+                f"Agent '{agent_id}' deleted. {cancelled_count} in-flight "
+                f"job(s) cancelled, {refunded_cents}¢ refunded. Existing "
+                "receipts remain verifiable."
+            ),
         }
     )
 

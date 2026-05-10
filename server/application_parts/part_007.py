@@ -159,6 +159,7 @@ def _mcp_active_agents() -> list[dict[str, Any]]:
         for agent in agents
         if (
             str(agent.get("agent_id") or "") not in sunset_ids
+            and str(agent.get("review_status") or "").strip().lower() != "sunset"
             and (
                 str(agent.get("status") or "").strip().lower() == "active"
                 or str(agent.get("agent_id") or "")
@@ -1314,7 +1315,12 @@ def registry_list(
     # search, or auto-hire. Admins still see everything for ops work.
     if not include_unapproved:
         sunset = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
-        agents = [a for a in agents if a.get("agent_id") not in sunset]
+        agents = [
+            a
+            for a in agents
+            if a.get("agent_id") not in sunset
+            and str(a.get("review_status") or "").strip().lower() != "sunset"
+        ]
 
     # Curated-public-set parity: any agent in CURATED_PUBLIC_BUILTIN_AGENT_IDS
     # must surface here, even if the registry seed hasn't run on a fresh

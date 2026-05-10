@@ -73,6 +73,7 @@ _SHORTCUTS_AUTHED: tuple[tuple[str, str], ...] = (
     ("aztea agents list",    "browse the specialist marketplace"),
     ("aztea hire <slug>",    "hire and stream the result"),
     ("aztea publish",        "list a new agent (interactive wizard)"),
+    ("aztea unpublish",      "retract a listing you own (reversible)"),
     ("aztea wallet balance", "funds, escrow, Stripe payouts"),
 )
 _SHORTCUTS_GUEST: tuple[tuple[str, str], ...] = (

@@ -123,6 +123,7 @@ REVIEW_STATUSES = {
     "pending_review",
     "probation",
     "rejected",
+    "sunset",
 }
 
 _embeddings_cache_lock = threading.Lock()

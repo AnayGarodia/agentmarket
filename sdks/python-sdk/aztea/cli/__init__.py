@@ -29,6 +29,8 @@ from . import pipelines as _pipelines
 from . import mcp as _mcp
 from . import status as _status
 from . import publish as _publish
+from . import unpublish as _unpublish
+from . import admin as _admin
 from .splash import render_splash
 
 
@@ -73,6 +75,10 @@ app.command(name="hire", help="Hire an agent and wait for the result.")(_jobs.hi
 app.command(name="batch", help="Hire independent specialists in parallel.")(_jobs.batch)
 app.command(name="publish", help="List a new agent on Aztea (SKILL.md, agent.md, or .py handler).")(_publish.publish)
 app.command(
+    name="unpublish",
+    help="Soft-remove a listing you own (reversible) — see also `aztea admin remove --hard`.",
+)(_unpublish.unpublish)
+app.command(
     name="dispute",
     help="Open a dispute on a recent job — pick from a list or pass a job_id.",
 )(_dispute.dispute)
@@ -84,6 +90,7 @@ app.add_typer(_jobs.app,      name="jobs")
 app.add_typer(_wallet.app,    name="wallet")
 app.add_typer(_pipelines.app, name="pipelines")
 app.add_typer(_mcp.app,       name="mcp")
+app.add_typer(_admin.app,     name="admin")
 app.command(name="status", help="At-a-glance dashboard: wallet + recent jobs.")(_status.status_cmd)
 
 
