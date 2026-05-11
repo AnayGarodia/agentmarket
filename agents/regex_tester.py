@@ -1,5 +1,5 @@
 """
-Regex tester agent — executes Python regex patterns against test strings.
+Regex tester agent — runs Python regex patterns against test strings.
 
 Inputs:
   pattern (str)           — single regex pattern (mutually exclusive with `patterns`)
@@ -15,16 +15,34 @@ Outputs:
   results (list)          — one entry per (pattern x string) pair
   flags_applied (list)
 
-External deps: none — uses stdlib `re` only.
-Runtime requirements: none beyond Python 3.10+.
+External deps: `regex` library (3rd party). 1.7.8 — switched from stdlib
+  `re` because CPython's `re` engine holds the GIL during catastrophic
+  backtracking, blocking ALL other Python threads (including the request
+  thread waiting on the wall-clock timeout future). Caddy 502'd before
+  the timeout could fire and the refund path never ran (1.7.4-1.7.7
+  prod symptom). The `regex` library accepts a per-call `timeout=N`
+  kwarg that raises TimeoutError from inside the engine, freeing the
+  GIL when the inner limit is hit.
+Runtime requirements: regex>=2024.0
 """
 
-# OWNS: executing Python regex patterns against test strings and returning structured match results
+# OWNS: running Python regex patterns against test strings; returns structured match results
 # NOT OWNS: regex syntax documentation, LLM-based pattern generation
-# INVARIANTS: never eval() or exec() user input; regex execution is sandboxed by Python's re module
+# INVARIANTS: never run untrusted code; the inner timeout keeps a pathological pattern bounded
 # DECISIONS: findall semantics (all matches) rather than search (first match only) — more useful for validation
 
-import re
+import re  # noqa: F401 — kept for re.RegexFlag type aliases below
+try:
+    import regex as _regex_engine
+    _HAS_REGEX = True
+except ImportError:  # pragma: no cover — covered by requirements.txt
+    _regex_engine = None  # type: ignore[assignment]
+    _HAS_REGEX = False
+
+# 1.7.8 — per-pattern wall-clock timeout. Below the agent's outer
+# wall-clock budget (3.0s set in part_004.py) so the inner timeout fires
+# first and produces a structured per-result error, never an outer 504.
+_REGEX_EXECUTION_TIMEOUT_SECONDS = 2.0
 
 MAX_PATTERNS = 10
 MAX_STRINGS = 20
@@ -125,14 +143,33 @@ def _run_pattern_against_string(
     pattern: str, string: str, compiled_flag: re.RegexFlag
 ) -> dict:
     """
-    Execute one (pattern, string) pair and return a result entry.
+    Run one (pattern, string) pair and return a result entry.
 
-    Catches re.error per-pattern so a bad pattern does not abort the batch.
+    Catches compile errors per-pattern so a bad pattern does not abort the
+    batch. 1.7.8 — also catches the `regex` library's TimeoutError so a
+    catastrophic-backtracking pattern surfaces as a per-result error
+    instead of blocking the request thread until Caddy 502s.
     """
     display_string = string[:STRING_TRUNCATE_LEN] if len(string) > STRING_TRUNCATE_LEN else string
+    if not _HAS_REGEX or _regex_engine is None:
+        return {
+            "pattern": pattern,
+            "string": display_string,
+            "match_count": 0,
+            "matches": [],
+            "error": {
+                "code": "regex_tester.runtime_missing",
+                "message": "regex library not installed; add `regex` to requirements.txt.",
+            },
+            "truncated": False,
+        }
+    # The 3rd-party `regex` library uses different flag constants than
+    # stdlib `re`, but the integer values match for the common ones we
+    # accept (IGNORECASE, MULTILINE, DOTALL, VERBOSE, ASCII), so the
+    # flag int from re.RegexFlag is compatible with regex.compile.
     try:
-        compiled = re.compile(pattern, compiled_flag)
-    except re.error as exc:
+        compiled = _regex_engine.compile(pattern, int(compiled_flag))
+    except _regex_engine.error as exc:
         return {
             "pattern": pattern,
             "string": display_string,
@@ -142,7 +179,31 @@ def _run_pattern_against_string(
             "truncated": False,
         }
 
-    all_matches = list(compiled.finditer(string))
+    try:
+        all_matches = list(
+            compiled.finditer(string, timeout=_REGEX_EXECUTION_TIMEOUT_SECONDS)
+        )
+    except TimeoutError:
+        # ReDoS or similarly pathological pattern. The engine surrendered
+        # control after the timeout; surface a structured per-result error
+        # so the rest of the batch still completes and the caller learns
+        # WHY this entry produced no matches.
+        return {
+            "pattern": pattern,
+            "string": display_string,
+            "match_count": 0,
+            "matches": [],
+            "error": {
+                "code": "regex_tester.execution_timeout",
+                "message": (
+                    f"Pattern execution exceeded {_REGEX_EXECUTION_TIMEOUT_SECONDS}s. "
+                    "Common cause: catastrophic backtracking. Rewrite the pattern "
+                    "with possessive quantifiers (regex library: (?>...)+) or "
+                    "atomic groups, or anchor it more tightly."
+                ),
+            },
+            "truncated": False,
+        }
     truncated = len(all_matches) > MAX_MATCHES_PER_RESULT
     capped = all_matches[:MAX_MATCHES_PER_RESULT]
 

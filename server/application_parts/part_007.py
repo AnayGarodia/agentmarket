@@ -881,23 +881,49 @@ def jobs_cancel(
     reason = (body.reason or "").strip() or "Cancelled by caller."
     error_message = f"Cancelled by caller: {reason[:160]}"
     # 1.7.3 — status="cancelled" (was "failed") so callers can distinguish
-    # caller-initiated cancellation from agent-side failure. _settle_failed_job
-    # still refunds 100% because "cancelled" is treated as a failure for
-    # payout purposes, but the surface-level status is honest.
+    # caller-initiated cancellation from agent-side failure.
+    # 1.7.8 — detect the race where the worker completes the job between
+    # our get_job() above and the UPDATE below. update_job_status's WHERE
+    # clause has `(%s = 0 OR completed_at IS NULL)` and we pass completed=1,
+    # so if completed_at was just set by the worker the UPDATE does
+    # NOTHING but the function still returns get_job() = the completed
+    # row. Pre-1.7.8 the cancel route trusted that return and ran
+    # _settle_failed_job (refunding a completed job), then later the
+    # caller would dispute that "cancelled" job and the platform would
+    # see status=complete and accept the dispute — silently taking the
+    # 5¢ deposit. Compare the returned row's status against "cancelled"
+    # and 409 if the UPDATE didn't actually apply.
     cancelled = jobs.update_job_status(
         job_id,
         "cancelled",
         error_message=error_message,
         completed=True,
     )
-    if cancelled is None:
-        # Race: another worker already moved the job. Re-fetch and report.
-        latest = jobs.get_job(job_id) or job
+    actual_status = (
+        str((cancelled or {}).get("status") or "").strip().lower()
+    )
+    if cancelled is None or actual_status != "cancelled":
+        # Race: worker completed (or failed) the job between get_job
+        # above and the UPDATE. UPDATE didn't apply because completed_at
+        # is already set. Honest 409 so the caller knows the cancel was
+        # a no-op and the job's current terminal state is what stands.
+        latest = cancelled or jobs.get_job(job_id) or job
         raise HTTPException(
             status_code=409,
             detail=error_codes.make_error(
                 error_codes.JOB_INVALID_STATE,
-                f"Job moved to '{latest.get('status')}' before cancel completed.",
+                (
+                    f"Cancel was a no-op: the job already reached "
+                    f"'{latest.get('status') or 'unknown'}' before the "
+                    "cancel arrived. If the job completed successfully, "
+                    "the agent has already been paid. To contest, file "
+                    "a dispute (the 5¢ filing deposit is held until the "
+                    "panel rules)."
+                ),
+                {
+                    "current_status": latest.get("status"),
+                    "completed_at": latest.get("completed_at"),
+                },
             ),
         )
     settled = _settle_failed_job(cancelled, actor_owner_id=caller["owner_id"])
