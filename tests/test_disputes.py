@@ -244,7 +244,9 @@ def test_dispute_status_includes_judge_eta_fields(client):
     assert payload["judgments_queued"] == 2
     assert payload["resolution_by"]
     assert payload["next_judge_run_by"]
-    assert "once per minute" in payload["eta_hint"]
+    # 1.7.0: dispute judge sweep cadence dropped 60s → 30s. Assert the
+    # default-interval phrasing rather than the literal old copy.
+    assert "30s" in payload["eta_hint"] or "30 s" in payload["eta_hint"]
 
 
 def test_jobs_create_honors_max_price_cents_alias(client):

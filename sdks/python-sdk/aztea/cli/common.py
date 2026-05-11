@@ -22,8 +22,16 @@ from .output import error
 
 # ── Input parsing ──────────────────────────────────────────────────────────
 
-def parse_input(raw: str | None) -> dict[str, Any]:
-    """Parse `--input` value: JSON literal, @file.json, '-' for stdin, or k=v pairs."""
+def parse_input(raw: str | None) -> Any:
+    """Parse a CLI input arg: JSON literal, ``@file.json``, ``-`` (stdin),
+    or ``k=v`` pairs. Returns whatever JSON shape is parsed.
+
+    1.7.0: previously rejected JSON arrays. ``aztea batch --jobs '[...]'``
+    and ``aztea batch --jobs @b.json`` both crashed with "Inline input
+    must be JSON…" because the only JSON path checked for ``{``. Now
+    both ``{`` and ``[`` are accepted; the caller validates the shape.
+    The k=v fallback path is unchanged for ``aztea hire`` ergonomics.
+    """
     if raw is None:
         return {}
     text = raw.strip()
@@ -33,16 +41,14 @@ def parse_input(raw: str | None) -> dict[str, Any]:
         text = Path(text[1:]).expanduser().read_text().strip()
     if not text:
         return {}
-    if text.startswith("{"):
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise typer.BadParameter("Input JSON must be an object.")
-        return parsed
+    if text.startswith("{") or text.startswith("["):
+        return json.loads(text)
     payload: dict[str, Any] = {}
     for token in text.split():
         if "=" not in token:
             raise typer.BadParameter(
-                "Inline input must be JSON, @file.json, '-', or k=v pairs."
+                "Inline input must be JSON object, JSON array, @file.json, "
+                "'-' (stdin), or k=v pairs."
             )
         key, value = token.split("=", 1)
         payload[key] = value

@@ -137,10 +137,19 @@ def _analyse_resource(doc: dict, idx: int) -> dict:
 
 
 def _extract_pod_spec(resource: dict, kind: str) -> dict | None:
-    """Return the pod spec dict for a resource, or None if unavailable."""
+    """Return the pod spec dict for a resource, or None if unavailable.
+
+    1.7.0 bug fix: Pre-1.7.0 the Pod branch returned the WHOLE resource
+    (`{apiVersion, kind, metadata, spec, ...}`) instead of `resource.spec`.
+    Every downstream check then looked at the wrong nesting level, so
+    `spec.securityContext.privileged: true` slipped past every rule and
+    only the "no securityContext" info finding fired. Other resource
+    kinds (Deployment / Job / CronJob) correctly reach into `.spec...`,
+    so the bug was Pod-specific.
+    """
     spec = resource.get("spec") or {}
     if kind == "Pod":
-        return resource
+        return spec  # was `resource` — wrong nesting since at least 2026-04
     if kind in _POD_SPEC_KINDS:
         return (spec.get("template") or {}).get("spec")
     if kind in _JOB_KINDS:
@@ -219,9 +228,13 @@ def _check_container(container: dict, prefix: str) -> list:
             f"{prefix}.securityContext.privileged",
         ))
     if sc.get("runAsUser") == 0 or sc.get("runAsNonRoot") is False:
+        # CIS Kubernetes Benchmark 5.2.6: containers should not run as
+        # root. Pre-1.7.0 this was a `warning`; bumping to `error` so
+        # the finding surfaces in summary counts that ignore warnings
+        # (e.g. blocking PR-comment renderers).
         findings.append(_finding(
-            "warning", "security.runAsRoot",
-            "Container may run as root.",
+            "error", "security.runAsRoot",
+            "Container runs as root (runAsUser:0 or runAsNonRoot:false). Set runAsNonRoot:true and a non-zero runAsUser.",
             f"{prefix}.securityContext",
         ))
     if not sc:
@@ -259,14 +272,46 @@ def _check_automount_token(pod_spec: dict) -> list:
 
 
 def _check_pod_security_context(pod_spec: dict) -> list:
-    """Info finding when no pod-level securityContext exists."""
-    if not pod_spec.get("securityContext"):
+    """Pod-level security findings.
+
+    1.7.0: pre-existing version only flagged the ABSENCE of a
+    securityContext as info. A pod with privileged:true / runAsUser:0
+    declared at the POD level (not the container) slipped through with
+    no error finding because every other privileged/root rule lived in
+    `_check_container`. Now we duplicate the rules at pod scope so a
+    K8s manifest like:
+      spec:
+        securityContext: {runAsUser: 0}
+        containers: [{name: c, image: nginx, securityContext: {privileged: true}}]
+    surfaces both as `error` findings, not just `info: no_context`.
+    """
+    sc = pod_spec.get("securityContext") or {}
+    if not sc:
         return [_finding(
             "info", "security.no_context",
             "No pod-level securityContext set.",
             "spec.securityContext",
         )]
-    return []
+    findings: list = []
+    if sc.get("privileged") is True:
+        findings.append(_finding(
+            "error", "security.pod.privileged",
+            "Pod-level privileged is set — every container inherits root capabilities.",
+            "spec.securityContext.privileged",
+        ))
+    if sc.get("runAsUser") == 0 or sc.get("runAsNonRoot") is False:
+        findings.append(_finding(
+            "warning", "security.pod.runAsRoot",
+            "Pod runs as root — set runAsNonRoot:true and a non-zero runAsUser.",
+            "spec.securityContext",
+        ))
+    if sc.get("hostPID") is True or sc.get("hostNetwork") is True or sc.get("hostIPC") is True:
+        findings.append(_finding(
+            "error", "security.pod.host_namespaces",
+            "Pod shares host namespaces (hostNetwork/hostPID/hostIPC).",
+            "spec.securityContext",
+        ))
+    return findings
 
 
 def _check_readiness_probes(pod_spec: dict) -> list:

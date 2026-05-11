@@ -217,6 +217,24 @@ def _extract_cvss(metrics: dict) -> float:
     return 0.0
 
 
+_SUPPORTED_ECOSYSTEMS = {"npm", "pypi", "python", "pip", "auto", ""}
+_KNOWN_UNSUPPORTED_ECOSYSTEMS = {
+    "maven", "cargo", "gradle", "gomod", "go", "nuget", "rubygems",
+    "packagist", "composer", "hex", "pub", "swift",
+}
+
+
+class UnsupportedEcosystemError(ValueError):
+    """Raised when the caller requests an OSV ecosystem we don't query.
+
+    1.7.0 contract: returning empty results for an unsupported ecosystem
+    is a false negative on a security tool — every Maven query for
+    log4j-core 2.14 came back as "0 vulnerabilities" instead of an
+    actionable error. The agent's run() catches this and returns a
+    structured error envelope per CLAUDE.md.
+    """
+
+
 def _pkg_ecosystems(pkg_name: str, hint: str | None = None) -> list[str]:
     """Return OSV ecosystem candidates for a package name.
 
@@ -224,8 +242,18 @@ def _pkg_ecosystems(pkg_name: str, hint: str | None = None) -> list[str]:
     caller is explicit we honour it and skip the multi-ecosystem fan-out;
     otherwise we use the package-name shape to guess (scoped or path-style
     names are npm-only) and fall back to trying both ecosystems.
+
+    Raises ``UnsupportedEcosystemError`` for ecosystems we know exist
+    in OSV but explicitly do not query (Maven, Cargo, Go, etc.). The
+    agent's run() converts this to a structured error so buyers see
+    "unsupported_ecosystem" instead of an empty-results false negative.
     """
     h = (hint or "").strip().lower()
+    if h in _KNOWN_UNSUPPORTED_ECOSYSTEMS:
+        raise UnsupportedEcosystemError(
+            f"ecosystem '{h}' is recognised but not queried by this agent; "
+            "supported ecosystems: npm, pypi"
+        )
     if h == "npm":
         return ["npm"]
     if h in {"pypi", "python", "pip"}:
@@ -728,12 +756,30 @@ def _run_package_mode(payload: dict) -> dict:
     seen_cves: set[str] = set()
     used_source = "osv"
     for raw_pkg in packages:
-        rows, hit = _audit_one_package(
-            str(raw_pkg),
-            ecosystem_hint=ecosystem_hint,
-            include_patched=include_patched,
-            seen_cves=seen_cves,
-        )
+        try:
+            rows, hit = _audit_one_package(
+                str(raw_pkg),
+                ecosystem_hint=ecosystem_hint,
+                include_patched=include_patched,
+                seen_cves=seen_cves,
+            )
+        except UnsupportedEcosystemError as exc:
+            # 1.7.0 contract: surface unsupported-ecosystem queries as
+            # structured errors instead of returning 0 vulnerabilities
+            # (which is a false negative on a security tool — buyers
+            # treat empty results as "your packages are safe" when in
+            # fact the agent never queried OSV at all).
+            return {
+                "error": {
+                    "code": "cve_lookup.unsupported_ecosystem",
+                    "message": str(exc),
+                    "details": {
+                        "ecosystem_hint": ecosystem_hint,
+                        "supported": ["npm", "pypi"],
+                        "package": str(raw_pkg),
+                    },
+                }
+            }
         if hit:
             used_source = "osv+nvd"
         all_results.extend(rows)

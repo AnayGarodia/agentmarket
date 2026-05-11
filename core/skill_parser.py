@@ -97,6 +97,11 @@ class ParsedSkill:
     user_invocable: bool = False
     allowed_tools: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # 1.7.0: optional per-call price from frontmatter `price_usd` /
+    # `price_per_call_usd`. Pre-1.7.0 the publish CLI ignored these
+    # fields and always defaulted skills to $0.02. None means "use the
+    # caller-supplied --price flag, then the platform default".
+    price_per_call_usd: float | None = None
 
     def to_aztea_registration(self) -> dict[str, Any]:
         """Return a partial Aztea POST /registry/register payload.
@@ -205,6 +210,27 @@ def parse_skill_md(content: str, *, source: str = "<unknown>") -> ParsedSkill:
     openclaw = _extract_openclaw_block(fm)
     requires, install = _parse_openclaw_metadata(openclaw, source=source)
 
+    # Accept either spelling of the price field. Validate the value is a
+    # finite, non-negative float — otherwise drop with a warning so a
+    # malformed frontmatter doesn't fail the whole publish.
+    price_value: float | None = None
+    for _key in ("price_per_call_usd", "price_usd", "price"):
+        if _key in fm and fm[_key] is not None:
+            try:
+                _candidate = float(fm[_key])
+            except (TypeError, ValueError):
+                warnings.append(
+                    f"frontmatter `{_key}` is not a number; ignoring"
+                )
+                break
+            if _candidate < 0 or _candidate != _candidate:  # NaN check
+                warnings.append(
+                    f"frontmatter `{_key}` must be non-negative; ignoring"
+                )
+                break
+            price_value = _candidate
+            break
+
     skill = ParsedSkill(
         name=name,
         description=description,
@@ -219,6 +245,7 @@ def parse_skill_md(content: str, *, source: str = "<unknown>") -> ParsedSkill:
         user_invocable=bool(fm.get("user-invocable", False)),
         allowed_tools=_coerce_list(fm.get("allowed-tools")),
         warnings=warnings,
+        price_per_call_usd=price_value,
     )
 
     _collect_body_warnings(skill)

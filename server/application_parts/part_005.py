@@ -1236,8 +1236,11 @@ def _dispute_view(dispute_row: dict) -> dict:
     payload["judge_models_used"] = judge_models_used
     if status in {"pending", "judging"}:
         payload["eta_hint"] = (
-            "Dispute judges run about once per minute. Two matching judgments "
-            "resolve the dispute automatically."
+            "Dispute judges run on a sweeper loop (default 30s, tunable via "
+            "AZTEA_DISPUTE_JUDGE_INTERVAL_SECONDS). Two matching judgments "
+            "resolve the dispute automatically; if you see judgments_queued > 0 "
+            "for >2 minutes, the leader-elected judge thread may not have been "
+            "re-acquired after a worker restart — check /system/health."
         )
     elif status == "tied":
         payload["eta_hint"] = (

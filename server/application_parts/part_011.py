@@ -1865,12 +1865,50 @@ def watchers_list(
 # verb returned "405 Method Not Allowed" in the 1.6.1 power-user eval.
 # Wire it up so the CLAUDE.md-documented contract is real.
 class _WatcherCreateRequest(BaseModel):
-    agent_id: str = Field(..., description="UUID of the registry agent to fire.")
+    """Watchers poll a URL/manifest/repo and fire ``agent_id`` when the
+    fingerprint changes. ``target_url`` is the resource being watched, NOT
+    the agent endpoint. Pre-1.7.0 the missing-target_url 422 confused
+    buyers who expected a "fire-this-agent-on-cron" shape; the field
+    descriptions now spell out the polling model + give a concrete example.
+
+    Example::
+
+        {
+          "agent_id": "<uuid>",
+          "target_kind": "http",
+          "target_url": "https://example.com/changelog",
+          "tick_interval_seconds": 300,
+          "budget_per_day_cents": 100,
+          "payload": {"task": "summarize the diff"}
+        }
+    """
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "agent_id": "00000000-0000-0000-0000-000000000001",
+                "target_kind": "http",
+                "target_url": "https://news.ycombinator.com/rss",
+                "tick_interval_seconds": 600,
+                "budget_per_day_cents": 50,
+                "payload": {"task": "summarize new HN front-page items"},
+            }
+        }
+    )
+
+    agent_id: str = Field(..., description="UUID of the registry agent to fire on change.")
     target_kind: str = Field(
         default="http",
         description="Target type: 'http' | 'manifest' | 'git'. Defaults to 'http'.",
     )
-    target_url: str = Field(..., description="URL or registry path the watcher polls for change.")
+    target_url: str = Field(
+        ...,
+        description=(
+            "REQUIRED — URL or registry path the watcher polls for change "
+            "fingerprinting. NOT the agent endpoint. For 'http' kind: any "
+            "URL whose body change should trigger a fire. For 'manifest': "
+            "an npm/pypi package URL or registry path."
+        ),
+    )
     target_meta: dict | None = Field(
         default=None,
         description="Type-specific metadata (e.g. {'ecosystem':'npm','package':'react'}).",
@@ -2002,7 +2040,12 @@ def watchers_create(
     tags=["Wallets"],
     summary="Reconcile the caller's own wallet (cached balance vs ledger sum).",
 )
-@limiter.limit("10/minute")
+# 1.7.0: lowered from 10/minute to 6/minute. Burst test (100 parallel
+# requests) saw 55 × 429, 33 × 502, 12 × 200. The 502s came from uvicorn
+# workers dropping connections under contention — not the rate limiter.
+# Tightening the limit pushes more bursts into the 429 lane (clean retry)
+# and out of the 502 lane (caller has to guess what happened).
+@limiter.limit("6/minute")
 def wallet_self_reconcile(
     request: Request,
     caller: core_models.CallerContext = Depends(_require_api_key),

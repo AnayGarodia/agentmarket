@@ -872,6 +872,16 @@ async def api_prefix_compat(request: Request, call_next):
     ``/<path>`` — fully interchangeable.
     """
     path = request.scope.get("path") or ""
+    # FastAPI registers swagger UI under `/api/docs` / `/api/redoc` /
+    # `/api/openapi.json` (intentional — docs URL must not shadow the SPA's
+    # /docs route). Stripping the /api prefix on those routes would 404
+    # them because the actual route is registered with the prefix in the
+    # path. Skip the rewrite for these specific swagger paths so they
+    # resolve to the registered handler. (Pre-1.6.9 buyers got
+    # `Not Found: /openapi.json` when calling /api/openapi.json.)
+    _SWAGGER_PATHS = ("/api/openapi.json", "/api/docs", "/api/redoc")
+    if path in _SWAGGER_PATHS or any(path.startswith(p + "/") for p in _SWAGGER_PATHS):
+        return await call_next(request)
     if path == "/api" or path.startswith("/api/"):
         rewritten = path[4:] or "/"
         request.scope["path"] = rewritten

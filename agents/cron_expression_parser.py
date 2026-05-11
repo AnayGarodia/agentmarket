@@ -290,10 +290,17 @@ def _compute_frequency(expression: str, reference_time: datetime, tz: ZoneInfo) 
 
     for i in range(FREQUENCY_WINDOW_MINUTES):
         t = cursor + timedelta(minutes=i)
+        # Python: t.weekday() = Mon..Sun (0..6).
+        # Cron:   day-of-week = Sun..Sat (0..6, with 7 == 0 in many impls).
+        # Pre-1.7.0 used `t.weekday() % 7` which left Monday at 0 →
+        # `0 9 * * 1-5` (Mon-Fri) matched Tue-Sat instead, returning
+        # runs_per_day=0 because Saturday rarely lands in the 24-hour window.
+        # Convert Mon=0 → 1, Tue=1 → 2, ..., Sun=6 → 0.
+        cron_dow = (t.weekday() + 1) % 7
         if (
             t.month in valid_months
             and t.day in valid_doms
-            and t.weekday() % 7 in valid_dows
+            and cron_dow in valid_dows
             and t.hour in valid_hours
             and t.minute in valid_minutes
         ):

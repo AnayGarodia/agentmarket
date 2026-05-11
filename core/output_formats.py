@@ -486,7 +486,7 @@ def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
         # sibling. Removing the unreachable call to a never-implemented
         # function fixes a flake8 F821 that was blocking CI.
         if isinstance(output.get("findings"), list):
-            return {"blocks": _slack_linter_blocks(output)}
+            return {"blocks": _slack_linter_blocks(output, meta)}
         if isinstance(output.get("vulnerabilities"), list):
             return {"blocks": _slack_dep_audit_blocks(output)}
     md = _render_markdown(output, meta)
@@ -572,12 +572,26 @@ def _slack_code_review_blocks(output: dict[str, Any]) -> list[dict]:
     return blocks
 
 
-def _slack_linter_blocks(output: dict[str, Any]) -> list[dict]:
+def _slack_linter_blocks(
+    output: dict[str, Any], meta: dict[str, Any] | None = None,
+) -> list[dict]:
+    r"""Render a `findings`-shaped output as Slack blocks.
+
+    1.7.0: pre-existing version hardcoded the header "Linter" and shipped
+    `` `` `` for empty rule names. Both made secret_scanner / sast / k8s
+    output (all of which share the findings shape) look like a Linter
+    misfire. Now the header uses the agent's display name when available,
+    and empty rule names are dropped from the bullet body cleanly.
+    """
     findings = output.get("findings") or []
     total = (
         output.get("total") if isinstance(output.get("total"), int) else len(findings)
     )
-    blocks: list[dict] = [_slack_header("Linter")]
+    agent_name = ""
+    if isinstance(meta, dict):
+        agent_name = str(meta.get("name") or meta.get("agent_name") or "").strip()
+    header_label = agent_name if agent_name else "Findings"
+    blocks: list[dict] = [_slack_header(header_label)]
     blocks.append(
         _slack_context(
             "✓ No issues found."
@@ -589,12 +603,14 @@ def _slack_linter_blocks(output: dict[str, Any]) -> list[dict]:
         rows = []
         for f in findings[:25]:
             sev = str(f.get("severity") or "warning").lower()
-            rule = str(f.get("rule") or f.get("code") or "")
+            rule = str(f.get("rule") or f.get("code") or "").strip()
             file_ = str(f.get("file") or "")
             line = f.get("line") or ""
-            msg = str(f.get("message") or "")
+            msg = str(f.get("message") or "").strip()
             loc = f"`{file_}:{line}`" if file_ else (f"line `{line}`" if line else "")
-            rows.append(f"{_count_emoji(sev)} `{rule}` {loc}\n{msg}")
+            rule_chip = f"`{rule}` " if rule else ""
+            head = f"{_count_emoji(sev)} {rule_chip}{loc}".rstrip()
+            rows.append(f"{head}\n{msg}" if msg else head)
         blocks.append(_slack_section("\n\n".join(rows)))
     return blocks
 

@@ -52,7 +52,20 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("generic_secret", re.compile(
         r"(?i)(api_key|secret|password|token|passwd)\s*[=:]\s*['\"][A-Za-z0-9+/]{16,}['\"]"
     )),
-    ("stripe_key", re.compile(r"sk_(live|test)_[A-Za-z0-9]{24,}")),
+    # 1.7.0: lowered Stripe key min length from 24 to 12. Real Stripe keys
+    # are 24+ chars but the `sk_(live|test)_` prefix alone is a strong
+    # enough signal that the diff is leaking secret material — better to
+    # flag a 16-char `sk_test_abc123def456` (which would have been missed
+    # pre-1.7.0) than to require the full canonical length and miss
+    # truncated/shortened test fixtures committed to source.
+    ("stripe_key", re.compile(r"sk_(live|test)_[A-Za-z0-9]{12,}")),
+    # GitHub Personal Access Tokens (`ghp_…`) and GitHub Apps (`ghs_…`).
+    # Pre-1.7.0 not flagged separately — fell through to generic_secret
+    # which only fires when prefixed with `api_key=`/`token=`/etc. A bare
+    # leaked PAT in a diff slipped through.
+    ("github_token", re.compile(r"\bgh[psoru]_[A-Za-z0-9]{36,}\b")),
+    # OpenAI/Anthropic API keys (sk-…). Same reasoning as above.
+    ("llm_api_key", re.compile(r"\bsk-(?!live|test)[A-Za-z0-9_-]{20,}\b")),
 ]
 
 

@@ -25,8 +25,35 @@ from .common import (
     build_client,
     find_agent_id,
     handle_error,
+    slugify,
 )
 from .output import emit, info, spinner, success
+
+
+def _resolve_via_owner_listings(client, needle: str) -> str:
+    """Find an agent_id from the caller's own listings (incl. sunset).
+
+    1.7.0: ``find_agent_id`` resolves against the public catalog only,
+    which filters out ``review_status='sunset'`` rows. Reactivating /
+    re-sunsetting a previously-sunset listing therefore failed with
+    ``Unknown agent '<slug>'``. Hit ``GET /registry/agents/mine`` and
+    match by agent_id, slug, or display name.
+    """
+    needle = (needle or "").strip()
+    if not needle:
+        raise typer.BadParameter("Slug is required.")
+    resp = client._request_json("GET", "/registry/agents/mine")
+    agents = resp.get("agents") or []
+    for entry in agents:
+        if entry.get("agent_id") == needle:
+            return entry["agent_id"]
+        name = entry.get("name") or ""
+        if slugify(name) == needle.replace("_", "-"):
+            return entry["agent_id"]
+    raise typer.BadParameter(
+        f"Unknown agent '{needle}'. It's not in your listings (live or sunset). "
+        "Run `aztea agents list` to see your active listings."
+    )
 
 
 def unpublish(
@@ -54,7 +81,17 @@ def unpublish(
     try:
         with build_client(api_key=api_key, base_url=base_url) as client:
             with spinner("Resolving agent", json_mode=json_mode):
-                agent_id = find_agent_id(client, slug)
+                # Try the catalog (live agents) first.
+                try:
+                    agent_id = find_agent_id(client, slug)
+                except typer.BadParameter:
+                    # 1.7.0: when the agent is sunset, find_agent_id can't
+                    # resolve it (catalog filters sunset out). For
+                    # `--reactivate` and re-sunsetting, fall back to the
+                    # caller's own listings (which include sunset). This
+                    # closes a previously-noted bug where the only escape
+                    # was hitting the REST API directly.
+                    agent_id = _resolve_via_owner_listings(client, slug)
             path = (
                 f"/registry/agents/{agent_id}/reactivate"
                 if reactivate

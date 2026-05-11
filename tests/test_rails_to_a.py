@@ -121,7 +121,9 @@ def test_r4_mcp_local_search_strips_quality_prior_baseline():
     even off-topic queries claimed a hit instead of falling through to
     the server-side semantic ranker. This test pins the deletion.
     """
-    src = Path("scripts/aztea_mcp_server.py").read_text()
+    # 1.6.2 — MCP server moved into the SDK package; scripts/ now holds
+    # only a compat shim. Pin the deletion in the canonical location.
+    src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
     # The deleted block was a bare quality-prior addition: any of these
     # exact lines indicates the bug has crept back.
     assert 'float(entry.get("success_rate") or 0.0) * 10.0' not in src, (
@@ -144,7 +146,7 @@ def test_r5_search_empty_result_hint_names_live_categories():
     breadcrumb. The category list must be derived from the catalog itself
     (no hardcoded list) so it stays accurate as agents are added/removed.
     """
-    src = Path("scripts/aztea_mcp_server.py").read_text()
+    src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
     # The empty-state branch must enumerate categories. We do not test
     # against a specific category set (that'd be a hardcode) — just that
     # the code reads category from each entry to assemble the hint.
@@ -396,7 +398,9 @@ def test_r9_session_audit_verify_all_caps_per_receipt_timeout():
     caps each verify call's timeout at 1.0s so the worst case for N
     receipts is N × 1s + network overhead.
     """
-    src = Path("scripts/aztea_mcp_meta_tools.py").read_text()
+    # 1.6.2 moved meta_tools out of scripts/ and into the SDK package.
+    # Old path remained referenced here; rebind to the canonical home.
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
     assert "_verify_timeout" in src and "min(float(timeout or 1.0), 1.0)" in src, (
         "verify_all loop must cap per-call timeout (eval finding R9)."
     )

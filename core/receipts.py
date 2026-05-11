@@ -199,11 +199,18 @@ def sign_and_store_receipt(job_id: str) -> str:
     private_pem, _public_pem, did_value = _load_agent_signing_material(agent_id)
     payload_bytes = _crypto.canonical_json(transcript)
     jws = _jws_compact_sign(private_pem, did_value, payload_bytes)
+    # 1.6.9 fix: get_db_connection() yields the thread-local connection but
+    # does NOT commit on context exit. Pre-1.6.9 every receipt build's
+    # UPDATE was rolled back when the connection returned to the pool —
+    # receipt_jws stayed null in jobs forever. Use the connection AS a
+    # context manager so the UPDATE actually commits. Same shape as the
+    # POST /jobs persistence fix in part_008.py.
     with get_db_connection() as conn:
-        conn.execute(
-            "UPDATE jobs SET receipt_jws = %s WHERE job_id = %s",
-            (jws, job_id),
-        )
+        with conn:
+            conn.execute(
+                "UPDATE jobs SET receipt_jws = %s WHERE job_id = %s",
+                (jws, job_id),
+            )
     return jws
 
 

@@ -272,11 +272,18 @@ def skills_create(
     # are forbidden from changing it after registration. For hosted skills we
     # write it once at creation time.
     final_endpoint = _hosted_skills.make_skill_endpoint_url(skill_row["skill_id"])
+    # 1.6.9 fix: get_db_connection() yields the thread-local connection but
+    # does NOT commit on context exit (per core/db.py). Pre-1.6.9 every
+    # hosted-skill registration's endpoint_url UPDATE was silently rolled
+    # back when the connection returned to the pool, so the agent kept the
+    # placeholder skill://placeholder URL forever. Use the connection AS a
+    # context manager so the UPDATE actually commits.
     with get_db_connection() as _conn:
-        _conn.execute(
-            "UPDATE agents SET endpoint_url = %s WHERE agent_id = %s AND owner_id = %s",
-            (final_endpoint, agent_id, caller["owner_id"]),
-        )
+        with _conn:
+            _conn.execute(
+                "UPDATE agents SET endpoint_url = %s WHERE agent_id = %s AND owner_id = %s",
+                (final_endpoint, agent_id, caller["owner_id"]),
+            )
 
     try:
         _owner_email = _get_owner_email(caller["owner_id"])

@@ -947,9 +947,11 @@ def _extract_regex_pattern(intent: str) -> str | None:
     if m:
         return m.group(1)
     # Backslash-escape style: "\d+", "[a-z]+" — bare regex tokens are
-    # common in casual usage. Match if the intent contains *only*
-    # regex-shaped characters around it.
-    bare = re.search(r"(?<![\w/`])(\\[dDwWsSbBnrtv]\S*|\[[^\]\n]{1,80}\][?*+]?)", text)
+    # common in casual usage. 1.7.0: relaxed the negative-lookbehind so
+    # `regex \d+ against …` matches (the space before \d was previously
+    # a `\w` boundary that vetoed). Now requires only no immediate
+    # /backtick/ collision.
+    bare = re.search(r"(?<![/`])(\\[dDwWsSbBnrtv]+(?:[?*+{][^\s]*)?|\[[^\]\n]{1,80}\][?*+]?)", text)
     if bare:
         return bare.group(1)
     return None
@@ -1005,17 +1007,87 @@ def _extract_url(intent: str) -> str | None:
     return m.group(0) if m else None
 
 
+# 1.7.0 — additional extractors driven by eval failures.
+
+# regex_tester needs both `pattern` and `test_string`. Pull anything in
+# quotes after "against" / "in" / "matching" / "for".
+_TEST_STRING_RE = re.compile(
+    r"(?:against|matching|in|for|on|test\s+string)\s+[\"']([^\"'\n]{1,500})[\"']",
+    re.IGNORECASE,
+)
+
+
+def _extract_test_string(intent: str) -> str | None:
+    """Pull a quoted target string out of "match \\d+ against 'abc 123'"."""
+    if not intent:
+        return None
+    m = _TEST_STRING_RE.search(intent)
+    return m.group(1) if m else None
+
+
+def _extract_domains(intent: str) -> list[str] | None:
+    """Plural form of _extract_domain — wrap the single hit as a list.
+
+    1.7.0: dns_ssl_inspector requires `domains` (array). Pre-1.7.0 the
+    extractor registry only had `domain` (singular) — so a perfect intent
+    like "SSL cert details for github.com" auto-routed but the array
+    field never got populated.
+    """
+    one = _extract_domain(intent)
+    return [one] if one else None
+
+
+# Package@version extractor for cve_lookup_agent (intent like
+# "find CVEs for log4j 2.14" or "check requests==2.28.0").
+_PKG_VERSION_RE = re.compile(
+    r"\b([a-z][a-z0-9._-]{1,80})[@=]{1,2}([0-9][0-9a-zA-Z.\-_+]{0,40})\b",
+    re.IGNORECASE,
+)
+# Loose form: "log4j 2.14", "django 4.2", etc. (space-separated).
+_PKG_LOOSE_RE = re.compile(
+    r"\b([a-z][a-z0-9._-]{2,80})\s+(\d+(?:\.\d+){1,3})\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_packages(intent: str) -> list[str] | None:
+    """Pull `pkg@version` strings out of intent. Returns the list or None."""
+    if not intent:
+        return None
+    found: list[str] = []
+    seen: set[str] = set()
+    for m in _PKG_VERSION_RE.finditer(intent):
+        token = f"{m.group(1).lower()}@{m.group(2)}"
+        if token not in seen:
+            seen.add(token)
+            found.append(token)
+    if not found:
+        # Loose form is risk-prone (matches "version 2.0" → garbage), so
+        # gate on the intent containing a CVE-related cue word.
+        lower = intent.lower()
+        if any(w in lower for w in ("cve", "vuln", "audit", "log4j", "package", "library")):
+            for m in _PKG_LOOSE_RE.finditer(intent):
+                token = f"{m.group(1).lower()}@{m.group(2)}"
+                if token not in seen:
+                    seen.add(token)
+                    found.append(token)
+    return found or None
+
+
 # Registry: field-name → extractor. ``_resolve_intent_only_payload`` looks
 # up the field here before falling back to the legacy "dump intent into
 # field" behaviour. Returning None refuses with `missing_fields`.
-_FIELD_EXTRACTORS: dict[str, "Callable[[str], str | None]"] = {
+_FIELD_EXTRACTORS: dict[str, "Callable[[str], Any]"] = {
     "expression": _extract_cron_expression,
     "cron": _extract_cron_expression,
     "pattern": _extract_regex_pattern,
     "regex": _extract_regex_pattern,
+    "test_string": _extract_test_string,
     "domain": _extract_domain,
+    "domains": _extract_domains,  # 1.7.0: plural-array form
     "cve_id": _extract_cve_id,
     "url": _extract_url,
+    "packages": _extract_packages,  # 1.7.0: cve_lookup_agent
 }
 _QUESTION_PREFIXES = (
     "what ",

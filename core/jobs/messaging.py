@@ -288,15 +288,30 @@ _COPILOT_SIDE_EFFECT_TYPES = ("partial_output", "steer")
 
 
 def _guard_terminal_for_copilot(row: dict, *, job_id: str, canonical_type: str) -> None:
-    """Pure-ish: refuse partial_output / steer once the job has hit terminal_at.
+    """Pure-ish: refuse partial_output / steer once the job is terminal.
 
     Why: an in-flight client could otherwise squeeze a steer in after the
     job was already stopped by a stop_when match — making "stopped" not
     actually terminal. This is the only ordering guard that matters for
     copilot side-effects.
+
+    1.6.9: previously checked only ``terminal_at`` (the stop_when path's
+    timestamp). Normally-completed jobs have ``completed_at`` set but no
+    ``terminal_at`` — so a steer arriving on a complete job slipped past
+    this guard, hit a downstream DB error, and returned HTTP 500 to the
+    caller. Per the documented contract, both paths must return 409
+    job.terminal. Now we check the broader terminal-status set first.
     """
     if canonical_type not in _COPILOT_SIDE_EFFECT_TYPES:
         return
+    raw_status = str(row.get("status") or "").strip().lower()
+    _TERMINAL_STATUSES = {
+        "complete", "completed", "stopped", "failed", "cancelled", "expired",
+    }
+    if raw_status in _TERMINAL_STATUSES:
+        raise JobAlreadyTerminal(
+            f"job {job_id} is terminal (status={raw_status}); cannot accept {canonical_type}"
+        )
     if _clean_optional_text(row.get("terminal_at")) is not None:
         raise JobAlreadyTerminal(
             f"job {job_id} is terminal; cannot accept {canonical_type}"

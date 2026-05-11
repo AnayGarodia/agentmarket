@@ -100,7 +100,11 @@ class JobSteerRequest(BaseModel):
         }
     )
 
-    message: str = Field(min_length=1, max_length=2000)
+    # 4000 char limit matches the documented MCP tool description and
+    # the message-payload normaliser in core.models.messages_ops; pre-1.6.9
+    # this Pydantic constraint accidentally capped at 2000 and rejected
+    # legitimately-long steers with a confusing 422.
+    message: str = Field(min_length=1, max_length=4000)
     metadata: dict | None = None
 
 

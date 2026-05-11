@@ -450,11 +450,26 @@ def _register(
     endpoint: Optional[str],
 ) -> dict[str, Any]:
     if detection.kind == "skill_md":
+        # Precedence: --price flag > frontmatter `price_usd` > default.
+        # Pre-1.7.0 the frontmatter step was missing — every skill
+        # without a CLI flag landed at $0.02 even when the file said
+        # `price_usd: 0.005`. (P3-23 from the eval.)
+        effective_price = price
+        if effective_price is None:
+            try:
+                from core.skill_parser import parse_skill_md as _parse_for_price
+                _parsed = _parse_for_price(detection.raw, source=str(detection.path))
+                if _parsed.price_per_call_usd is not None:
+                    effective_price = _parsed.price_per_call_usd
+            except Exception:
+                # If parsing fails here, /skills will surface the same
+                # error with a better message — don't block the flow.
+                pass
+        if effective_price is None:
+            effective_price = _DEFAULT_SKILL_PRICE_USD
         body = {
             "skill_md": detection.raw,
-            "price_per_call_usd": float(
-                price if price is not None else _DEFAULT_SKILL_PRICE_USD
-            ),
+            "price_per_call_usd": float(effective_price),
         }
         return client._request_json("POST", "/skills", json_body=body)
 

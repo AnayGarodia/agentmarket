@@ -2086,9 +2086,20 @@ def _session_summary(
         result["today_sunset_by_agent"] = spend.get("sunset_by_agent") or []
         result["today_live_catalog_spend_cents"] = spend.get("live_catalog_total_cents")
         result["today_sunset_spend_cents"] = spend.get("sunset_total_cents")
-    # Include this-session spend tracking
+    # MCP-session-local spend tracking. NOTE (1.7.0): this counter only
+    # accrues spend that flows THROUGH this MCP server process. Direct
+    # HTTP calls to /registry/agents/{id}/call (outside the MCP path) do
+    # NOT increment it. For an authoritative across-all-surfaces total
+    # over a window, use ``today_spend_cents`` above (it queries the
+    # ledger directly via /wallets/spend-summary). The session counter
+    # is the right number for "have I exceeded the soft cap I set this
+    # MCP session" — not for "how much have I spent today."
     result["session_spent_cents"] = int(session_state.get("spent_cents") or 0)
     result["session_spent_usd"] = round(float(result["session_spent_cents"]) / 100, 4)
+    result["session_spent_scope"] = (
+        "mcp_session_only — direct HTTP calls excluded; "
+        "use today_spend_cents for the wallet-ledger total"
+    )
     budget = session_state.get("budget_cents")
     result["session_budget_cents"] = budget
     result["session_budget_usd"] = (

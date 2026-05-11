@@ -1062,7 +1062,7 @@ def _attach_workspace_context(
 
 class RegistryBridge:
     def __init__(
-        self, *, base_url: str, api_key: str, timeout_seconds: float = 10.0
+        self, *, base_url: str, api_key: str, timeout_seconds: float = 60.0
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -2893,7 +2893,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=float(
             _env_with_legacy(
-                "AZTEA_MCP_TIMEOUT_SECONDS", "AZTEA_MCP_TIMEOUT_SECONDS", "10"
+                "AZTEA_MCP_TIMEOUT_SECONDS", "AZTEA_MCP_TIMEOUT_SECONDS", "60"
             )
         ),
         help="HTTP timeout for registry and tool calls (default: 10).",
