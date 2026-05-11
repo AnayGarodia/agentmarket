@@ -121,9 +121,14 @@ export default function JobReceipt({ jobId, agentId }) {
       setDidDoc(did)
       const pk = _extractEd25519Pk(did)
       const sigBytes = _b64UrlDecode(String(sig.signature || ''))
-      const msgBytes = new TextEncoder().encode(String(sig.output_hash || ''))
-      if (!pk || !sigBytes) {
-        setError('Could not parse public key or signature bytes.')
+      // The backend signs canonical_json(output_payload) — see core/crypto.py.
+      // The signature endpoint publishes those exact bytes as `signed_payload_b64`
+      // so verifiers don't have to re-canonicalize (or re-hash) on their side.
+      // Verifying against `output_hash` (a hex sha256 fingerprint) instead would
+      // always fail, because that's not what Ed25519 saw at sign time.
+      const msgBytes = _b64UrlDecode(String(sig.signed_payload_b64 || ''))
+      if (!pk || !sigBytes || !msgBytes) {
+        setError('Could not parse public key, signature, or signed payload bytes.')
         setState(STATE_ERROR)
         return
       }
