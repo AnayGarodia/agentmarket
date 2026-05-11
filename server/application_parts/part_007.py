@@ -1348,8 +1348,18 @@ def registry_list(
         and model_provider is None
     ):
         present_ids = {str(a.get("agent_id") or "") for a in agents}
+        # 1.7.2 — exclude sunset agents from spec-synthesis. Pre-1.7.2 the
+        # curated set included sunset IDs (CURATED_BUILTIN_AGENT_IDS is
+        # `set(SUNSET_DEPRECATED_AGENT_IDS) | {...}`), so missing sunset
+        # rows got synthesized as `review_status:"approved", status:"active"`.
+        # The call gate at part_002 correctly returned 410 sunset, so users
+        # saw "approved/active" agents fail every call. Filter at synthesis
+        # time so the listing matches the call gate.
+        sunset_ids = set(_builtin_constants.SUNSET_DEPRECATED_AGENT_IDS)
         missing_curated = (
-            set(_builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS) - present_ids
+            set(_builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS)
+            - present_ids
+            - sunset_ids
         )
         if missing_curated:
             spec_by_id = _builtin_specs.builtin_spec_by_id()

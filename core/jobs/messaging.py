@@ -381,7 +381,23 @@ def add_message(
             conn, job_id=job_id, from_id=from_id, n=n,
             now=now, now_dt=now_dt, lease_seconds=lease_seconds,
         )
-    message = get_message(job_id, message_id)
+    # 1.7.2 — build the return dict from in-scope values rather than
+    # round-tripping through get_message. The post-commit get_message
+    # was racing with read-after-write visibility on the thread-local
+    # SQLite connection: the steer was persisted (steer_count
+    # incremented), but get_message returned None, which the route
+    # then surfaced as a 409 "could not be persisted" — the response
+    # and the DB state contradicted each other (B-2/N4 in the 1.7.1
+    # eval). We just inserted these exact bytes; reconstruct directly.
+    message = {
+        "message_id": message_id,
+        "job_id": job_id,
+        "from_id": from_id,
+        "type": n["normalized_type"],
+        "payload": n["normalized_payload"],
+        "correlation_id": n["normalized_correlation_id"],
+        "created_at": now,
+    }
     _publish_job_message(job_id, message)
 
     # Synchronous post-commit drain: if this message caused a stop_when match,

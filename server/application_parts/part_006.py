@@ -1062,7 +1062,15 @@ def auth_list_keys(
 ) -> core_models.ApiKeyListResponse:
     """List the caller's API keys (metadata only; raw keys are never returned after creation)."""
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master key.")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Master key is for ops only and cannot manage scoped sub-keys. "
+                "Register a user account (`aztea register` or "
+                "`POST /auth/register`), then use that account's API key to "
+                "list / mint / rotate / revoke caller- or worker-scoped keys."
+            ),
+        )
     keys = _auth.list_api_keys(caller["user"]["user_id"])
     return JSONResponse(content={"keys": keys})
 
@@ -1081,7 +1089,15 @@ def auth_create_key(
 ) -> core_models.ApiKeyCreateResponse:
     """Create a new named API key for the authenticated user."""
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master key.")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Master key is for ops only and cannot manage scoped sub-keys. "
+                "Register a user account (`aztea register` or "
+                "`POST /auth/register`), then use that account's API key to "
+                "list / mint / rotate / revoke caller- or worker-scoped keys."
+            ),
+        )
     requested_scopes = {str(scope).strip().lower() for scope in body.scopes}
     if "caller" in requested_scopes and body.per_job_cap_cents is None:
         raise HTTPException(
@@ -1128,7 +1144,15 @@ def auth_rotate_key(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.ApiKeyRotateResponse:
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master key.")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Master key is for ops only and cannot manage scoped sub-keys. "
+                "Register a user account (`aztea register` or "
+                "`POST /auth/register`), then use that account's API key to "
+                "list / mint / rotate / revoke caller- or worker-scoped keys."
+            ),
+        )
     try:
         result = _auth.rotate_api_key(
             key_id=key_id,
@@ -1161,7 +1185,15 @@ def auth_revoke_key(
 ) -> core_models.ApiKeyRevokeResponse:
     """Revoke an API key by ID."""
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master key.")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Master key is for ops only and cannot manage scoped sub-keys. "
+                "Register a user account (`aztea register` or "
+                "`POST /auth/register`), then use that account's API key to "
+                "list / mint / rotate / revoke caller- or worker-scoped keys."
+            ),
+        )
     ok = _auth.revoke_api_key(key_id, caller["user"]["user_id"])
     if not ok:
         raise HTTPException(status_code=404, detail="Key not found or already revoked.")

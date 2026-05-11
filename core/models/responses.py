@@ -59,6 +59,10 @@ class HealthResponse(BaseModel):
     version: str | None = None
     # legacy field kept for backwards compatibility
     agents: int | None = None
+    # 1.7.2 — surface the resolved value of AZTEA_RESULT_CACHE_V2 so a
+    # cache-disabled prod (N15 in the eval) is visible externally rather
+    # than a silent wallet-burning regression. None = enabled (default).
+    result_cache_disabled_reason: str | None = None
 
 
 class ManifestSectionResponse(BaseModel):
@@ -460,6 +464,14 @@ class WalletResponse(BaseModel):
 
 
 class WalletDailySpendLimitRequest(BaseModel):
+    # 1.7.2 — strict-field rejection. Pre-1.7.2 the model accepted unknown
+    # fields silently; callers sending {"limit_cents": 50} (wrong name)
+    # got a 200 with the cap CLEARED to null. That's a wallet-control
+    # path; silent acceptance of a typo is dangerous. The MCP
+    # manage_budget(set_daily_limit) tool was also using "limit_cents" —
+    # fixed in the SDK so both ends agree on `daily_spend_limit_cents`.
+    model_config = ConfigDict(extra="forbid")
+
     daily_spend_limit_cents: int | None = Field(
         default=None,
         ge=0,

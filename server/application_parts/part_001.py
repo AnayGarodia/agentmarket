@@ -540,6 +540,19 @@ async def lifespan(app: FastAPI):
                 "Embedding model warm-up failed; semantic search will degrade gracefully on first hit."
             )
 
+    # 1.7.2 — N15 cache-state observability. If the result cache is off
+    # in this process (env override of AZTEA_RESULT_CACHE_V2), surface
+    # it loudly at startup so journalctl shows "cache off" before we
+    # discover via "10× identical calls → 10× charges" in a wallet audit.
+    if _feature_flags.RESULT_CACHE_V2:
+        _LOG.info("result_cache.enabled  AZTEA_RESULT_CACHE_V2=on")
+    else:
+        _LOG.warning(
+            "result_cache.disabled  AZTEA_RESULT_CACHE_V2=off — "
+            "identical-input calls will NOT hit the cache; every call "
+            "will settle a fresh charge. Check env config."
+        )
+
     _set_server_shutting_down(False)
     stop_event: threading.Event | None = None
     sweeper_thread: threading.Thread | None = None

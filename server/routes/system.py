@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from core import jobs, registry
+from core import feature_flags as _feature_flags
 from core import models as core_models
 from core.openapi_responses import pick_error_responses
 from server.builtin_agents import constants as _builtin_constants
@@ -124,12 +125,23 @@ def health() -> core_models.HealthResponse:
     ]
     agent_count = len(public_agents)
     status = "ok" if all_ok else "degraded"
+    # 1.7.2 — N15 observability: surface the resolved AZTEA_RESULT_CACHE_V2
+    # value so anyone can detect a cache-off prod from outside the host.
+    # None == enabled (default); a non-None string is the disable reason.
+    _cache_disabled_reason: str | None = None
+    if not _feature_flags.RESULT_CACHE_V2:
+        _cache_disabled_reason = (
+            "AZTEA_RESULT_CACHE_V2 is set to a falsy value in this process. "
+            "Identical-input calls will NOT hit the cache; every call will "
+            "settle a fresh charge."
+        )
     response = core_models.HealthResponse(
         status=status,
         checks=checks,
         agent_count=agent_count,
         version=_read_version(),
         agents=agent_count,
+        result_cache_disabled_reason=_cache_disabled_reason,
     )
 
     if not all_ok:

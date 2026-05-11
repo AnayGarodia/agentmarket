@@ -271,26 +271,28 @@ def registry_search(
     """
     try:
         include_unapproved = _caller_is_admin(caller)
-        caller_trust = None
-        if body.respect_caller_trust_min and caller["type"] != "master":
-            caller_trust = _caller_trust_score(caller["owner_id"])
-        # 1.7.1 — wrap the search in a per-request budget so cold-start of
-        # the embedding model (or any future hang) returns a structured 503
-        # instead of letting the upstream gateway time out and 502 with an
-        # empty body. The MCP server's "search 502" fallback then surfaces
-        # platform meta-tools as best matches, which the eval correctly
-        # called the worst-kind failure mode.
+        # 1.7.2 — wrap the FULL search (trust lookup + ranker) in a single
+        # 18s budget. Pre-1.7.2 (1.7.1 fix) only wrapped `search_agents`;
+        # the `_caller_trust_score` wallet-DB lookup ran OUTSIDE the
+        # executor, so any stall there ran past Caddy's ~30s gateway
+        # timeout and produced HTTP 502 with empty body — exactly what
+        # the 1.7.1 eval found. Budget lowered from 25 → 18s to leave
+        # margin for Python overhead + gateway round-trip before Caddy
+        # 502s on its end.
         import concurrent.futures as _cf
-        _SEARCH_BUDGET_S = 25.0
-        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
-            _fut = _ex.submit(
-                registry.search_agents,
+        _SEARCH_BUDGET_S = 18.0
+
+        def _do_full_search() -> list[dict]:
+            _caller_trust = None
+            if body.respect_caller_trust_min and caller["type"] != "master":
+                _caller_trust = _caller_trust_score(caller["owner_id"])
+            return registry.search_agents(
                 query=body.query,
                 limit=body.limit,
                 min_trust=body.min_trust,
                 max_price_cents=body.max_price_cents,
                 required_input_fields=body.required_input_fields,
-                caller_trust=caller_trust,
+                caller_trust=_caller_trust,
                 include_unapproved=include_unapproved,
                 model_provider=body.model_provider,
                 kind=body.kind,
@@ -299,6 +301,9 @@ def registry_search(
                 audit_logged=body.audit_logged,
                 region_locked=body.region_locked,
             )
+
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(_do_full_search)
             try:
                 ranked = _fut.result(timeout=_SEARCH_BUDGET_S)
             except _cf.TimeoutError:
@@ -308,8 +313,9 @@ def registry_search(
                         "registry.search_unavailable",
                         (
                             f"Search exceeded the {_SEARCH_BUDGET_S:.0f}s budget. "
-                            "The embedding model may be cold-loading; retry in 30s, "
-                            "or use GET /registry/agents?tag=... to browse."
+                            "The embedding model may be cold-loading or wallet "
+                            "lookup may be stalled; retry in 30s, or use "
+                            "GET /registry/agents?tag=... to browse."
                         ),
                         {"retry_after_seconds": 30},
                     ),
@@ -1890,6 +1896,14 @@ def registry_call(
                 payload={"status": completed["status"], "source": "registry_call_sync"},
             )
             _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+            # 1.7.2 — receipt build is now unconditional at completion
+            # (decoupled from settlement). Sync /call already worked in
+            # 1.7.1 because settlement fires inline; we still pull the
+            # call out so the contract matches the async path. Re-read
+            # `completed` after the build so the sync response carries
+            # the populated `receipt_jws` field too.
+            _build_job_receipt_best_effort(job["job_id"])
+            completed = jobs.get_job(job["job_id"]) or completed
             _maybe_refund_pricing_diff(
                 agent=agent,
                 payload=payload,
@@ -2280,6 +2294,8 @@ def registry_call(
         payload={"status": completed["status"], "source": "registry_call_sync_http"},
     )
     settled = _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+    _build_job_receipt_best_effort(completed["job_id"])  # 1.7.2 B-7
+    settled = jobs.get_job(completed["job_id"]) or settled  # re-read receipt_jws
     _maybe_refund_pricing_diff(
         agent=agent,
         payload=payload,

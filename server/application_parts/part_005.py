@@ -1122,22 +1122,33 @@ def _settle_successful_job(
             _LOG.warning(
                 "Failed to send payout email for job %s: %s", settled.get("job_id"), exc
             )
-        # 1.7.1 — receipt build was previously only invoked from the
-        # settlement_runner stop_when path. Normal-completion jobs never
-        # got a signed receipt, so /jobs/{id}/receipt returned 425
-        # forever and `receipt_jws` stayed null on every job in the
-        # marketplace. Build it now, best-effort: a failure here logs
-        # but does not roll back the ledger settlement above (the
-        # sweeper can pick it up later if we wire one).
-        try:
-            from core import receipts as _receipts
-            _receipts.sign_and_store_receipt(settled["job_id"])
-        except Exception as exc:
-            _LOG.warning(
-                "receipt_build_failed_post_settle",
-                extra={"job_id": settled.get("job_id"), "error": str(exc)},
-            )
     return settled
+
+
+def _build_job_receipt_best_effort(job_id: str) -> None:
+    """Sign + persist the receipt for *job_id*. Never raises.
+
+    1.7.2 — receipt build was previously gated by `if newly_settled:` in
+    `_settle_successful_job`, so async jobs (which default to a 24h
+    output_verification_window and stay `verification_status=pending`)
+    never reached settlement and therefore never got a receipt — the
+    receipt-not-ready-forever bug from the 1.7.1 eval. Receipts attest
+    to the work, settlement attests to the money — decouple them. Call
+    this at the *completion* boundary (sync POST /call success path AND
+    async POST /jobs/{id}/complete success path), not at settlement.
+    Best-effort: a sign failure logs and returns; the caller never sees
+    a 500 because of receipt construction.
+    """
+    if not job_id:
+        return
+    try:
+        from core import receipts as _receipts
+        _receipts.sign_and_store_receipt(job_id)
+    except Exception as exc:
+        _LOG.warning(
+            "receipt_build_failed_at_completion",
+            extra={"job_id": job_id, "error": str(exc)},
+        )
 
 
 def _settle_failed_job(
@@ -1332,7 +1343,19 @@ def _dispute_view(dispute_row: dict) -> dict:
 
 def _dispute_side_for_caller(caller: core_models.CallerContext, job: dict) -> str:
     if caller["type"] == "master":
-        raise HTTPException(status_code=403, detail="Master key cannot file disputes.")
+        # 1.7.2 — message rewritten to point at the right path. Pre-1.7.2
+        # users (and the eval) read this as a 1.7.1 regression because the
+        # error didn't say what to do instead. The guard itself has existed
+        # since pre-1.7.0; it's intentional (master is for ops only).
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Master key is for ops only and cannot file disputes. "
+                "Register a caller account (`aztea register` or "
+                "`POST /auth/register`), then use that account's API key "
+                "to file the dispute."
+            ),
+        )
     owner_id = caller["owner_id"]
     if owner_id == job["caller_owner_id"]:
         return "caller"

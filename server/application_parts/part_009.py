@@ -2129,6 +2129,16 @@ def jobs_complete(
             },
         )
         settled = _settle_successful_job(updated, actor_owner_id=actor_owner_id)
+        # 1.7.2 — build the receipt at completion time, decoupled from
+        # settlement. Async jobs default to a 24h verification window and
+        # therefore stay `verification_status=pending`, so settlement and
+        # the receipt-build that used to be gated on it never fired —
+        # /jobs/{id}/receipt returned 425 forever (B-7 in the 1.7.1 eval).
+        # Re-read after the build so the response carries the populated
+        # receipt_jws (otherwise the first call returns null and the
+        # second idempotent call returns a JWS — they'd disagree).
+        _build_job_receipt_best_effort(job_id)
+        settled = jobs.get_job(job_id) or settled
         distribution = payments.compute_success_distribution(
             int(updated.get("price_cents") or 0),
             platform_fee_pct=updated.get("platform_fee_pct_at_create"),
