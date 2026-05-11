@@ -39,6 +39,35 @@ from . import meta_tools
 from . import copilot_tools
 
 
+# MCP wire spec uses camelCase (`inputSchema`, `outputSchema`). The Aztea
+# internal manifest is canonically snake_case (per CLAUDE.md "MCP surface")
+# because most internal callers (HTTP routes, tests, the registry) consume
+# it as snake_case. Translate AT THE WIRE only — internal shape stays as-is.
+_WIRE_KEY_RENAMES = {
+    "input_schema": "inputSchema",
+    "output_schema": "outputSchema",
+}
+
+
+def _to_mcp_wire_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    """Pure: rename snake_case schema keys to MCP camelCase for wire output.
+
+    Without this Claude Code 2.x rejects every tool with
+    ``inputSchema: expected object, received undefined`` and the entire
+    catalog disappears from the client even though the connection is up.
+    """
+    if not isinstance(tool, dict):
+        return tool
+    out: dict[str, Any] = {}
+    for key, value in tool.items():
+        out[_WIRE_KEY_RENAMES.get(key, key)] = value
+    # Defensive default — MCP requires an inputSchema even if the tool
+    # takes no arguments. Emit an empty object schema in that case.
+    if "inputSchema" not in out:
+        out["inputSchema"] = {"type": "object", "properties": {}}
+    return out
+
+
 # Back-compat shim for test code (and any external integration) that
 # previously monkey-patched `_feature_flags.LAZY_MCP_SCHEMAS` against the
 # pre-1.6.2 module. PR #38 swapped the core.feature_flags import for a
@@ -2753,7 +2782,10 @@ class MCPStdioServer:
         if method == "ping":
             return self._jsonrpc_result(request_id, {})
         if method == "tools/list":
-            return self._jsonrpc_result(request_id, {"tools": self.bridge.tools()})
+            return self._jsonrpc_result(
+                request_id,
+                {"tools": [_to_mcp_wire_tool(t) for t in self.bridge.tools()]},
+            )
         if method == "tools/call":
             if not isinstance(params, dict):
                 return self._jsonrpc_error(
