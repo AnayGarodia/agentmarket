@@ -93,29 +93,15 @@ def is_disputable(
     `completed_at` (durable) and accept any terminal status whose
     `completed_at` is set.
     """
-    completed_at = _parse_iso(job.get("completed_at"))
-    if completed_at is None:
-        return DisputeReason(
-            code="dispute.not_completed",
-            message="Disputes can only be filed for jobs that produced output (completed_at is unset).",
-        )
-
     status = str(job.get("status") or "").strip().lower()
-    if status in _PRE_TERMINAL_STATUSES:
-        # `completed_at` set but status pre-terminal: shouldn't happen, but
-        # if it does the job isn't actually finished. Treat as not-yet.
-        return DisputeReason(
-            code="dispute.not_completed",
-            message=f"Job is still in '{status}'; wait for it to finish.",
-        )
 
-    # 1.7.3 — refuse disputes on caller-cancelled jobs. The cancel route
-    # already 100%-refunded the caller, so there is no agent payout to
-    # claw back. Pre-1.7.3 the dispute route accepted these calls and
-    # locked the 5¢ filing deposit anyway, costing the caller money for
-    # no reason. Cancelled jobs surface as status="cancelled" (1.7.3+);
-    # legacy "failed" jobs with the "Cancelled by caller" error_message
-    # are also caught here.
+    # 1.7.5 — check cancelled BEFORE completed_at. The 1.7.4 eval observed
+    # cancelled jobs surfacing dispute.not_completed because completed_at
+    # was somehow NULL despite status=cancelled (worker-dead-related race;
+    # the 1.7.5 worker fix should also resolve this, but defense-in-depth
+    # here ensures the right code is always emitted). Cancelled is a
+    # terminal state regardless of completed_at; the message about the
+    # 5¢ deposit is the actionable hint the caller needs.
     if status == "cancelled" or (
         status == "failed"
         and str(job.get("error_message") or "").startswith("Cancelled by caller")
@@ -129,6 +115,21 @@ def is_disputable(
                 "5¢ filing deposit for nothing."
             ),
             status_code=409,
+        )
+
+    completed_at = _parse_iso(job.get("completed_at"))
+    if completed_at is None:
+        return DisputeReason(
+            code="dispute.not_completed",
+            message="Disputes can only be filed for jobs that produced output (completed_at is unset).",
+        )
+
+    if status in _PRE_TERMINAL_STATUSES:
+        # `completed_at` set but status pre-terminal: shouldn't happen, but
+        # if it does the job isn't actually finished. Treat as not-yet.
+        return DisputeReason(
+            code="dispute.not_completed",
+            message=f"Job is still in '{status}'; wait for it to finish.",
         )
 
     if deadline is None:

@@ -45,8 +45,14 @@ class WatcherCreate(BaseModel):
 
     agent_id: str = Field(..., min_length=1, max_length=128)
 
-    target_kind: Literal["http", "git", "manifest"]
-    target_url: str = Field(..., min_length=1, max_length=2048)
+    # 1.7.5 — "cron" target_kind added: a tick-driven watcher with no
+    # external resource to fingerprint. It fires the agent every
+    # tick_interval_seconds with on_change_policy="always" semantics.
+    # The 1.7.3 CLI shipped a `--cron` flag but the server required
+    # target_url unconditionally; eval B-17 reproduced 422 on every
+    # cron-only create.
+    target_kind: Literal["http", "git", "manifest", "cron"]
+    target_url: str | None = Field(default=None, min_length=1, max_length=2048)
     target_meta: dict[str, Any] = Field(default_factory=dict)
 
     on_change_policy: Literal["on_change", "always"] = "on_change"
@@ -70,6 +76,13 @@ class WatcherCreate(BaseModel):
     def _check_delivery(self) -> "WatcherCreate":
         if not (self.delivery_webhook_url or self.delivery_email):
             raise ValueError(DELIVERY_REQUIRED_ERROR)
+        # 1.7.5 — target_kind-specific validation. http/git/manifest still
+        # require target_url; cron explicitly does not.
+        if self.target_kind in ("http", "git"):
+            if not self.target_url:
+                raise ValueError(
+                    f"target_url is required when target_kind is '{self.target_kind}'."
+                )
         if self.target_kind == "manifest":
             registry = str(self.target_meta.get("registry") or "").strip().lower()
             package = str(self.target_meta.get("package") or "").strip()
@@ -79,6 +92,13 @@ class WatcherCreate(BaseModel):
                 )
             if not package:
                 raise ValueError("manifest target_meta.package is required.")
+        if self.target_kind == "cron":
+            # Cron watchers must fire every tick (no fingerprint to compare).
+            if self.on_change_policy != "always":
+                # Auto-correct rather than reject: cron+on_change makes no
+                # sense, and forcing the caller to set on_change_policy
+                # explicitly is unnecessary friction.
+                object.__setattr__(self, "on_change_policy", "always")
         return self
 
 

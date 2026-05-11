@@ -1325,8 +1325,16 @@ def registry_list(
     # Hide sunset/deprecated builtins from the public catalog. They remain
     # callable by direct slug or agent_id (so historical job_ids and signed
     # receipts still resolve), but they no longer surface to discovery,
-    # search, or auto-hire. Admins still see everything for ops work.
-    if not include_unapproved:
+    # search, or auto-hire. 1.7.5 — admins were previously seeing sunset
+    # rows here, which leaked into `aztea agents list` for any operator
+    # using a master-derived key (eval N10 reproduced this). The default
+    # is now to filter sunset for ALL callers; admins who need to see
+    # sunset agents (ops work) pass `?include_sunset=1` explicitly.
+    include_sunset = (
+        include_unapproved
+        and str(request.query_params.get("include_sunset") or "").lower() in ("1", "true", "yes")
+    )
+    if not include_sunset:
         sunset = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
         agents = [
             a

@@ -1,19 +1,22 @@
-"""watchers: schedule cron-driven or condition-based agent runs.
+"""watchers: schedule agent runs by URL fingerprint or tick interval.
 
-A watcher is a server-side recurring trigger that fires an agent when its
-schedule rolls around OR when a watched URL fingerprint changes. Caller
-sets a daily-spend cap on the watcher itself; if a fire would exceed the
-cap, the run is skipped (no charge). Receipts are produced on every fire.
+A watcher fires an agent when the target_url's fingerprint changes
+(http/git/manifest target_kind) or on every tick (cron target_kind).
+Each watcher has a per-day spend cap; fires that would exceed it are
+skipped without charging.
 
 Usage:
     aztea watchers list
-    aztea watchers create --agent <slug-or-id> --cron "0 9 * * *" --payload '{}'
-    aztea watchers create --agent <slug-or-id> --url https://x.com/feed --payload '{}'
-    aztea watchers show <watcher_id>
+    aztea watchers create --agent <slug> --kind cron --interval 3600 \\
+        --budget 100 --webhook https://example.com/hook
+    aztea watchers create --agent <slug> --kind http --url https://example.com \\
+        --budget 100 --webhook https://example.com/hook
     aztea watchers delete <watcher_id>
 
-1.7.3 — added because the backend has shipped /watchers since 1.6 but the
-CLI surface was missing. The eval flagged this twice as B-17.
+1.7.3 added the command family; 1.7.5 aligns the CLI shape with the
+actual backend schema. The earlier 1.7.3 CLI shipped flags
+(`--cron`, `--daily-cap-cents`, `--payload`) that the server didn't
+accept, producing 422 on every create attempt (eval B-17).
 """
 from __future__ import annotations
 
@@ -33,7 +36,10 @@ from .common import (
 from .output import emit, info, spinner, success
 
 
-app = typer.Typer(help="Manage scheduled / condition-based agent runs.", no_args_is_help=True)
+app = typer.Typer(help="Manage scheduled / URL-watching agent fires.", no_args_is_help=True)
+
+
+_TARGET_KINDS = ("http", "git", "manifest", "cron")
 
 
 @app.command("list")
@@ -47,7 +53,7 @@ def list_watchers(
         with build_client(api_key=api_key, base_url=base_url) as client:
             with spinner("Loading watchers", json_mode=json_mode):
                 resp = client._request_json("GET", "/watchers")
-        watchers = resp.get("watchers") or []
+        watchers = resp.get("watchers") or resp.get("items") or []
         if json_mode:
             emit({"watchers": watchers, "count": len(watchers)}, json_mode=True)
             return
@@ -56,11 +62,11 @@ def list_watchers(
             return
         for w in watchers:
             info(
-                f"  {w.get('watcher_id', '')[:8]}…  "
-                f"{w.get('agent_id', '')[:8]}…  "
-                f"{w.get('schedule_kind') or 'cron'}  "
-                f"{w.get('cron_expression') or w.get('watch_url') or '—'}  "
-                f"fires={w.get('total_fires', 0)}"
+                f"  {w.get('watcher_id', '')[:12]}  "
+                f"{w.get('target_kind') or 'http'}  "
+                f"{(w.get('target_url') or '—')[:50]}  "
+                f"every {w.get('tick_interval_seconds', 900)}s  "
+                f"budget=${w.get('budget_per_day_cents', 0)/100:.2f}/day"
             )
         success(f"{len(watchers)} watcher(s).")
     except typer.Exit:
@@ -72,29 +78,50 @@ def list_watchers(
 @app.command("create")
 def create_watcher(
     agent: str = typer.Option(..., "--agent", help="Slug or agent_id to invoke on each fire."),
-    cron: Optional[str] = typer.Option(
-        None, "--cron",
-        help="Cron expression (5- or 6-field). Mutually exclusive with --url.",
+    kind: str = typer.Option(
+        "http", "--kind",
+        help="Target kind: http | git | manifest | cron. Default http.",
     ),
     url: Optional[str] = typer.Option(
         None, "--url",
-        help="URL whose fingerprint to watch. Mutually exclusive with --cron.",
+        help="URL to fingerprint (required for kind=http|git). Omit for kind=cron.",
+    ),
+    interval: int = typer.Option(
+        900, "--interval",
+        help="Seconds between checks. Default 900 (15 min). Minimum 60.",
+    ),
+    budget: int = typer.Option(
+        ..., "--budget",
+        help="Per-day spend cap in cents. Fires beyond it skip without charge.",
+    ),
+    webhook: Optional[str] = typer.Option(
+        None, "--webhook",
+        help="Delivery webhook URL. Either --webhook or --email is required.",
+    ),
+    email: Optional[str] = typer.Option(
+        None, "--email",
+        help="Delivery email. Either --webhook or --email is required.",
     ),
     payload: str = typer.Option(
         "{}", "--payload",
         help="JSON input to pass to the agent on each fire. Defaults to `{}`.",
     ),
-    daily_cap_cents: Optional[int] = typer.Option(
-        None, "--daily-cap-cents",
-        help="Optional per-watcher daily spend cap. Fires exceeding it are skipped.",
-    ),
     api_key: Optional[str] = ApiKeyOpt,
     base_url: Optional[str] = BaseUrlOpt,
     json_mode: bool = JsonOpt,
 ) -> None:
-    """Create a watcher. Pass either --cron OR --url, not both."""
-    if bool(cron) == bool(url):
-        raise typer.BadParameter("Pass exactly one of --cron or --url.")
+    """Create a watcher.
+
+    --kind=cron creates a tick-only watcher (fires every --interval).
+    --kind=http|git requires --url for fingerprinting.
+    --kind=manifest needs target_meta — use the REST API for that.
+    """
+    if kind not in _TARGET_KINDS:
+        raise typer.BadParameter(f"--kind must be one of {_TARGET_KINDS}")
+    if kind in ("http", "git") and not url:
+        raise typer.BadParameter(f"--url is required when --kind={kind}")
+    if not (webhook or email):
+        raise typer.BadParameter("Pass one of --webhook or --email for delivery.")
     try:
         parsed_payload = _json.loads(payload)
     except _json.JSONDecodeError as exc:
@@ -103,20 +130,27 @@ def create_watcher(
         with build_client(api_key=api_key, base_url=base_url) as client:
             with spinner("Resolving agent", json_mode=json_mode):
                 agent_id = find_agent_id(client, agent)
-            body: dict = {"agent_id": agent_id, "input_payload": parsed_payload}
-            if cron:
-                body["cron_expression"] = cron
+            body: dict = {
+                "agent_id": agent_id,
+                "target_kind": kind,
+                "tick_interval_seconds": int(interval),
+                "budget_per_day_cents": int(budget),
+                "payload": parsed_payload,
+                "on_change_policy": "always" if kind == "cron" else "on_change",
+            }
             if url:
-                body["watch_url"] = url
-            if daily_cap_cents is not None:
-                body["daily_cap_cents"] = int(daily_cap_cents)
+                body["target_url"] = url
+            if webhook:
+                body["delivery_webhook_url"] = webhook
+            if email:
+                body["delivery_email"] = email
             with spinner("Creating watcher", json_mode=json_mode):
                 resp = client._request_json("POST", "/watchers", json_body=body)
         if json_mode:
             emit(resp, json_mode=True)
             return
-        success(f"Watcher created: {resp.get('watcher_id', '')[:8]}…")
-        info(f"  agent={agent_id[:8]}… trigger={cron or url}")
+        success(f"Watcher created: {resp.get('watcher_id', '')[:12]}")
+        info(f"  agent={agent_id[:8]}…  kind={kind}  every {interval}s")
     except typer.Exit:
         raise
     except Exception as exc:
@@ -134,19 +168,11 @@ def delete_watcher(
     try:
         with build_client(api_key=api_key, base_url=base_url) as client:
             with spinner("Deleting watcher", json_mode=json_mode):
-                # Backend exposes both /watch/{id} and /watchers/{id} for
-                # plural/singular ergonomics; the eval flagged that
-                # DELETE /watchers/{id} returns 405 in some prod configs
-                # while DELETE /watch/{id} works. Try the singular alias
-                # first since it's the canonical handler.
-                try:
-                    resp = client._request_json("DELETE", f"/watch/{watcher_id}")
-                except Exception:
-                    resp = client._request_json("DELETE", f"/watchers/{watcher_id}")
+                resp = client._request_json("DELETE", f"/watchers/{watcher_id}")
         if json_mode:
-            emit(resp, json_mode=True)
+            emit(resp if isinstance(resp, dict) else {"deleted": True}, json_mode=True)
             return
-        success(f"Watcher {watcher_id[:8]}… deleted.")
+        success(f"Watcher {watcher_id[:12]} deleted.")
     except typer.Exit:
         raise
     except Exception as exc:

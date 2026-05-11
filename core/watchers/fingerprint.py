@@ -60,6 +60,12 @@ def fingerprint_target(
         return _fingerprint_git(target_url, ref)
     if target_kind == "manifest":
         return _fingerprint_manifest(meta)
+    if target_kind == "cron":
+        # 1.7.5 — cron watchers fire every tick with no fingerprint to
+        # compare against. Return a stable fingerprint so the
+        # on_change_policy="always" path fires unconditionally on each
+        # sweep (the policy is auto-set in models.py:_check_delivery).
+        return "cron-tick", None
     return None, f"unknown target_kind: {target_kind!r}"
 
 

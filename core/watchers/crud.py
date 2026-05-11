@@ -66,7 +66,7 @@ def create_watcher(
     caller_wallet_id: str,
     agent_id: str,
     target_kind: str,
-    target_url: str,
+    target_url: str | None,  # 1.7.5: optional for target_kind="cron"
     target_meta: dict | None,
     on_change_policy: str,
     tick_interval_seconds: int,
@@ -88,6 +88,11 @@ def create_watcher(
     target_meta_json = json.dumps(target_meta or {}, sort_keys=True)
     payload_json = json.dumps(payload or {}, sort_keys=True)
     spend_window_date = _today_utc_date()
+    # 1.7.5 — target_url is NOT NULL in the schema; cron watchers have
+    # no URL to fingerprint, so insert a sentinel that callers + sweepers
+    # treat as "no fingerprint, fire every tick". Cleaner than a migration.
+    if target_kind == "cron" and not target_url:
+        target_url = "cron://tick"
 
     with _conn() as conn:
         conn.execute(

@@ -64,6 +64,20 @@ _AGENT_SEMAPHORE_WAIT_SECONDS = float(
     os.environ.get("AZTEA_AGENT_SEMAPHORE_WAIT_SECONDS", "0.5")
 )
 
+# 1.7.5 — module-level pool used to wall-clock-budget agent calls. The
+# pool is never shut down per request; we submit, wait with timeout,
+# and abandon on TimeoutError. Pool size is generous because per-agent
+# concurrency is already enforced by _agent_semaphore — this pool just
+# needs threads available for in-flight + leaked-on-timeout calls.
+import concurrent.futures as _cf
+_AGENT_WALL_TIMEOUT_POOL_MAX = int(
+    os.environ.get("AZTEA_AGENT_WALL_TIMEOUT_POOL_MAX", "128")
+)
+_AGENT_WALL_TIMEOUT_POOL = _cf.ThreadPoolExecutor(
+    max_workers=_AGENT_WALL_TIMEOUT_POOL_MAX,
+    thread_name_prefix="agent-walltimeout",
+)
+
 # 1.7.4 — per-agent wall-clock budget. The 1.7.3 eval found that the
 # 1.7.3 25s budget was LARGER than Caddy's true upstream timeout
 # (observed 13-30s for SAST, 5-7s for regex), so Caddy 502'd with
@@ -177,35 +191,42 @@ def _execute_builtin_agent(
             agent_id,
             _AGENT_CONCURRENCY_LIMITS.get(agent_id, _AGENT_CONCURRENCY_DEFAULT),
         )
-    # 1.7.3 — wrap the agent call in a wall-clock budget. Pre-1.7.3 a
-    # regex ReDoS or a slow SAST scan would block past Caddy's 30s
-    # gateway timeout — Caddy 502'd with empty body and the call route
-    # never reached the refund path, so the caller paid for nothing.
-    # This timeout fires BEFORE Caddy gives up so the refund path always
-    # runs. Note: Python can't safely kill a thread mid-execution, so the
-    # underlying agent thread leaks until it finishes; the user-visible
-    # behavior is correct (timeout envelope + refund), and the leaked
-    # work releases the semaphore on natural completion.
-    import concurrent.futures as _cf
+    # 1.7.5 — submit to a module-level pool, never `with ThreadPoolExecutor`.
+    #
+    # 1.7.4 used `with _cf.ThreadPoolExecutor(...)` per call. The context-
+    # manager `__exit__` calls `shutdown(wait=True)`, which BLOCKS until
+    # every pending future finishes. On a hung agent (regex ReDoS, etc.)
+    # the inner thread never completes, so the request thread blocked on
+    # cleanup until Caddy 502'd anyway. Worse, the async built-in worker
+    # also funneled through this path — one hung agent froze the entire
+    # async pipeline (1.7.4 regression: zero jobs ever reached complete).
+    #
+    # The fix: submit to a long-lived pool that we never shut down per
+    # request. `fut.result(timeout=...)` returns / raises promptly; on
+    # TimeoutError we abandon the future. The leaked thread continues in
+    # the background until the agent finishes (which it will — even a
+    # regex ReDoS eventually returns), then quietly releases its pool
+    # slot. The worker thread is free to handle the next job.
     budget = _AGENT_WALL_BUDGET_OVERRIDES.get(
         agent_id, _AGENT_WALL_BUDGET_DEFAULT_SECONDS,
     )
     try:
-        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
-            _fut = _ex.submit(
-                _execute_builtin_agent_inner,
-                agent_id, payload, _finalize, emit_partial=emit_partial,
-            )
-            try:
-                return _fut.result(timeout=budget)
-            except _cf.TimeoutError:
-                raise _AgentWallClockTimeout(agent_id, budget)
+        fut = _AGENT_WALL_TIMEOUT_POOL.submit(
+            _execute_builtin_agent_inner,
+            agent_id, payload, _finalize, emit_partial=emit_partial,
+        )
+        try:
+            return fut.result(timeout=budget)
+        except _cf.TimeoutError:
+            # Cancel if still PENDING; no-op if already running.
+            # The running thread is abandoned — Python can't kill it
+            # safely. It releases its pool slot on natural completion.
+            fut.cancel()
+            raise _AgentWallClockTimeout(agent_id, budget)
     finally:
         # Release the semaphore even if the inner call is still running
-        # in the background. The leaked thread will not re-release on its
-        # own (we already released here), so the inner call must NOT also
-        # release. _execute_builtin_agent_inner doesn't touch the sem,
-        # so this is safe.
+        # in the background. _execute_builtin_agent_inner doesn't touch
+        # the sem, so this is the sole release.
         sem.release()
 
 
