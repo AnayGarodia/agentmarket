@@ -64,28 +64,30 @@ _AGENT_SEMAPHORE_WAIT_SECONDS = float(
     os.environ.get("AZTEA_AGENT_SEMAPHORE_WAIT_SECONDS", "0.5")
 )
 
-# 1.7.3 — per-agent wall-clock budget. The 1.7.1 eval reproduced regex
-# ReDoS (`(a+)+b` against 30 a's) and a 32 KB diff producing Caddy 502s
-# with empty body and NO refund. The agent process was alive but blocked;
-# Caddy timed out at ~30s; the call route never reached the refund path.
-# This budget kills the agent call before Caddy gives up so the refund
-# path always runs. Default 25s leaves margin under the 30s gateway.
+# 1.7.4 — per-agent wall-clock budget. The 1.7.3 eval found that the
+# 1.7.3 25s budget was LARGER than Caddy's true upstream timeout
+# (observed 13-30s for SAST, 5-7s for regex), so Caddy 502'd with
+# empty body BEFORE the budget fired and the refund path never ran.
+# 1.7.4 lowers the default to 8s so the timeout always pre-empts
+# Caddy. Agents that legitimately need more time (SAST on large
+# fixtures) should be invoked via async POST /jobs; the sync /call
+# 504 envelope below points the caller there.
 _AGENT_WALL_BUDGET_DEFAULT_SECONDS = float(
-    os.environ.get("AZTEA_AGENT_WALL_BUDGET_DEFAULT_SECONDS", "25.0")
+    os.environ.get("AZTEA_AGENT_WALL_BUDGET_DEFAULT_SECONDS", "8.0")
 )
 _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
-    # Regex catastrophic backtracking should die fast — anything past 5s
+    # Regex catastrophic backtracking should die fast — anything past 3s
     # on this agent is almost certainly ReDoS, never legitimate.
-    _REGEX_TESTER_AGENT_ID: 5.0,
-    # Cron parser is pure math; anything past 2s is a runaway iteration.
-    _CRON_EXPRESSION_PARSER_AGENT_ID: 5.0,
+    _REGEX_TESTER_AGENT_ID: 3.0,
+    # Cron parser is pure math; anything past 3s is a runaway iteration.
+    _CRON_EXPRESSION_PARSER_AGENT_ID: 3.0,
     # JWT debugger is base64 + json; sub-second normally.
-    _JWT_DEBUGGER_AGENT_ID: 5.0,
-    # SAST / dep-auditor invoke real subprocess tools (semgrep, npm-audit)
-    # and can legitimately take 20s on a 1k-LOC fixture.
-    _SAST_SCANNER_AGENT_ID: 25.0,
-    _DEPENDENCY_AUDITOR_AGENT_ID: 25.0,
-    _DIFF_ANALYZER_AGENT_ID: 20.0,
+    _JWT_DEBUGGER_AGENT_ID: 3.0,
+    # SAST / dep-auditor / diff-analyzer invoke real subprocess tools
+    # (semgrep, npm-audit) and can legitimately take 20s+ on a 1k-LOC
+    # fixture. We keep the SYNC budget at the default 8s and surface a
+    # 504 envelope that tells the caller to switch to async POST /jobs
+    # for big inputs (no Caddy gateway-timeout race on the queue path).
 }
 
 

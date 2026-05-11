@@ -136,7 +136,11 @@ def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
     if not _HAS_RICH:
         for agent in agents:
             console.print(
-                f"{slugify(agent.name)}  ${agent.price_per_call_usd:.2f}  {agent.name}"
+                # 1.7.4 — :.4f then strip trailing zeros so sub-cent prices
+                # render honestly ($0.004 not $0.00).
+                f"{slugify(agent.name)}  "
+                f"${agent.price_per_call_usd:.4f}".rstrip('0').rstrip('.')
+                + f"  {agent.name}"
             )
         return
 
@@ -208,7 +212,12 @@ def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
             _Text(BAR, style=mark_style),
             slugify(agent.name),
             agent.name,
-            money(round(price_usd * 100)),
+            # 1.7.4 — pass raw cents (with sub-cent precision) so the
+            # money() formatter can render values like 0.4¢ as $0.004.
+            # Pre-1.7.4 `round(price_usd * 100)` collapsed all sub-cent
+            # prices to 0 cents BEFORE the formatter saw them, defeating
+            # the 1.7.3 B-15 fix at the wrong layer.
+            money(price_usd * 100),
             trust_gauge(trust),
             f"{success:.0%}",
         )

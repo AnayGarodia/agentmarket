@@ -1008,7 +1008,17 @@ def jobs_dispute(
         has_quality_rating=reputation.get_job_quality_rating(job_id) is not None,
     )
     if reason is not None:
-        raise HTTPException(status_code=reason.status_code, detail=reason.message)
+        # 1.7.4 — surface the structured DisputeReason.code in the error
+        # envelope. Pre-1.7.4 the route raised HTTPException with a plain
+        # string detail, so FastAPI's default handler dropped the
+        # `reason.code` (dispute.job_cancelled, dispute.window_expired,
+        # dispute.not_completed, etc.) and the error key fell back to
+        # request.invalid_input. Use error_codes.make_error() so the
+        # canonical taxonomy reaches the client.
+        raise HTTPException(
+            status_code=reason.status_code,
+            detail=error_codes.make_error(reason.code, reason.message),
+        )
 
     side = _dispute_side_for_caller(caller, job)
 

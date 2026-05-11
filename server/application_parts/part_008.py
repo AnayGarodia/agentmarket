@@ -1761,6 +1761,9 @@ def registry_call(
                     # the caller, mark failed, surface a structured 504.
                     # Pre-1.7.3 this scenario produced a Caddy 502 with
                     # empty body and no refund (B-3, B-4 in the 1.7.1 eval).
+                    # 1.7.4 — budget lowered (default 8s) so the timeout
+                    # always pre-empts Caddy's gateway timeout. Big-input
+                    # callers should switch to async POST /jobs.
                     failed = jobs.update_job_status(
                         job["job_id"],
                         "failed",
@@ -1782,10 +1785,15 @@ def registry_call(
                         detail=error_codes.make_error(
                             error_codes.AGENT_CALL_TIMEOUT,
                             (
-                                f"Agent took longer than the {to_exc.budget_seconds:.1f}s "
-                                "wall-clock budget. You were refunded. Common causes: "
-                                "regex catastrophic backtracking, unbounded loops, "
-                                "pathological input shapes."
+                                f"Agent took longer than the sync-call "
+                                f"{to_exc.budget_seconds:.1f}s budget. You were "
+                                "refunded. For large inputs (SAST on >500 LOC, "
+                                "dep-audits on >50 packages, diff analysis on "
+                                ">10 KB), use POST /jobs (async) — the queue "
+                                "path has no upstream-gateway timeout. "
+                                "For sync calls, common causes are regex "
+                                "catastrophic backtracking, unbounded loops, "
+                                "and pathological input shapes."
                             ),
                             {
                                 "agent_id": to_exc.agent_id,
@@ -1793,6 +1801,7 @@ def registry_call(
                                 "refunded_cents": int(
                                     job.get("caller_charge_cents") or 0
                                 ),
+                                "retry_via": "POST /jobs",
                             },
                         ),
                     )

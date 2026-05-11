@@ -117,7 +117,15 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     IMAGE_GENERATOR_AGENT_ID: False,
     VIDEO_STORYBOARD_AGENT_ID: False,
     ARXIV_RESEARCH_AGENT_ID: True,
-    PYTHON_EXECUTOR_AGENT_ID: False,
+    # 1.7.4 — flipped True. The python sandbox captures stdout/stderr
+    # deterministically; replaying a cache hit returns the same captured
+    # output a fresh run would produce. Pre-1.7.4 ten identical
+    # concurrent calls produced ten distinct charges (1.7.1 eval N15);
+    # this default + the same-eval removal of the agent from
+    # core/cache.py's _NON_CACHEABLE_INTERNAL_ENDPOINTS together make
+    # the cache actually hit. Users wanting 10 distinct runs (e.g.
+    # `print(time.time())`) should use distinct inputs.
+    PYTHON_EXECUTOR_AGENT_ID: True,
     HN_DIGEST_AGENT_ID: True,
     DNS_INSPECTOR_AGENT_ID: False,
     LINTER_AGENT_ID: False,
