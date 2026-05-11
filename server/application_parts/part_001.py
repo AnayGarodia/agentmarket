@@ -550,7 +550,13 @@ async def lifespan(app: FastAPI):
                 "startup_pending_sweep: failing %d pending jobs older than 1h",
                 len(stuck),
             )
-            from server.application_parts.part_005 import _settle_failed_job  # noqa
+            # _settle_failed_job lives in another shard (part_005). The shards
+            # share namespace via server.application compilation, so by the
+            # time lifespan() runs the name is in module globals. A direct
+            # `from server.application_parts.part_005 import _settle_failed_job`
+            # fails because part_005.py is not standalone-importable. We pick
+            # the live binding via `globals()`.
+            _settle = globals().get("_settle_failed_job")
             for j in stuck:
                 try:
                     updated = jobs.update_job_status(
@@ -563,8 +569,8 @@ async def lifespan(app: FastAPI):
                         ),
                         completed=True,
                     )
-                    if updated is not None:
-                        _settle_failed_job(
+                    if updated is not None and _settle is not None:
+                        _settle(
                             updated,
                             actor_owner_id="system:startup-sweep",
                             event_type="job.failed_stale_pending",
