@@ -521,6 +521,64 @@ async def lifespan(app: FastAPI):
     ensure_builtin_agents_registered()
     recipes.ensure_builtin_recipes()
 
+    # 1.7.5.1 — startup cleanup: fail any pending job older than 1 hour.
+    # The 1.7.4 ThreadPoolExecutor bug left a wedge of regex/SAST/diff
+    # jobs cycling claim → timeout → re-pending forever, starving worker
+    # capacity (1.7.5 prod symptom: queue stuck at 18 even after worker
+    # restart). One-shot sweep on each deploy guarantees a clean slate
+    # — pending-older-than-1h jobs are stale by any reasonable definition
+    # (worker's tick interval is 1s; legitimate jobs claim within seconds).
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        with registry._conn() as conn:
+            stuck_rows = conn.execute(
+                """
+                SELECT job_id, agent_id, caller_charge_cents, caller_wallet_id,
+                       charge_tx_id, agent_wallet_id, platform_wallet_id,
+                       status, completed_at, settled_at
+                FROM jobs
+                WHERE status = 'pending'
+                  AND claim_owner_id IS NULL
+                  AND created_at < %s
+                """,
+                (cutoff,),
+            ).fetchall()
+        stuck = [dict(r) for r in stuck_rows]
+        if stuck:
+            _LOG.warning(
+                "startup_pending_sweep: failing %d pending jobs older than 1h",
+                len(stuck),
+            )
+            from server.application_parts.part_005 import _settle_failed_job  # noqa
+            for j in stuck:
+                try:
+                    updated = jobs.update_job_status(
+                        j["job_id"],
+                        "failed",
+                        error_message=(
+                            "Failed by startup sweep: this job was pending "
+                            "more than 1 hour without ever being claimed. "
+                            "Likely orphaned from a previous deploy. Refunded."
+                        ),
+                        completed=True,
+                    )
+                    if updated is not None:
+                        _settle_failed_job(
+                            updated,
+                            actor_owner_id="system:startup-sweep",
+                            event_type="job.failed_stale_pending",
+                        )
+                except Exception:
+                    _LOG.exception(
+                        "startup_pending_sweep: failed to drain job %s",
+                        j.get("job_id"),
+                    )
+        else:
+            _LOG.info("startup_pending_sweep: no stale pending jobs to drain")
+    except Exception:
+        _LOG.exception("startup_pending_sweep: top-level failure (ignored)")
+
     # Optional warm-up of sentence-transformers MiniLM. With uvicorn's 3
     # worker processes each independently loading ~80MB of weights at
     # startup, a t-class EC2 instance OOM-kills the workers (silent

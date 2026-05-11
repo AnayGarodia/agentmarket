@@ -559,6 +559,37 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 event_type="job.failed_builtin",
             )
         return True
+    except _AgentWallClockTimeout as to_exc:
+        # 1.7.5.1 — explicit handler for wall-clock timeouts in the async
+        # worker path. Pre-1.7.5.1 this fell through to the broad
+        # `except Exception` below, which marked the job as failed but
+        # left it eligible for re-claim if attempt_count < max_attempts.
+        # Result: regex/SAST/diff jobs with pathological input cycled
+        # claim → timeout → re-pending forever, starving the worker pool
+        # of capacity for fresh jobs (1.7.5 prod symptom). A timeout is
+        # NEVER going to succeed on retry — same input, same agent,
+        # same outcome. Mark terminal-failed once and stop.
+        max_attempt_to_set = max(
+            int(claimed.get("attempt_count") or 1), 1,
+        )
+        updated = jobs.update_job_status(
+            claimed["job_id"],
+            "failed",
+            error_message=(
+                f"Agent '{to_exc.agent_id}' exceeded its "
+                f"{to_exc.budget_seconds:.1f}s wall-clock budget. Refunded. "
+                "Async retries disabled for this job — same input would "
+                "produce the same timeout."
+            ),
+            completed=True,
+        )
+        if updated is not None:
+            _settle_failed_job(
+                updated,
+                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                event_type="job.failed_timeout",
+            )
+        return True
     except Exception as exc:
         # Unexpected exception class. Stash error_class in the failure
         # record so post-mortems can find these without log-grepping.
