@@ -265,13 +265,33 @@ def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool
         status = str(user.get("status") or "active").strip().lower()
         if status != "active":
             raise AccountSuspendedError(status)
-        # Revoke prior session keys, mint a fresh one — same pattern as login_user.
+        # Reuse the most recent active Session key when one exists, matching
+        # login_user's behaviour. Pre-fix this branch unconditionally revoked
+        # + minted on every Google sign-in, so repeated logins left a long
+        # trail of revoked keys for the same account (and broke any client
+        # — MCP, SDK, CLI — that was still holding a previously-issued key).
+        # When no active session exists we mint one so brand-new Google
+        # users still get a usable raw key back.
         with _conn() as conn:
-            conn.execute(
-                "UPDATE api_keys SET is_active = 0 WHERE user_id = %s AND name = 'Session key' AND is_active = 1",
+            existing = conn.execute(
+                """
+                SELECT key_id, key_prefix
+                FROM api_keys
+                WHERE user_id = %s AND name = 'Session key' AND is_active = 1
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
                 (user["user_id"],),
-            )
-        result = _create_key_for_user(user["user_id"], "Session key")
+            ).fetchone()
+        if existing is not None:
+            raw_key = None
+            key_id = existing["key_id"]
+            key_prefix = existing["key_prefix"]
+        else:
+            minted = _create_key_for_user(user["user_id"], "Session key")
+            raw_key = minted["raw_key"]
+            key_id = minted["key_id"]
+            key_prefix = minted["key_prefix"]
         return (
             {
                 "user_id": user["user_id"],
@@ -279,9 +299,9 @@ def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool
                 "email": user["email"],
                 "role": user.get("role") or "both",
                 "created_at": user["created_at"],
-                "raw_api_key": result["raw_key"],
-                "key_id": result["key_id"],
-                "key_prefix": result["key_prefix"],
+                "raw_api_key": raw_key,
+                "key_id": key_id,
+                "key_prefix": key_prefix,
                 **_legal_state_from_row(user),
             },
             False,
