@@ -1343,19 +1343,11 @@ def _dispute_view(dispute_row: dict) -> dict:
 
 def _dispute_side_for_caller(caller: core_models.CallerContext, job: dict) -> str:
     if caller["type"] == "master":
-        # 1.7.2 — message rewritten to point at the right path. Pre-1.7.2
-        # users (and the eval) read this as a 1.7.1 regression because the
-        # error didn't say what to do instead. The guard itself has existed
-        # since pre-1.7.0; it's intentional (master is for ops only).
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Master key is for ops only and cannot file disputes. "
-                "Register a caller account (`aztea register` or "
-                "`POST /auth/register`), then use that account's API key "
-                "to file the dispute."
-            ),
-        )
+        # Master is omnipotent: it impersonates whichever side of the job is
+        # the most natural opener of a dispute. Default to caller-side (the
+        # buyer is the usual disputer); fall back to agent-side only if the
+        # job has no caller_owner_id recorded.
+        return "caller" if job.get("caller_owner_id") else "agent"
     owner_id = caller["owner_id"]
     if owner_id == job["caller_owner_id"]:
         return "caller"

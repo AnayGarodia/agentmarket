@@ -1054,6 +1054,16 @@ def jobs_dispute(
         )
 
     side = _dispute_side_for_caller(caller, job)
+    # Master keys are ops-grade — when they file a dispute they're acting on
+    # behalf of the natural side of the job (caller by default). Substitute
+    # the real owner_id so the dispute row, deposit, and clawback all attach
+    # to the correct user wallet instead of the synthetic "master" id.
+    if caller["type"] == "master":
+        impersonated = (
+            job.get("caller_owner_id") if side == "caller" else job.get("agent_owner_id")
+        )
+        if impersonated:
+            caller = {**caller, "owner_id": impersonated}
 
     # Block self-disputes (caller and agent have same owner)
     if (

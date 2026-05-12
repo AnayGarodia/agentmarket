@@ -215,7 +215,13 @@ export default function AuthPanel() {
     try {
       if (!registerMode) {
         const result = await authLogin(normalizedEmail, password)
-        const apiKey = result?.raw_api_key ?? result?.api_key ?? result?.key
+        // Server reuses the existing session key on login and returns
+        // raw_api_key: null in that case. Fall back to whatever this browser
+        // already had cached — it's the same key, just not echoed back.
+        const apiKey = result?.raw_api_key
+          ?? result?.api_key
+          ?? result?.key
+          ?? localStorage.getItem('aztea_key')
         if (!apiKey) {
           throw new Error('Sign-in succeeded but no session token was returned.')
         }
@@ -258,7 +264,13 @@ export default function AuthPanel() {
         // Re-show onboarding for any first-time Google account.
         localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
       }
-      connect(result.raw_api_key, userInfo)
+      // Server reuses the existing session key on Google sign-in and returns
+      // raw_api_key: null in that case — fall back to the cached browser key.
+      const apiKey = result?.raw_api_key ?? localStorage.getItem('aztea_key')
+      if (!apiKey) {
+        throw new Error('Google sign-in succeeded but no session token was returned.')
+      }
+      connect(apiKey, userInfo)
       navigate(redirectTo, { replace: true })
     } catch (err) {
       setError(err.message ?? 'Google sign-in failed. Try again.')

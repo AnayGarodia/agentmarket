@@ -176,8 +176,10 @@ export function MarketProvider({ apiKey, children }) {
 
   useEffect(() => {
     refresh().finally(() => setLoading(false))
-    // 60s reconciliation poll — SSE keeps jobs current between ticks.
-    const id = setInterval(backgroundPoll, 60000)
+    // 5s reconciliation poll — SSE is the primary path, but the SSE auth
+    // probe / proxy can silently drop the stream behind some networks. A
+    // short interval keeps the dashboard visibly live even when SSE is dead.
+    const id = setInterval(backgroundPoll, 5000)
     return () => clearInterval(id)
   }, [refresh, backgroundPoll])
 
