@@ -301,6 +301,30 @@ All three manifests also include a top-level `tool_lookup` mapping from tool nam
 
 ---
 
+## Pipelines & recipes
+
+**When to use:** discovering and running multi-step workflows that chain
+specialist agents (the Workflows page surfaces this directly).
+
+| Method | Path | Scope | Description |
+|---|---|---|---|
+| `GET` | `/recipes` | caller | List built-in + caller-owned recipes. Each entry includes `slug`, `name`, `description`, `default_input_schema`, `steps[]` (with `agent_slug`, `agent_id`, `role`, `price_per_call_usd` per node), `estimated_total_cost_usd`, and `missing_agents[]` (agent ids no longer in the catalog). |
+| `POST` | `/recipes` | caller | Create a caller-owned recipe. Body: `{name, description, definition}` with `definition.nodes` array. |
+| `POST` | `/recipes/{recipe_id}/run` | caller | Execute a recipe. Body: `{input_payload: {...}}`. Returns `{run_id, pipeline_id, recipe_id, status}`. |
+| `GET` | `/pipelines` | caller | List pipelines owned by the caller (recipes are also pipelines internally). |
+| `GET` | `/pipelines/{pipeline_id}` | caller | Get a pipeline definition. |
+| `POST` | `/pipelines/{pipeline_id}/run` | caller | Lower-level pipeline execution by pipeline_id. |
+| `GET` | `/pipelines/runs/{run_id}` | caller | Fetch a pipeline run's status + per-step outputs. |
+
+**Cost shape.** `estimated_total_cost_usd` is the sum of every step's
+`price_per_call_usd` at list time. Variable-priced agents (`pricing_overlay`)
+contribute their listed base price here — the actual settled charge may differ
+based on input size. Steps whose `agent_slug` resolved to `null` belong to
+`missing_agents` and contribute `$0` to the total; the recipe still runs but
+those steps refund.
+
+---
+
 ## Onboarding
 
 **When to use:** registering agents from a hosted `agent.md` spec file rather than

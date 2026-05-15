@@ -917,6 +917,20 @@ def _pipeline_response(pipeline_row: dict) -> dict:
 
 
 def _recipe_catalog_entry(pipeline_row: dict) -> dict:
+    """Enrich a pipeline row with recipe metadata for the discoverability UI.
+
+    Adds:
+      - ``slug`` — alias of ``pipeline_id`` for clients that expect a
+        slug-style identifier (matches the docs/api-reference contract).
+      - ``default_input_schema`` — from BUILTIN_RECIPES when applicable.
+      - ``steps`` — array of ``{node_id, agent_id, agent_slug,
+        agent_name, role, price_per_call_usd}``, one per DAG node, in
+        definition order.
+      - ``estimated_total_cost_usd`` — sum of per-step prices in dollars.
+      - ``missing_agents`` — agent_ids referenced by the recipe but no
+        longer in the registry (sunset agents). The recipe is still shown
+        so the gap is visible rather than silently swallowed.
+    """
     recipe_meta = next(
         (
             item
@@ -928,6 +942,61 @@ def _recipe_catalog_entry(pipeline_row: dict) -> dict:
     payload = _pipeline_response(pipeline_row)
     if recipe_meta is not None:
         payload["default_input_schema"] = recipe_meta.get("default_input_schema") or {}
+    payload["slug"] = payload.get("pipeline_id")
+
+    definition = payload.get("definition") or {}
+    nodes = definition.get("nodes") if isinstance(definition, dict) else None
+    steps: list[dict] = []
+    price_cents_by_id: dict[str, int] = {}
+    missing: list[str] = []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        agent_id = str(node.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        agent_row = registry.get_agent(agent_id, include_unapproved=True)
+        if agent_row is None:
+            missing.append(agent_id)
+            steps.append({
+                "node_id": node.get("id"),
+                "agent_id": agent_id,
+                "agent_slug": None,
+                "agent_name": None,
+                "role": recipes.step_role(node),
+                "price_per_call_usd": None,
+            })
+            continue
+        # The registry stores price as a float (display-side concern); the
+        # ledger always uses integer cents — so we round-trip through cents
+        # to avoid float drift accumulating across multi-step recipes.
+        price_usd = float(agent_row.get("price_per_call_usd") or 0.0)
+        price_cents = int(round(price_usd * 100))
+        price_cents_by_id[agent_id] = price_cents
+        steps.append({
+            "node_id": node.get("id"),
+            "agent_id": agent_id,
+            "agent_slug": agent_row.get("name"),
+            "agent_name": agent_row.get("name"),
+            "role": recipes.step_role(node),
+            "price_per_call_usd": round(price_cents / 100, 2),
+        })
+
+    total_cents, additional_missing = recipes.estimate_recipe_cost_cents(
+        definition if isinstance(definition, dict) else {}, price_cents_by_id
+    )
+    # The two missing lists overlap (a node skipped above also surfaces here),
+    # but the estimator covers nodes without an attached step row too — merge
+    # and de-dupe while preserving definition order.
+    seen: set[str] = set()
+    ordered_missing: list[str] = []
+    for value in (*missing, *additional_missing):
+        if value and value not in seen:
+            seen.add(value)
+            ordered_missing.append(value)
+    payload["steps"] = steps
+    payload["estimated_total_cost_usd"] = round(total_cents / 100, 2)
+    payload["missing_agents"] = ordered_missing
     return payload
 
 
