@@ -10,13 +10,16 @@
 
 ## In Progress
 <!-- Active work. One line per item: branch, what's left. -->
-- [ ] **Rate-limit middleware** (`feat/rate-limit-middleware`) — per-key sliding window in `part_001.py`
-- [ ] **Payout-curve clawback alert** (`feat/payout-curve-clawback-alert`) — partial clawback + metric on underflow
-- [ ] **Reconciliation auto-repair** (`feat/reconciliation-auto-repair`) — `?auto_repair=true` on `/ops/payments/reconcile`
+- [ ] **Rate-limit middleware** (`feat/rate-limit-middleware`) — WIP committed (`da050c0`); needs review and PR
+- [ ] **Reserve-hold pattern for payouts** (`feat/wallet-reserve-holds`) — replaces clawback alert; held funds during dispute window
+- [ ] **Reconciliation auto-repair** (`feat/reconciliation-auto-repair`) — `?auto_repair=true` on `/ops/payments/reconcile` (hold until reserve-hold PR merges)
 - [ ] **Pipeline discoverability** (`feat/pipeline-discoverability`) — API + MCP + frontend surface for recipes
+- [ ] **Step 1 Elixir activation** — code shipped (`bd58a2a`), `AZTEA_ELIXIR_EVENTS` flag still off in prod; needs Caddy `/elixir/socket` block + env vars + `mix deps.get` + restart aztea-elixir before flipping
 
 ## Done — recent
 <!-- Last 5–10 shipped items with date and commit short sha. Trim aggressively. -->
+- 2026-05-15 — Step 1 strangle-fig migration: Phoenix.PubSub + Channels for realtime job events, feature-flagged off (commit `bd58a2a`)
+- 2026-05-15 — Silent-failure sweep: payout-curve counter + 3 structured error envelopes + dispute/manifest/claim-token taxonomy codes + SDK hints (commit `f139a73`)
 - 2026-05-15 — Observability upgrade: `job_duration_seconds` histogram + `builtin_agent_calls_total` counter + `GET /health` returning `{status, db, llm_providers, version}` (commit `476da23`)
 - 2026-05-15 — TypeScript SDK parity: `AgentServer`, `poll_job_to_completion`, clarification handling (commit `53052b4`)
 - 2026-05-15 — Co-pilot mode end-to-end integration tests (6 tests covering steer/progress/stop_when full flow) (commit `ff214a6`)

@@ -4,7 +4,7 @@
 > Current priorities, status, and launch blockers live in `.agents/TODO.md`.
 > Operational reference (deploy, nginx, prod env, packaging, Stripe webhook) lives in `docs/runbooks/deploy.md`.
 
-Architecture in one sentence: **FastAPI monolith with dual-backend persistence (Postgres in prod, SQLite WAL for dev/tests), provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.**
+Architecture in one sentence: **FastAPI monolith with dual-backend persistence (Postgres in prod, SQLite WAL for dev/tests), provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.** An Elixir/Phoenix sidecar (`elixir/`, runs as `aztea-elixir.service`) handles realtime fan-out via Phoenix.PubSub + Channels — gated by `AZTEA_ELIXIR_EVENTS`. This is Step 1 of an incremental strangle-fig migration; Python remains the source of record for all state.
 
 Live at **[https://aztea.ai](https://aztea.ai)**
 
@@ -222,6 +222,15 @@ core/
     registry.py                  PROVIDERS dict, resolve(spec), DEFAULT_CHAIN
     fallback.py                  run_with_fallback() — chain-tries providers, retries on rate limit
     providers/                   groq, openai, anthropic, cohere, bedrock, openai_compatible (25+ via env)
+  job_events.py                  Fire-and-forget HTTP POST to Elixir sidecar on job state transitions.
+                                 Never raises, never blocks. Gated by AZTEA_ELIXIR_EVENTS=1.
+
+elixir/                          Phoenix/OTP sidecar — Step 1 of strangle-fig migration
+  lib/aztea_web/                 Endpoint + Router + EventController + UserSocket + JobChannel
+  lib/aztea_web/token.ex         HMAC-SHA256 short-lived socket auth (shared secret with Python)
+  lib/aztea/jobs/                JobServer / Sweeper GenServers (legacy, pre-migration)
+  config/                        runtime.exs reads ELIXIR_HTTP_PORT, ELIXIR_INTERNAL_SHARED_SECRET
+  Service: aztea-elixir.service  Phoenix listens on 127.0.0.1:4000; Caddy proxies /elixir/socket
 
 migrations/
   0001_initial.sql               Canonical schema — all CREATE TABLE / INDEX
