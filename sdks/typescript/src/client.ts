@@ -25,6 +25,28 @@ export class AgentmarketApiError extends Error {
   }
 }
 
+/** Thrown by `pollToCompletion` when the server moves the job to `awaiting_clarification`
+ *  and no `onClarificationRequest` callback was supplied (or the callback returned null). */
+export class ClarificationNeededError extends Error {
+  constructor(public readonly question: string, public readonly jobId: string) {
+    super(`Clarification needed for job ${jobId}: ${question}`);
+    this.name = "ClarificationNeededError";
+  }
+}
+
+/** Thrown by `pollToCompletion` when the server marks the job as `failed`. */
+export class JobFailedError extends Error {
+  constructor(
+    message: string,
+    public readonly jobId: string,
+    public readonly output: unknown,
+    public readonly job: JobResponse,
+  ) {
+    super(message);
+    this.name = "JobFailedError";
+  }
+}
+
 export interface EventSourceLike {
   onmessage: ((event: MessageEvent<string>) => void) | null;
   onerror: ((event: Event) => void) | null;
@@ -56,6 +78,21 @@ export interface HireOptions {
   waitForCompletion?: boolean;
   timeoutSeconds?: number;
   pollIntervalMs?: number;
+  onClarificationRequest?: ClarificationCallback;
+}
+
+/** Called when the server reports `awaiting_clarification`. Return a string answer to
+ *  post `clarification_response` and resume polling; return `null`/`undefined` to abort
+ *  by throwing `ClarificationNeededError`. */
+export type ClarificationCallback = (
+  question: string,
+  jobId: string,
+) => Promise<string | null | undefined> | string | null | undefined;
+
+export interface PollOptions {
+  timeoutSeconds?: number;
+  pollIntervalMs?: number;
+  onClarificationRequest?: ClarificationCallback;
 }
 
 export interface SearchOptions {
@@ -183,15 +220,20 @@ export class JobHandle {
   }
 
   async waitForCompletion(timeoutSeconds = 300, pollIntervalMs = 2000): Promise<JobResponse> {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    while (Date.now() < deadline) {
-      const current = await this.refresh();
-      if (current.status === "complete" || current.status === "failed") {
-        return current;
-      }
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-    }
-    throw new AgentmarketApiError(408, `Job '${this.jobId}' did not complete in time.`, {});
+    const final = await this.jobsNamespace.pollToCompletion(this.jobId, {
+      timeoutSeconds,
+      pollIntervalMs,
+    });
+    this.data = final;
+    return final;
+  }
+
+  /** Like `waitForCompletion`, but accepts a clarification callback so the caller can
+   *  answer `clarification_request` messages mid-flight without aborting the poll. */
+  async pollToCompletion(options: PollOptions = {}): Promise<JobResponse> {
+    const final = await this.jobsNamespace.pollToCompletion(this.jobId, options);
+    this.data = final;
+    return final;
   }
 
   streamMessages(
@@ -283,6 +325,79 @@ class JobsNamespace extends Namespace {
     return this.client.request<JobMessagesResponse>(`/jobs/${jobId}/messages`, {
       query: { since },
     });
+  }
+
+  /** Poll `GET /jobs/{id}` until the job reaches a terminal state.
+   *
+   *  - `complete` / `stopped` → returns the final `JobResponse`.
+   *  - `failed` → throws `JobFailedError`.
+   *  - `awaiting_clarification` → invokes `onClarificationRequest` if provided; if it returns
+   *    a non-empty string, posts a `clarification_response` and keeps polling. Otherwise
+   *    throws `ClarificationNeededError`.
+   *  - Timeout exceeded → throws `AgentmarketApiError` (status 408).
+   */
+  async pollToCompletion(jobId: string, options: PollOptions = {}): Promise<JobResponse> {
+    const timeoutSeconds = options.timeoutSeconds ?? 300;
+    const pollIntervalMs = options.pollIntervalMs ?? 2000;
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (Date.now() < deadline) {
+      const job = await this.get(jobId);
+      const status = job.status;
+      if (status === "complete" || status === "stopped") {
+        return job;
+      }
+      if (status === "failed") {
+        const message =
+          (job as Record<string, unknown>).error_message as string | undefined;
+        throw new JobFailedError(
+          message && message.length > 0 ? message : "Job failed.",
+          jobId,
+          (job as Record<string, unknown>).output_payload ?? null,
+          job,
+        );
+      }
+      if (status === "awaiting_clarification") {
+        const question = await this.latestClarificationQuestion(jobId);
+        if (options.onClarificationRequest) {
+          const answer = await options.onClarificationRequest(question, jobId);
+          if (typeof answer === "string" && answer.length > 0) {
+            await this.postMessage(jobId, "clarification_response", { answer });
+            await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+            continue;
+          }
+        }
+        throw new ClarificationNeededError(question, jobId);
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+    throw new AgentmarketApiError(
+      408,
+      `Job '${jobId}' did not reach a terminal state within ${timeoutSeconds}s.`,
+      {},
+    );
+  }
+
+  private async latestClarificationQuestion(jobId: string): Promise<string> {
+    try {
+      const response = await this.listMessages(jobId);
+      const messages = (response as Record<string, unknown>).messages;
+      if (Array.isArray(messages)) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const message = messages[i];
+          if (!message || typeof message !== "object") continue;
+          const record = message as Record<string, unknown>;
+          if (record.type !== "clarification_request") continue;
+          const payload = record.payload;
+          if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+            const question = (payload as Record<string, unknown>).question;
+            if (typeof question === "string" && question.length > 0) return question;
+          }
+        }
+      }
+    } catch {
+      // fall through to default question
+    }
+    return "Agent needs clarification.";
   }
 
   streamMessages(
@@ -484,10 +599,11 @@ export class AgentmarketClient {
     if (!options.waitForCompletion) {
       return handle;
     }
-    return handle.waitForCompletion(
-      options.timeoutSeconds ?? 300,
-      options.pollIntervalMs ?? 2000,
-    );
+    return handle.pollToCompletion({
+      timeoutSeconds: options.timeoutSeconds ?? 300,
+      pollIntervalMs: options.pollIntervalMs ?? 2000,
+      onClarificationRequest: options.onClarificationRequest,
+    });
   }
 
   async hireMany(

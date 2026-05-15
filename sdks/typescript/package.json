@@ -14,13 +14,17 @@
     }
   },
   "scripts": {
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist dist-tests",
     "generate:types": "openapi-typescript ../../openapi.json -o src/generated/types.ts",
     "build": "npm run clean && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json",
     "typecheck": "tsc --noEmit -p tsconfig.esm.json",
-    "test": "tsc --noEmit -p tsconfig.test.json"
+    "test:types": "tsc --noEmit -p tsconfig.test.json",
+    "test:build": "rm -rf dist-tests && tsc -p tsconfig.tests.json && node -e \"require('fs').writeFileSync('dist-tests/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "test:run": "node --test \"dist-tests/tests/**/*.test.js\"",
+    "test": "npm run test:types && npm run test:build && npm run test:run"
   },
   "devDependencies": {
+    "@types/node": "^20.19.41",
     "openapi-typescript": "^7.6.1",
     "typescript": "^5.6.3"
   }
