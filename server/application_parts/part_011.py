@@ -396,6 +396,16 @@ def payments_reconcile_preview(
 def payments_reconcile_run(
     request: Request,
     body: ReconciliationRunRequest | None = Body(default=None),
+    auto_repair: bool = Query(
+        False,
+        description=(
+            "When true, drifted wallets with |drift| <= "
+            "AUTO_REPAIR_THRESHOLD_CENTS are auto-fixed in-place and the "
+            "response includes wallets_repaired / wallets_skipped_above_threshold "
+            "/ wallets_failed_repair. Above-threshold drift is reported for "
+            "human review without any state changes."
+        ),
+    ),
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     # Body is optional: an empty POST defaults to a no-op-shaped request so
@@ -405,7 +415,33 @@ def payments_reconcile_run(
     _require_admin_ip_allowlist(request)
     effective = body or ReconciliationRunRequest()
     summary = payments.record_reconciliation_run(max_mismatches=effective.max_mismatches)
+    if auto_repair:
+        summary = _enrich_with_auto_repair(summary)
     return JSONResponse(content=summary, status_code=201)
+
+
+def _enrich_with_auto_repair(summary: dict) -> dict:
+    """Run the auto-repair driver on a fresh reconciliation summary.
+
+    Wrapped so the route handler stays simple and the test suite can patch
+    a single seam. The threshold is read at call time so an operator can
+    bump ``AZTEA_AUTO_REPAIR_THRESHOLD_CENTS`` and have the very next
+    reconcile call honor it without a uvicorn restart.
+
+    Aliases `mismatches` → `balance_mismatches` on the response so the
+    auto-repair shape is symmetric with `held_mismatches`. Both keys hold
+    the same list (unchanged from detect-only mode); we keep `mismatches`
+    too so anyone consuming the legacy field keeps working.
+    """
+    from core.payments import audit as _audit
+    threshold = int(_feature_flags.auto_repair_threshold_cents())
+    repair_report = _audit.auto_repair_reconciliation_summary(
+        summary, threshold_cents=threshold,
+    )
+    enriched = dict(summary)
+    enriched.update(repair_report)
+    enriched["balance_mismatches"] = list(summary.get("mismatches") or [])
+    return enriched
 
 
 @app.get(

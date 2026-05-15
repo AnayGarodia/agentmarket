@@ -10,12 +10,12 @@ _None at present._
 
 ## In Progress
 <!-- Active work. One line per item: branch, what's left. -->
-- [ ] **Reconciliation auto-repair** (`feat/reconciliation-auto-repair`) — `?auto_repair=true` on `/ops/payments/reconcile`. Now also needs to extend the held_cents drift check that shipped with the reserve-hold PR.
 - [ ] **Pipeline discoverability** (`feat/pipeline-discoverability`) — API + MCP + frontend surface for recipes
 - [ ] **Step 1 Elixir activation** — code shipped (`bd58a2a`), `AZTEA_ELIXIR_EVENTS` flag still off in prod; needs Caddy `/elixir/socket` block + env vars + `mix deps.get` + restart aztea-elixir before flipping
 
 ## Done — recent
 <!-- Last 5–10 shipped items with date and commit short sha. Trim aggressively. -->
+- 2026-05-15 — Reconciliation auto-repair: `?auto_repair=true` on `/ops/payments/reconcile` rewrites below-threshold `balance_cents` + `held_cents` drift in place; above-threshold drift still surfaced for human review; new `repair_wallet_held_cache` helper + `AUTO_REPAIR_THRESHOLD_CENTS` flag ($100 default, env-overridable)
 - 2026-05-15 — Reserve-hold pattern for agent payouts: `wallet_holds` table + `held_cents` cache + sweeper + Stripe withdrawal enforcement + dual-counter defense-in-depth; replaces silent-skip clawback (commit `9d9776e`)
 - 2026-05-15 — Per-key sliding-window rate-limit middleware: 120 RPM caller / 600 worker / 60 anon / 10 RPS burst / LRU-bounded / fail-open (commit `73e97d4`)
 - 2026-05-15 — Warm copy sweep: `frontend/src/utils/errorCopy.js` + `docs/voice.md` + 12 catch-site migrations; surfaces `retry_after_seconds` on 429 and `request_id` on 5xx (commit `97efdfa`)
