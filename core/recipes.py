@@ -22,6 +22,52 @@ _LOG = logging.getLogger(__name__)
 
 PLATFORM_RECIPES_OWNER_ID = "platform:recipes"
 
+# Step "role" assigned to the first node in the DAG (no depends_on). Subsequent
+# nodes get "follower". This is a presentation label only — the executor reads
+# depends_on, not role — but the UI uses it to render the first step as the
+# primary intent of the recipe.
+_RECIPE_PRIMARY_ROLE = "primary"
+_RECIPE_FOLLOWER_ROLE = "follower"
+
+
+def step_role(node: dict) -> str:
+    """Pure: classify a recipe node as primary or follower for UI rendering."""
+    depends_on = node.get("depends_on") or []
+    if isinstance(depends_on, list) and depends_on:
+        return _RECIPE_FOLLOWER_ROLE
+    return _RECIPE_PRIMARY_ROLE
+
+
+def estimate_recipe_cost_cents(
+    definition: dict, agent_price_cents_by_id: dict[str, int]
+) -> tuple[int, list[str]]:
+    """Pure: sum per-agent prices over a pipeline definition's nodes.
+
+    Returns ``(total_cents, missing_agent_ids)``. An agent whose id isn't in
+    ``agent_price_cents_by_id`` (e.g. a sunset agent removed from the catalog
+    after this recipe was authored) is skipped from the total and surfaced in
+    the second tuple element so the caller can show ``missing_agents`` to the
+    UI. We choose to return rather than raise so a half-broken recipe still
+    appears in the catalog — the user can see what's broken instead of a
+    silent 500.
+    """
+    total = 0
+    missing: list[str] = []
+    nodes = (definition or {}).get("nodes") or []
+    if not isinstance(nodes, list):
+        return 0, []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        agent_id = str(node.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        if agent_id in agent_price_cents_by_id:
+            total += int(agent_price_cents_by_id[agent_id])
+        else:
+            missing.append(agent_id)
+    return total, missing
+
 
 BUILTIN_RECIPES: list[dict] = [
     {

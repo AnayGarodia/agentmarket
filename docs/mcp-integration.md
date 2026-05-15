@@ -282,6 +282,42 @@ Use `manage_workflow` with actions:
 - `list_recipes` — discover templates
 - `run_recipe` — execute a template
 
+`list_recipes` takes no arguments and returns the full catalog with step
+breakdowns + an upfront cost estimate so the model can decide whether to
+run a recipe before paying:
+
+```jsonc
+manage_workflow({"action": "list_recipes"})
+// →
+{
+  "recipes": [
+    {
+      "slug": "audit-deps",
+      "name": "audit-deps",
+      "description": "Audit a dependency manifest for known CVEs, license risks, and prioritized upgrades.",
+      "steps": [
+        {
+          "node_id": "audit",
+          "agent_slug": "dependency_auditor",
+          "agent_id": "11fab82a-...",
+          "role": "primary",
+          "price_per_call_usd": 0.05
+        }
+      ],
+      "default_input_schema": { "type": "object", "properties": {"manifest": {"type": "string"}}, "required": ["manifest"] },
+      "estimated_total_cost_usd": 0.05,
+      "missing_agents": []
+    }
+  ],
+  "count": 3
+}
+```
+
+`missing_agents` lists any agent ids the recipe references that are no
+longer in the catalog (e.g. sunset built-ins). A recipe with a non-empty
+`missing_agents` will still execute, but the missing step refunds and the
+model should surface the gap to the user before running.
+
 ---
 
 ## Avoid the permission barrage

@@ -990,3 +990,22 @@ export async function awaitPipelineRun(key, pipelineId, runId, { intervalMs = 15
     await new Promise(resolve => setTimeout(resolve, intervalMs))
   }
 }
+
+// List built-in + caller-owned recipes for the Workflows discovery page.
+// Each entry carries slug + steps + estimated_total_cost_usd so the UI can
+// render the catalog without N+1 round-trips for per-step agent prices.
+export async function fetchRecipes(key) {
+  const { body } = await request('/recipes', { key })
+  return body
+}
+
+// Run a built-in or user-owned recipe. The server resolves the recipe_id to
+// a pipeline and returns { run_id, pipeline_id, recipe_id, status }.
+export async function runRecipe(key, recipeId, inputPayload) {
+  const { body } = await request(`/recipes/${encodeURIComponent(recipeId)}/run`, {
+    key,
+    method: 'POST',
+    body: { input_payload: inputPayload },
+  })
+  return body
+}
