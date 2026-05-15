@@ -57,7 +57,6 @@ def isolated_db(monkeypatch):
 
     # Apply migrations so wallet_holds + held_cents exist before init_payments_db.
     from core import migrate
-    monkeypatch.setattr(migrate, "DB_PATH", str(db_path))
     migrate.apply_migrations(str(db_path))
     payments.init_payments_db()
 
@@ -111,8 +110,121 @@ class TestComputeHoldCents:
 
 
 # ---------------------------------------------------------------------------
-# 2-5: lifecycle integration (added in later commits as the surface lands)
+# 2. Settlement creates holds
 # ---------------------------------------------------------------------------
-# Settlement / withdrawal / clawback / sweeper coverage will be added
-# alongside the corresponding implementation commits so each commit ships
-# with a green test for its slice.
+
+
+def _fund_caller_wallet(caller_owner_id: str, cents: int) -> dict:
+    wallet = payments.get_or_create_wallet(caller_owner_id)
+    payments.deposit(wallet["wallet_id"], cents, memo="hold-test funds")
+    return payments.get_wallet(wallet["wallet_id"])
+
+
+def _agent_with_curve(curve_json: str | None = None) -> dict:
+    owner_id = f"user:owner-{uuid.uuid4().hex[:8]}"
+    payments.get_or_create_wallet(owner_id)
+    agent_id = registry.register_agent(
+        name=f"Hold Test Agent {uuid.uuid4().hex[:6]}",
+        description="Hold lifecycle test agent",
+        endpoint_url="http://localhost:8000/internal/echo",
+        price_per_call_usd=0.10,
+        tags=["hold-test"],
+        owner_id=owner_id,
+        payout_curve=curve_json,
+    )
+    return registry.get_agent(agent_id, include_unapproved=True)
+
+
+def _settle_agent_payout(agent, caller_owner_id, price_cents, dispute_window_hours=72):
+    """Run a deterministic settle: charge caller, payout agent, return wallet rows."""
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    charge_tx_id = payments.pre_call_charge(
+        caller_wallet["wallet_id"],
+        price_cents,
+        agent["agent_id"],
+    )
+    from core import payout_curve as _pc
+    curve = _pc.parse_curve(agent.get("payout_curve"))
+    payments.post_call_payout(
+        agent_wallet["wallet_id"],
+        platform_wallet["wallet_id"],
+        charge_tx_id,
+        price_cents,
+        agent["agent_id"],
+        platform_fee_pct=10,
+        fee_bearer_policy="caller",
+        job_id=f"job-{uuid.uuid4().hex[:8]}",
+        dispute_window_hours=dispute_window_hours,
+        payout_curve=curve,
+    )
+    return {
+        "caller_wallet": payments.get_wallet(caller_wallet["wallet_id"]),
+        "agent_wallet": payments.get_wallet(agent_wallet["wallet_id"]),
+        "platform_wallet": payments.get_wallet(platform_wallet["wallet_id"]),
+        "charge_tx_id": charge_tx_id,
+    }
+
+
+class TestSettlementCreatesHold:
+    def test_settlement_with_no_curve_holds_full_payout(self, isolated_db):
+        agent = _agent_with_curve(None)
+        caller_owner = f"user:caller-{uuid.uuid4().hex[:8]}"
+        _fund_caller_wallet(caller_owner, 2000)
+        result = _settle_agent_payout(agent, caller_owner, price_cents=1000)
+        agent_wallet = result["agent_wallet"]
+        # fee_bearer_policy=caller: agent gets full price (1000); no curve -> hold all 1000.
+        assert agent_wallet["balance_cents"] == 1000
+        assert agent_wallet["held_cents"] == 1000
+
+    def test_settlement_with_floor_one_holds_zero(self, isolated_db):
+        agent = _agent_with_curve('{"1": 1.0, "5": 1.0}')
+        caller_owner = f"user:caller-{uuid.uuid4().hex[:8]}"
+        _fund_caller_wallet(caller_owner, 2000)
+        result = _settle_agent_payout(agent, caller_owner, price_cents=1000)
+        agent_wallet = result["agent_wallet"]
+        # min_fraction = 1.0 -> nothing at risk -> hold zero.
+        assert agent_wallet["balance_cents"] == 1000
+        assert agent_wallet["held_cents"] == 0
+
+    def test_settlement_creates_hold_for_at_risk_portion(self, isolated_db):
+        agent = _agent_with_curve('{"1": 0.5, "5": 1.0}')
+        caller_owner = f"user:caller-{uuid.uuid4().hex[:8]}"
+        _fund_caller_wallet(caller_owner, 2000)
+        result = _settle_agent_payout(agent, caller_owner, price_cents=1000)
+        agent_wallet = result["agent_wallet"]
+        # Agent payout 1000, at-risk fraction 0.5 -> hold 500.
+        assert agent_wallet["balance_cents"] == 1000
+        assert agent_wallet["held_cents"] == 500
+
+    def test_settlement_is_idempotent_on_replay(self, isolated_db):
+        agent = _agent_with_curve(None)
+        caller_owner = f"user:caller-{uuid.uuid4().hex[:8]}"
+        _fund_caller_wallet(caller_owner, 2000)
+        caller_wallet = payments.get_wallet_by_owner(caller_owner)
+        agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+        platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+        charge_tx_id = payments.pre_call_charge(
+            caller_wallet["wallet_id"],
+            1000,
+            agent["agent_id"],
+        )
+        job_id = "job-replay-1"
+        for _ in range(3):
+            payments.post_call_payout(
+                agent_wallet["wallet_id"],
+                platform_wallet["wallet_id"],
+                charge_tx_id,
+                1000,
+                agent["agent_id"],
+                platform_fee_pct=10,
+                fee_bearer_policy="caller",
+                job_id=job_id,
+                dispute_window_hours=72,
+                payout_curve=None,
+            )
+        agent_wallet_after = payments.get_wallet(agent_wallet["wallet_id"])
+        # Replay must NOT inflate either cache.
+        assert agent_wallet_after["balance_cents"] == 1000
+        assert agent_wallet_after["held_cents"] == 1000
