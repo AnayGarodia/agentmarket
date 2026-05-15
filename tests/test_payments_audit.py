@@ -186,7 +186,7 @@ def test_payout_curve_clawback_skip_flags_operator_review(payments_db):
     agent_wallet = payments.get_or_create_wallet("agent:empty-pocket-agent")
     # Agent wallet stays at 0 — debit must raise InsufficientBalanceError.
 
-    counter = _obs.payout_curve_clawback_total.labels(outcome="insufficient_balance")
+    counter = _obs.payout_curve_clawback_total.labels(outcome="underflow")
     before = counter._value.get() if hasattr(counter, "_value") else None
 
     result = payout_curve.apply_curve_clawback(
@@ -199,7 +199,9 @@ def test_payout_curve_clawback_skip_flags_operator_review(payments_db):
     )
 
     assert result["applied"] is False
-    assert result["reason"] == "insufficient_balance"
+    # PR #48 renamed "insufficient_balance" → "underflow" as part of a richer
+    # skip-reason taxonomy (underflow / wallet_missing / no_active_hold).
+    assert result["reason"] == "underflow"
     assert result["requires_operator_review"] is True
     assert result["clawback_cents"] == 25
 

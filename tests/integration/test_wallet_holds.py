@@ -757,16 +757,20 @@ class TestPayoutCurveDefenseInDepth:
         from core import observability as _obs
 
         # Read the metric counter sample-list before/after to confirm it ticks.
+        # Filter for `_total` samples — Prometheus also emits a `_created`
+        # timestamp per labelset, and we don't want to read that one.
         def _no_active_hold_count() -> float:
             metric = _obs.payout_curve_clawback_skipped_total
-            samples = []
             try:
                 for sample in metric.collect()[0].samples:
-                    if sample.labels.get("reason") == "no_active_hold":
-                        samples.append(sample.value)
+                    if (
+                        sample.name.endswith("_total")
+                        and sample.labels.get("reason") == "no_active_hold"
+                    ):
+                        return float(sample.value)
             except Exception:
                 return 0.0
-            return float(samples[-1]) if samples else 0.0
+            return 0.0
 
         before = _no_active_hold_count()
         result = _pc.apply_curve_clawback(
@@ -796,16 +800,20 @@ class TestPayoutCurveDefenseInDepth:
         from core import payout_curve as _pc
         from core import observability as _obs
 
+        # Filter for `_total` samples — Prometheus also emits a `_created`
+        # timestamp per labelset, and we don't want to read that one.
         def _underflow_count() -> float:
             metric = _obs.payout_curve_clawback_skipped_total
-            samples = []
             try:
                 for sample in metric.collect()[0].samples:
-                    if sample.labels.get("reason") == "underflow":
-                        samples.append(sample.value)
+                    if (
+                        sample.name.endswith("_total")
+                        and sample.labels.get("reason") == "underflow"
+                    ):
+                        return float(sample.value)
             except Exception:
                 return 0.0
-            return float(samples[-1]) if samples else 0.0
+            return 0.0
 
         before = _underflow_count()
         result = _pc.apply_curve_clawback(
