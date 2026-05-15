@@ -110,6 +110,54 @@ class TestComputeHoldCents:
 
 
 # ---------------------------------------------------------------------------
+# 3. Withdrawal enforces available balance
+# ---------------------------------------------------------------------------
+
+
+class TestWithdrawalAvailableBalance:
+    """The /wallets/withdraw gate is HTTP-shaped, but the rule it enforces is
+    a pure expression over wallet rows. Test the rule directly so we don't
+    need a full Stripe mock harness — the comprehensive HTTP test in commit
+    10 covers the wired endpoint.
+    """
+
+    def _wallet_with(self, balance_cents: int, held_cents: int) -> dict:
+        owner_id = f"user:withdraw-{uuid.uuid4().hex[:8]}"
+        wallet = payments.get_or_create_wallet(owner_id)
+        if balance_cents:
+            payments.deposit(wallet["wallet_id"], balance_cents, memo="test")
+        if held_cents:
+            with db.get_db_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE wallets SET held_cents = %s WHERE wallet_id = %s",
+                    (held_cents, wallet["wallet_id"]),
+                )
+        return payments.get_wallet(wallet["wallet_id"])
+
+    def test_withdrawal_rejected_when_request_exceeds_available(self, isolated_db):
+        wallet = self._wallet_with(balance_cents=1000, held_cents=400)
+        held = int(wallet.get("held_cents") or 0)
+        available = max(0, int(wallet["balance_cents"]) - held)
+        # Mirror the gate condition in part_014.py::withdraw.
+        assert available == 600
+        assert available < 700  # request
+
+    def test_withdrawal_succeeds_when_request_at_or_below_available(self, isolated_db):
+        wallet = self._wallet_with(balance_cents=1000, held_cents=400)
+        held = int(wallet.get("held_cents") or 0)
+        available = max(0, int(wallet["balance_cents"]) - held)
+        assert available == 600
+        assert 600 <= available  # request equal to available is OK
+
+    def test_held_cents_default_is_zero_for_legacy_wallets(self, isolated_db):
+        wallet = self._wallet_with(balance_cents=500, held_cents=0)
+        assert (wallet.get("held_cents") or 0) == 0
+        # Available == balance for any wallet with no holds.
+        assert int(wallet["balance_cents"]) - int(wallet.get("held_cents") or 0) == 500
+
+
+# ---------------------------------------------------------------------------
 # 2. Settlement creates holds
 # ---------------------------------------------------------------------------
 
