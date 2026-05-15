@@ -588,6 +588,9 @@ def _record_job_event(
     jobs.publish_user_job_event(job["caller_owner_id"], event)
     if job.get("agent_owner_id") != job.get("caller_owner_id"):
         jobs.publish_user_job_event(job["agent_owner_id"], event)
+    # Fan-out to the Elixir sidecar for sub-second WebSocket delivery to the FE.
+    # Gated by AZTEA_ELIXIR_EVENTS=1; no-op + never raises when disabled or down.
+    _notify_elixir_event(job, event)
     if event.get("event_type") in {
         "job.completed",
         "job.failed",
@@ -595,6 +598,41 @@ def _record_job_event(
     } and (job or {}).get("callback_url"):
         _enqueue_job_callback(job, event["event_id"])
     return event
+
+
+def _notify_elixir_event(job: dict, event: dict) -> None:
+    """Forward a job state transition to the Elixir realtime sidecar.
+
+    Why a helper: keeps `_record_job_event` readable and lets us slim the
+    outbound payload to only the fields the FE actually needs. Caller is
+    inside a per-job critical section — this MUST be non-blocking and
+    NEVER raise. ``_job_events.notify_job_event`` itself enforces those
+    contracts; we still guard with a try/except as defence in depth.
+    """
+    try:
+        payload_for_wire = {
+            "status": event.get("event_type", "").removeprefix("job."),
+            "event_id": event.get("event_id"),
+            "agent_id": event.get("agent_id"),
+        }
+        # Fire for caller; agent-owner ID is folded only when distinct so the
+        # FE doesn't receive a duplicate when the agent owner == caller.
+        _job_events.notify_job_event(
+            user_id=job.get("caller_owner_id"),
+            job_id=event.get("job_id"),
+            event_type=event.get("event_type", ""),
+            payload=payload_for_wire,
+        )
+        agent_owner = job.get("agent_owner_id")
+        if agent_owner and agent_owner != job.get("caller_owner_id"):
+            _job_events.notify_job_event(
+                user_id=agent_owner,
+                job_id=event.get("job_id"),
+                event_type=event.get("event_type", ""),
+                payload=payload_for_wire,
+            )
+    except Exception:  # noqa: BLE001 — defence in depth; helper already swallows
+        _LOG.exception("elixir.notify_event_hook_failed")
 
 
 def _stable_json_text(payload: Any) -> str:

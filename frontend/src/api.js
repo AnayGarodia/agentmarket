@@ -800,6 +800,21 @@ export async function fetchWalletMe(key) {
   return body
 }
 
+// Mints a short-lived HMAC token for the Elixir realtime WebSocket. Returns
+// { token, expires_at }, or null if the deployment hasn't been configured
+// (503 from the server). Callers must treat 503 as a benign signal — the
+// existing SSE + polling fallbacks continue to work.
+export async function fetchSocketToken(key) {
+  try {
+    const { body } = await request('/auth/socket-token', { method: 'POST', key })
+    if (body && typeof body.token === 'string') return body
+    return null
+  } catch (err) {
+    if (err?.status === 503) return null
+    throw err
+  }
+}
+
 export async function depositToWallet(key, walletId, amountCents, memo = 'dashboard deposit') {
   const { body } = await request('/wallets/deposit', {
     method: 'POST',

@@ -143,12 +143,81 @@ server {
         proxy_read_timeout 120s;
     }
 
+    # Elixir realtime sidecar — WebSocket upgrade for /elixir/socket/*
+    location /elixir/socket {
+        proxy_pass http://127.0.0.1:4000/socket;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # WebSocket idle timeout — Phoenix heartbeat is 30s, give buffer.
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+    }
+
     # SPA fallback for client-side routes
     location / {
         try_files $uri $uri/ /index.html;
     }
 }
 ```
+
+### Caddy alternative (if you're on Caddy instead of nginx)
+
+```caddy
+aztea.ai {
+    # …existing reverse_proxy directives…
+
+    @elixir_socket path /elixir/socket /elixir/socket/*
+    reverse_proxy @elixir_socket 127.0.0.1:4000 {
+        header_up Connection {http.request.header.Connection}
+        header_up Upgrade    {http.request.header.Upgrade}
+    }
+}
+```
+
+## Realtime job events (Elixir sidecar)
+
+Step 1 of the strangle-fig migration to Elixir. When enabled, job state
+transitions land in the web UI in <1 s instead of waiting on the SSE / 5 s poll.
+
+**Components:**
+
+- `aztea-elixir.service` — Phoenix endpoint on `127.0.0.1:4000`
+- `POST /elixir/socket/*` (proxied by nginx/Caddy) — WebSocket the FE connects to
+- `POST /internal/job-events` (loopback only) — fired by the Python app on every state change
+
+**Required env vars on the Python service AND the Elixir service** (both read
+the same `.env`):
+
+```
+AZTEA_ELIXIR_EVENTS=1                          # FEATURE FLAG. Off by default.
+ELIXIR_HTTP_URL=http://127.0.0.1:4000          # default; override only for testing
+ELIXIR_HTTP_PORT=4000                          # consumed by the Elixir release
+ELIXIR_INTERNAL_SHARED_SECRET=<openssl rand -hex 32>
+```
+
+Both services trust the same secret: it authenticates the Python → Elixir
+`POST /internal/job-events`, and it signs the short-lived HMAC tokens the
+frontend uses on `wss://aztea.ai/elixir/socket`. Rotating the secret
+invalidates both directions; restart both services after rotation.
+
+**Cold deploy procedure:**
+
+1. Land the code with `AZTEA_ELIXIR_EVENTS` UNSET — verify the FE behaves
+   identically to before (5 s poll still drives updates).
+2. Set `ELIXIR_INTERNAL_SHARED_SECRET` on both services; restart Elixir.
+3. `curl http://127.0.0.1:4000/health` → `{"status":"ok"}`.
+4. Flip `AZTEA_ELIXIR_EVENTS=1` on the Python service; restart uvicorn.
+5. Watch journalctl on both: Python should log `elixir.notify_post_failed`
+   only when Elixir is genuinely down. The web UI should slow its
+   reconciliation poll from 5 s to 60 s once the socket is up.
+
+**Rollback** is one env-var flip (`AZTEA_ELIXIR_EVENTS=0`) + restart uvicorn.
+Caddy / nginx config can stay; the proxied path just stops being used.
 
 ## Useful server commands
 

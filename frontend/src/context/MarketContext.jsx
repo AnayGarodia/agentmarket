@@ -3,7 +3,8 @@
 //
 // INVARIANTS:
 // - wallet balance here is for display only; always re-fetch before charging
-// - SSE /jobs/events is the primary update path; 60s poll is reconciliation only
+// - Phoenix WebSocket → SSE → poll is the cascade. Removing any link must keep
+//   the others functional; the WebSocket is additive and never load-bearing.
 //
 // DECISIONS:
 // - jobs + runs fetched on the same poll tick to keep sidebar badges in sync;
@@ -11,9 +12,14 @@
 // - SSE fan-out in _record_job_event covers both caller and agent owner IDs so
 //   workers see their job queue update in real time too
 // - useRef for interval id (not useState) to avoid re-renders on every tick
+// - Phoenix socket is best-effort: if /auth/socket-token returns 503 (sidecar
+//   not configured) or the connect fails, we keep the original 5 s poll. When
+//   the socket IS connected we slow the poll to 60 s — it stays on as a
+//   reconciliation net but no longer needs to be the primary update path.
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { fetchAgents, fetchWalletMe, fetchRuns, fetchJobs } from '../api'
+import { RealtimeSession } from '../lib/realtime'
 
 const Ctx = createContext(null)
 
@@ -176,12 +182,43 @@ export function MarketProvider({ apiKey, children }) {
 
   useEffect(() => {
     refresh().finally(() => setLoading(false))
-    // 5s reconciliation poll — SSE is the primary path, but the SSE auth
-    // probe / proxy can silently drop the stream behind some networks. A
-    // short interval keeps the dashboard visibly live even when SSE is dead.
-    const id = setInterval(backgroundPoll, 5000)
-    return () => clearInterval(id)
-  }, [refresh, backgroundPoll])
+
+    // Two-tier polling cadence. Phoenix WebSocket (if it connects) pushes
+    // sub-second updates, so we slow the poll to 60s. Otherwise we stay
+    // on the 5s SSE-fallback cadence the dashboard has always used.
+    const POLL_FAST_MS = 5000
+    const POLL_SLOW_MS = 60000
+    let pollHandle = setInterval(backgroundPoll, POLL_FAST_MS)
+    let currentInterval = POLL_FAST_MS
+
+    const adjustPoll = (socketConnected) => {
+      const next = socketConnected ? POLL_SLOW_MS : POLL_FAST_MS
+      if (next === currentInterval) return
+      clearInterval(pollHandle)
+      pollHandle = setInterval(backgroundPoll, next)
+      currentInterval = next
+    }
+
+    if (!apiKey) {
+      return () => clearInterval(pollHandle)
+    }
+
+    // Best-effort: the session never throws. If it can't reach the sidecar
+    // it stays disconnected and the FE behaves identically to before this
+    // change. The applyJobEvent path is reused so socket and SSE payloads
+    // converge on the same merger logic.
+    const realtime = new RealtimeSession({
+      apiKey,
+      onJobEvent: applyJobEvent,
+      onStateChange: adjustPoll,
+    })
+    realtime.start()
+
+    return () => {
+      clearInterval(pollHandle)
+      realtime.close()
+    }
+  }, [apiKey, refresh, backgroundPoll, applyJobEvent])
 
   useEffect(() => {
     return () => clearTimeout(toastTimer.current)

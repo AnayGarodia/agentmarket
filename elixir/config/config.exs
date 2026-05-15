@@ -11,6 +11,17 @@ config :aztea, Aztea.Repo,
 
 config :aztea, ecto_repos: [Aztea.Repo]
 
+# Phoenix endpoint for the realtime job-event surface. Token signing secrets
+# and the HTTP port land in runtime.exs so the release can boot without them
+# at build time.
+config :aztea, AzteaWeb.Endpoint,
+  url: [host: "localhost"],
+  render_errors: [formats: [json: AzteaWeb.ErrorJSON], layout: false],
+  pubsub_server: Aztea.PubSub,
+  server: true
+
+config :phoenix, :json_library, Jason
+
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id, :job_id]

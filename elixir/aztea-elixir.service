@@ -9,8 +9,14 @@ User=aztea
 Group=aztea
 WorkingDirectory=/home/aztea/elixir-release
 
-# Load the same .env as the Python server so DATABASE_URL is available.
+# Load the same .env as the Python server so DATABASE_URL, ELIXIR_HTTP_PORT
+# (defaults to 4000) and ELIXIR_INTERNAL_SHARED_SECRET are available. The
+# secret is shared with Python so one rotated value updates both directions
+# of the realtime bridge.
 EnvironmentFile=/home/aztea/app/.env
+# Bind the realtime endpoint to loopback only. nginx/Caddy upgrades the
+# /elixir/socket path; nothing else should reach the sidecar.
+Environment=ELIXIR_HTTP_PORT=4000
 
 ExecStart=/home/aztea/elixir-release/bin/aztea start
 ExecStop=/home/aztea/elixir-release/bin/aztea stop

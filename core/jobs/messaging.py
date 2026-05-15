@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core import job_events as _job_events
 from core import models as _models
 
 from .crud import get_job
@@ -399,6 +400,7 @@ def add_message(
         "created_at": now,
     }
     _publish_job_message(job_id, message)
+    _maybe_notify_elixir_message(job_id, message)
 
     # Synchronous post-commit drain: if this message caused a stop_when match,
     # the messaging tx already enqueued the pending_settlements row. Drain it
@@ -792,3 +794,51 @@ def set_job_dispute_outcome(job_id: str, outcome: str | None) -> dict | None:
             (_clean_optional_text(outcome), now, job_id),
         )
     return get_job(job_id)
+
+
+# Only `progress` and `partial_output` messages get forwarded to the Elixir
+# realtime sidecar. Other message types (steer, clarification_request, tool
+# calls, etc.) already trigger a state transition that goes through the
+# _record_job_event hook, so re-emitting them would just duplicate work for
+# the FE.
+_REALTIME_MESSAGE_TYPES = frozenset({"progress", "partial_output"})
+
+
+def _maybe_notify_elixir_message(job_id: str, message: dict) -> None:
+    """Forward progress/partial_output to Elixir if the feature flag is on.
+
+    Why a separate hook from ``_record_job_event``: messages do not write
+    rows to the ``job_events`` table; they bypass the in-process SSE feed
+    too. Without this, the FE would see state transitions in <1s but
+    partial outputs only on the next 5s reconciliation poll. ``notify_job_event``
+    is gated by AZTEA_ELIXIR_EVENTS and never raises, so the call is safe
+    to perform unconditionally — but we still avoid the get_job lookup when
+    the feature is off.
+    """
+    msg_type = message.get("type")
+    if msg_type not in _REALTIME_MESSAGE_TYPES:
+        return
+    if not _job_events.is_enabled():
+        return
+    try:
+        job = get_job(job_id)
+        if not job:
+            return
+        owner_id = job.get("caller_owner_id")
+        agent_owner_id = job.get("agent_owner_id")
+        event_type = f"job.message.{msg_type}"
+        wire_payload = {
+            "message_id": message.get("message_id"),
+            "payload": message.get("payload") or {},
+        }
+        _job_events.notify_job_event(owner_id, job_id, event_type, wire_payload)
+        if agent_owner_id and agent_owner_id != owner_id:
+            _job_events.notify_job_event(
+                agent_owner_id, job_id, event_type, wire_payload
+            )
+    except Exception:  # noqa: BLE001 — best-effort; never affect lifecycle
+        _LOG.warning(
+            "elixir.notify_message_hook_failed",
+            extra={"job_id": job_id, "msg_type": msg_type},
+            exc_info=True,
+        )
