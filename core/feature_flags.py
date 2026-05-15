@@ -340,3 +340,28 @@ def stripe_enabled() -> bool:
     omit Stripe → the routes return 501 with a pointer to hosted aztea.ai.
     """
     return bool(os.environ.get("STRIPE_SECRET_KEY", "").strip())
+
+
+# ---------------------------------------------------------------------------
+# Ledger reconciliation auto-repair
+# ---------------------------------------------------------------------------
+
+# Maximum |drift| in cents that `POST /ops/payments/reconcile?auto_repair=1`
+# will auto-fix per wallet. Drift larger than this is almost always a real
+# bug rather than a stale cache, so we surface it for human review instead
+# of silently rewriting state. $100 = 10000 cents.
+AUTO_REPAIR_THRESHOLD_CENTS = 10000
+
+
+def auto_repair_threshold_cents() -> int:
+    """Runtime-tunable variant of AUTO_REPAIR_THRESHOLD_CENTS.
+
+    Reading at call time lets ops bump the ceiling during a controlled
+    backfill (`AZTEA_AUTO_REPAIR_THRESHOLD_CENTS=50000`) without restarting
+    uvicorn. Falls back to the module-level constant when the env is unset
+    or contains a non-integer value.
+    """
+    return flag_int(
+        "AZTEA_AUTO_REPAIR_THRESHOLD_CENTS",
+        default=AUTO_REPAIR_THRESHOLD_CENTS,
+    )

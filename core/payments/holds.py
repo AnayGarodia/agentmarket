@@ -362,6 +362,81 @@ def sum_active_held_cents_for_wallet(wallet_id: str) -> int:
     return int(row["total"] or 0) if row is not None else 0
 
 
+def repair_wallet_held_cache(wallet_id: str) -> dict:
+    """Rewrite one wallet's cached held_cents from SUM(active wallet_holds).
+
+    Mirrors `core.payments.audit.repair_wallet_balance_cache` but for the
+    held-cents axis: the wallets.held_cents column is a denormalised cache
+    of the active holds; if a hold lifecycle bug or a bypassed UPDATE has
+    pushed it out of sync the operator can call this to rewrite the cache
+    in place. Insert-only ledger is untouched — only the cache column moves.
+
+    Race-guarded: the UPDATE's rowcount must be exactly 1 (or 0 when the
+    cache is already correct). Returns the pre/post snapshot dict so the
+    auto-repair route can log structured before/after numbers.
+    """
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        before = _held_snapshot_conn(conn, wallet_id)
+        if before["drift_cents"] != 0:
+            updated = conn.execute(
+                """
+                UPDATE wallets
+                SET held_cents = %s
+                WHERE wallet_id = %s AND COALESCE(held_cents, 0) = %s
+                """,
+                (
+                    before["active_held_cents"],
+                    wallet_id,
+                    before["cached_held_cents"],
+                ),
+            ).rowcount
+            if updated == 0:
+                # Another writer raced us — held_cents moved between snapshot
+                # and UPDATE. Re-snapshot so the caller sees the live value
+                # and decides whether to retry. We do NOT rewrite on a moving
+                # target.
+                raise RuntimeError(
+                    f"Wallet '{wallet_id}' held_cache concurrent write — refusing "
+                    "to overwrite a moving target. Re-run reconcile."
+                )
+        return _held_snapshot_conn(conn, wallet_id)
+
+
+def _held_snapshot_conn(conn: _db.DbConnection, wallet_id: str) -> dict:
+    """Snapshot the held-cache invariant for one wallet inside an open conn."""
+    row = conn.execute(
+        """
+        SELECT
+            w.wallet_id,
+            w.owner_id,
+            COALESCE(w.held_cents, 0) AS cached_held_cents
+        FROM wallets w
+        WHERE w.wallet_id = %s
+        """,
+        (wallet_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Wallet '{wallet_id}' not found.")
+    held_row = conn.execute(
+        """
+        SELECT COALESCE(SUM(amount_cents), 0) AS total
+        FROM wallet_holds
+        WHERE wallet_id = %s AND status = 'active'
+        """,
+        (wallet_id,),
+    ).fetchone()
+    cached = int(row["cached_held_cents"] or 0)
+    active = int(held_row["total"] or 0) if held_row is not None else 0
+    return {
+        "wallet_id": str(row["wallet_id"]),
+        "owner_id": str(row["owner_id"]),
+        "cached_held_cents": cached,
+        "active_held_cents": active,
+        "drift_cents": cached - active,
+    }
+
+
 def init_wallet_holds_db(conn: _db.DbConnection) -> None:
     """Idempotent SQLite-only schema init mirroring 0046_wallet_holds.sql.
 

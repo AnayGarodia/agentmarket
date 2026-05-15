@@ -276,10 +276,122 @@ for h in holds:
 
 ### Repair (only after root cause is understood)
 
-Right now there is no `repair_wallet_held_cache(...)` helper — write one
-in the same shape as `repair_wallet_balance_cache` if you confirm the
-sweeper is the right source of truth. Until then, fix the root cause
-(missing sweeper tick, partial transaction) and re-run reconciliation.
+A `repair_wallet_held_cache(wallet_id)` helper now lives in
+`core/payments/holds.py`. It rewrites `wallets.held_cents` to match
+`SUM(wallet_holds.amount_cents WHERE status='active')` in one
+transaction, race-guarded by a rowcount check that refuses to overwrite
+a moving target.
+
+For one-off repair (one wallet, root cause known):
+
+```python
+from core.payments.holds import repair_wallet_held_cache
+repair_wallet_held_cache("user:abc123")
+```
+
+For batched repair across the whole instance, use the `auto_repair` flag
+on the reconcile endpoint (next section) — it covers both
+`balance_cents` and `held_cents` axes in one call with safety guards.
+
+---
+
+## Step 9 — Automatic repair (`auto_repair=true`)
+
+> Use this when reconciliation shows drift you've already triaged as a
+> stale-cache pathology — *not* as a first-response tool. It rewrites
+> wallet cache columns; it never invents or rewinds ledger entries.
+
+Step 1–7 above are the careful, manual path. When you've reviewed the
+drift and concluded it's a stale cache rather than an underlying ledger
+bug, you can ask the endpoint to repair it directly:
+
+```bash
+curl -X POST 'https://aztea.ai/ops/payments/reconcile?auto_repair=true' \
+  -H "Authorization: Bearer $ADMIN_API_KEY"
+```
+
+### What it does
+
+1. Runs the existing detect-only reconciliation unchanged (both
+   `balance_cents` and `held_cents` axes).
+2. For each drifted wallet, if `|drift| <= AUTO_REPAIR_THRESHOLD_CENTS`
+   (default $100 = 10000 cents):
+   - calls `repair_wallet_balance_cache(wallet_id)` (balance axis) or
+     `repair_wallet_held_cache(wallet_id)` (held axis), each in its own
+     transaction with a rowcount race-guard,
+   - logs a structured `reconcile.auto_repair.applied` event,
+   - returns the wallet in `wallets_repaired`.
+3. For each drifted wallet with `|drift| > AUTO_REPAIR_THRESHOLD_CENTS`:
+   - **skips** the wallet — drift this large is almost always a real bug
+     that a human should investigate,
+   - logs `reconcile.auto_repair.skipped`,
+   - returns the wallet in `wallets_skipped_above_threshold` with the
+     drift magnitude, axis, and the configured threshold.
+4. If a single wallet's repair raises, that wallet rolls back cleanly,
+   surfaces in `wallets_failed_repair`, and the other repairs still run
+   — one bad row doesn't poison the batch.
+
+### Response shape
+
+```jsonc
+{
+  "wallets_checked":      142,
+  "wallets_drifted":      3,
+  "wallets_repaired": [
+    {"wallet_id": "user:abc", "axis": "balance_cents", "drift_cents": -250},
+    {"wallet_id": "agent:xyz", "axis": "held_cents",   "drift_cents":  500}
+  ],
+  "wallets_skipped_above_threshold": [
+    {"wallet_id":       "user:def",
+     "axis":            "balance_cents",
+     "drift_cents":     -50000,
+     "threshold_cents": 10000,
+     "reason":          "drift exceeds AUTO_REPAIR_THRESHOLD_CENTS"}
+  ],
+  "wallets_failed_repair": [],
+  "threshold_cents": 10000,
+  // existing detect-only fields are still present:
+  "balance_mismatches": [ ... same as `mismatches`, kept for symmetry with held_mismatches ... ],
+  "mismatches":        [ ... legacy field, unchanged ... ],
+  "held_mismatches":   [ ... unchanged ... ],
+  "drift_cents":       250,
+  "held_drift_cents":  500,
+  "invariant_ok":      false
+}
+```
+
+Without `?auto_repair=true` the response shape is unchanged — this is
+purely additive on the new flag path.
+
+### Tuning the threshold
+
+The default `$100` = 10000 cents is encoded in
+`core/feature_flags.py::AUTO_REPAIR_THRESHOLD_CENTS`. For a one-off
+controlled backfill (e.g. cleaning historical drift after the
+2026-04-28 incident), bump it for the next reconcile call without a
+restart:
+
+```bash
+AZTEA_AUTO_REPAIR_THRESHOLD_CENTS=50000 \
+  curl -X POST '…?auto_repair=true' …
+```
+
+The env var is read at call time via
+`feature_flags.auto_repair_threshold_cents()`.
+
+### Safety contract
+
+- Money paths are untouched: `transactions` is INSERT-only and remains
+  so. Auto-repair only rewrites the denormalised `balance_cents` /
+  `held_cents` cache columns on `wallets`.
+- Each repair runs in its own transaction with a rowcount race-guard.
+  A concurrent writer that mutates the cache between snapshot and UPDATE
+  causes the repair to abort with `RuntimeError("…concurrent write")`
+  — the wallet shows up in `wallets_failed_repair`, the other repairs
+  proceed.
+- Above-threshold drift is **always** reported, never repaired. The
+  contract is intentional: if `$100+` is missing from a wallet, a human
+  should look at the originating transactions before the cache moves.
 
 ---
 
