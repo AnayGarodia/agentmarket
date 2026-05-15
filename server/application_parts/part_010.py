@@ -593,6 +593,37 @@ def jobs_user_event_stream(
     )
 
 
+@app.post(
+    "/auth/socket-token",
+    responses=_error_responses(401, 429, 500, 503),
+    summary="Mint a short-lived token for the Elixir realtime WebSocket",
+)
+@limiter.limit("60/minute")
+def auth_socket_token(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Return a 5-minute HMAC token the frontend uses to open the Phoenix socket.
+
+    The socket itself terminates in the Elixir sidecar and is reverse-proxied
+    by Caddy under `/elixir/socket/*`. The token is signed with the same
+    ELIXIR_INTERNAL_SHARED_SECRET that authenticates Python → Elixir POSTs, so
+    one rotated env var invalidates both directions.
+
+    Returns 503 when the secret isn't configured — clients should fall back to
+    polling, which already works.
+    """
+    owner_id: str = caller["owner_id"]
+    try:
+        token_payload = _job_events.issue_socket_token(owner_id)
+    except _job_events.SocketTokenError:
+        raise HTTPException(
+            status_code=503,
+            detail="Realtime socket is not configured on this deployment.",
+        )
+    return JSONResponse(content=token_payload)
+
+
 # ---------------------------------------------------------------------------
 # Reputation + operations routes
 # ---------------------------------------------------------------------------

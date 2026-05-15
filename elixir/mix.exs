@@ -27,9 +27,13 @@ defmodule Aztea.MixProject do
       # postgrex >= 0.18 requires Elixir ~> 1.15.
       {:ecto_sql, "~> 3.10.0"},
       {:postgrex, "~> 0.17.0"},
-      # Real-time job events (optional Phoenix Channels later)
+      # Phoenix endpoint + channels for real-time job event fan-out to the web UI.
+      # Versions pinned to the most recent that still support Elixir 1.14.
+      {:phoenix, "~> 1.7.0"},
       {:phoenix_pubsub, "~> 2.1"},
-      # JSON for job payloads
+      {:phoenix_html, "~> 3.3"},
+      {:plug_cowboy, "~> 2.6"},
+      # JSON for job payloads + socket frames
       {:jason, "~> 1.4"},
       # Test helpers
       {:ex_machina, "~> 2.8", only: :test}

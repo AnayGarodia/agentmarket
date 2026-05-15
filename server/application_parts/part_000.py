@@ -128,6 +128,7 @@ from core import (
 )
 from core import email as _email
 from core import feature_flags as _feature_flags
+from core import job_events as _job_events
 from core.jobs import disputable
 from core import hosted_skills as _hosted_skills
 from core import listing_safety as _listing_safety

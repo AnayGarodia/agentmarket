@@ -1,6 +1,6 @@
 defmodule Aztea.Application do
   @moduledoc """
-  OTP Application — starts the supervision tree for the Aztea job lifecycle service.
+  OTP Application — starts the supervision tree for the Aztea Elixir service.
 
   Process hierarchy:
     Aztea.Application
@@ -8,6 +8,7 @@ defmodule Aztea.Application do
       └── Phoenix.PubSub                (job event broadcast)
       └── Aztea.Jobs.Supervisor         (DynamicSupervisor — one child per job)
       └── Aztea.Jobs.Sweeper            (periodic lease-expiry checker)
+      └── AzteaWeb.Endpoint             (HTTP + WebSocket for realtime fan-out)
   """
 
   use Application
@@ -19,10 +20,18 @@ defmodule Aztea.Application do
       {Phoenix.PubSub, name: Aztea.PubSub},
       {Registry, keys: :unique, name: Aztea.Jobs.Registry},
       {DynamicSupervisor, strategy: :one_for_one, name: Aztea.Jobs.Supervisor},
-      Aztea.Jobs.Sweeper
+      Aztea.Jobs.Sweeper,
+      AzteaWeb.Endpoint
     ]
 
     opts = [strategy: :one_for_one, name: Aztea.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # Phoenix calls this on each config change so the endpoint can pick up
+  # rotated secrets without restarting the whole VM.
+  def config_change(changed, _new, removed) do
+    AzteaWeb.Endpoint.config_change(changed, removed)
+    :ok
   end
 end
