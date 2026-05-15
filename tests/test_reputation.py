@@ -176,3 +176,162 @@ def test_trust_score_math_tracks_quality_success_latency_and_volume(isolated_db)
 
     assert by_id[volume_high]["reputation"]["confidence_score"] > by_id[volume_low]["reputation"]["confidence_score"]
     assert by_id[volume_high]["trust_score"] > by_id[volume_low]["trust_score"]
+
+
+class _FakeHostedClient:
+    """Stand-in for HostedClient used in blend tests; never touches the network."""
+
+    def __init__(self, *, enabled: bool, response: dict | None) -> None:
+        self._enabled = enabled
+        self._response = response
+        self.fetch_calls: list[str] = []
+
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def fetch_trust(self, did: str) -> dict | None:
+        self.fetch_calls.append(did)
+        return self._response
+
+
+def _install_fake_hosted_client(
+    monkeypatch, *, hosted_url: str | None, client: _FakeHostedClient | None,
+) -> None:
+    """Wire up env + monkeypatched get_hosted_client for blend tests."""
+    if hosted_url is None:
+        monkeypatch.delenv("AZTEA_HOSTED_API_URL", raising=False)
+    else:
+        monkeypatch.setenv("AZTEA_HOSTED_API_URL", hosted_url)
+    if client is not None:
+        import core.hosted_client as hosted_client_module
+
+        monkeypatch.setattr(
+            hosted_client_module, "get_hosted_client", lambda: client
+        )
+
+
+def test_compute_trust_metrics_no_blend_when_hosted_disabled(isolated_db, monkeypatch):
+    registry.init_db()
+    reputation.init_reputation_db()
+    agent_id = _register_agent("oss-mode")
+    _set_agent_stats(isolated_db, agent_id, total_calls=4, successful_calls=4, avg_latency_ms=500)
+    _insert_quality_ratings(isolated_db, agent_id, [5, 5])
+
+    _install_fake_hosted_client(monkeypatch, hosted_url=None, client=None)
+    metrics = reputation.compute_trust_metrics(agent_id)
+
+    assert metrics["blended_global_weight"] == 0.0
+    # Recomputing without the blend (hosted disabled) must yield the same number.
+    bare = reputation._build_trust_metrics(
+        agent_id=agent_id,
+        total_calls=4, successful_calls=4, avg_latency_ms=500,
+        rating_count=2, average_quality_rating=5.0,
+        decay_multiplier=1.0,
+    )
+    assert metrics["trust_score"] == bare["trust_score"]
+
+
+def test_compute_trust_metrics_blends_when_hosted_enabled_and_low_evidence(
+    isolated_db, monkeypatch,
+):
+    registry.init_db()
+    reputation.init_reputation_db()
+    agent_id = _register_agent("blend-low-ev")
+    # 1 call + 0 ratings → evidence count 1, local_weight = 1/20 = 0.05.
+    _set_agent_stats(isolated_db, agent_id, total_calls=1, successful_calls=1, avg_latency_ms=500)
+    # Give the agent a DID so the hosted lookup actually runs.
+    with sqlite3.connect(isolated_db) as conn:
+        conn.execute("UPDATE agents SET did = ? WHERE agent_id = ?", ("did:web:test:agents:x", agent_id))
+
+    fake = _FakeHostedClient(enabled=True, response={"trust_score": 90.0})
+    _install_fake_hosted_client(monkeypatch, hosted_url="https://hosted.test", client=fake)
+
+    local_only = reputation._build_trust_metrics(
+        agent_id=agent_id,
+        total_calls=1, successful_calls=1, avg_latency_ms=500,
+        rating_count=0, average_quality_rating=None,
+        decay_multiplier=1.0,
+    )["trust_score"]
+
+    metrics = reputation.compute_trust_metrics(agent_id)
+    assert fake.fetch_calls == ["did:web:test:agents:x"]
+    # global_weight = 1 - 1/20 = 0.95, so the blended score lives close to 90.
+    assert metrics["blended_global_weight"] == pytest.approx(0.95, abs=1e-4)
+    expected = round(local_only * 0.05 + 90.0 * 0.95, 2)
+    assert metrics["trust_score"] == pytest.approx(expected, abs=0.01)
+
+
+def test_compute_trust_metrics_local_dominates_at_threshold(isolated_db, monkeypatch):
+    registry.init_db()
+    reputation.init_reputation_db()
+    agent_id = _register_agent("blend-high-ev")
+    # 20 calls → evidence count 20, local_weight = 1.0, blended == local.
+    _set_agent_stats(isolated_db, agent_id, total_calls=20, successful_calls=18, avg_latency_ms=800)
+    _insert_quality_ratings(isolated_db, agent_id, [4, 4, 4])
+    with sqlite3.connect(isolated_db) as conn:
+        conn.execute("UPDATE agents SET did = ? WHERE agent_id = ?", ("did:web:test:agents:y", agent_id))
+
+    fake = _FakeHostedClient(enabled=True, response={"trust_score": 5.0})
+    _install_fake_hosted_client(monkeypatch, hosted_url="https://hosted.test", client=fake)
+
+    metrics = reputation.compute_trust_metrics(agent_id)
+    assert metrics["blended_global_weight"] == 0.0
+    local_only = reputation._build_trust_metrics(
+        agent_id=agent_id,
+        total_calls=20, successful_calls=18, avg_latency_ms=800,
+        rating_count=3, average_quality_rating=4.0,
+        decay_multiplier=1.0,
+    )["trust_score"]
+    assert metrics["trust_score"] == pytest.approx(local_only, abs=0.01)
+
+
+def test_compute_trust_metrics_silent_on_hosted_failure(isolated_db, monkeypatch):
+    registry.init_db()
+    reputation.init_reputation_db()
+    agent_id = _register_agent("blend-fail")
+    _set_agent_stats(isolated_db, agent_id, total_calls=2, successful_calls=2, avg_latency_ms=500)
+    with sqlite3.connect(isolated_db) as conn:
+        conn.execute("UPDATE agents SET did = ? WHERE agent_id = ?", ("did:web:test:agents:z", agent_id))
+
+    fake = _FakeHostedClient(enabled=True, response=None)  # simulate fetch failure
+    _install_fake_hosted_client(monkeypatch, hosted_url="https://hosted.test", client=fake)
+
+    metrics = reputation.compute_trust_metrics(agent_id)
+    assert metrics["blended_global_weight"] == 0.0
+    local_only = reputation._build_trust_metrics(
+        agent_id=agent_id,
+        total_calls=2, successful_calls=2, avg_latency_ms=500,
+        rating_count=0, average_quality_rating=None,
+        decay_multiplier=1.0,
+    )["trust_score"]
+    assert metrics["trust_score"] == pytest.approx(local_only, abs=0.01)
+
+
+def test_compute_trust_metrics_skips_when_agent_has_no_did(isolated_db, monkeypatch):
+    registry.init_db()
+    reputation.init_reputation_db()
+    agent_id = _register_agent("no-did")
+    _set_agent_stats(isolated_db, agent_id, total_calls=2, successful_calls=2, avg_latency_ms=500)
+    with sqlite3.connect(isolated_db) as conn:
+        conn.execute("UPDATE agents SET did = NULL WHERE agent_id = ?", (agent_id,))
+
+    fake = _FakeHostedClient(enabled=True, response={"trust_score": 99.0})
+    _install_fake_hosted_client(monkeypatch, hosted_url="https://hosted.test", client=fake)
+
+    metrics = reputation.compute_trust_metrics(agent_id)
+    # No DID → never call out, no blend.
+    assert fake.fetch_calls == []
+    assert metrics["blended_global_weight"] == 0.0
+
+
+def test_blend_with_global_trust_pure_function():
+    # local_weight = 10/20 = 0.5, global_weight = 0.5
+    blended, gw = reputation._blend_with_global_trust(40.0, 80.0, 10)
+    assert gw == pytest.approx(0.5)
+    assert blended == pytest.approx(60.0)
+    # Above threshold pins local_weight to 1.0
+    blended, gw = reputation._blend_with_global_trust(40.0, 80.0, 50)
+    assert gw == 0.0 and blended == 40.0
+    # Missing global score → passthrough
+    blended, gw = reputation._blend_with_global_trust(40.0, None, 0)
+    assert gw == 0.0 and blended == 40.0

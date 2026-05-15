@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core import db as _db
+from core import feature_flags
 
 _LOG = logging.getLogger(__name__)
 
@@ -56,6 +57,14 @@ _LATENCY_HALF_SCORE_MS = 2000.0
 # ~48. Still high enough to need a real track record (5+ jobs) before the
 # score moves materially.
 _CONFIDENCE_DENOMINATOR = 6.0
+
+# Minimum local evidence count (completed jobs + quality ratings) above which
+# the local trust score fully owns the displayed metric. Below the threshold,
+# the federated global score from aztea.ai is blended in linearly so that a
+# brand-new local install does not start every cross-instance agent at NEUTRAL.
+# Set deliberately moderate (20): roughly the inflection point where local
+# Bayesian-prior smoothing converges and the global signal stops adding much.
+BLEND_EVIDENCE_THRESHOLD = 20
 
 
 def _conn() -> _db.DbConnection:
@@ -598,12 +607,60 @@ def _load_agent_decay_multiplier(agent_id: str) -> float:
     return _normalize_decay_multiplier(row["trust_decay_multiplier"])
 
 
+def _fetch_global_trust_score(agent_id: str) -> float | None:
+    """Side-effect: federated trust score for an agent; None on any failure.
+
+    Why: federated trust is additive — hosted outage, unconfigured instance,
+    missing DID, or malformed response must never raise and must never
+    affect the local score.
+    """
+    if not feature_flags.hosted_mode_enabled():
+        return None
+    try:
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT did FROM agents WHERE agent_id = %s", (agent_id,),
+            ).fetchone()
+        did = str((row and row["did"]) or "").strip()
+        if not did:
+            return None
+        from core.hosted_client import get_hosted_client
+
+        client = get_hosted_client()
+        if not client.is_enabled():
+            return None
+        response = client.fetch_trust(did)
+        raw_score = (response or {}).get("trust_score")
+        if raw_score is None:
+            return None
+        score = float(raw_score)
+        return max(0.0, min(100.0, score)) if math.isfinite(score) else None
+    except Exception as exc:  # noqa: BLE001 — federated trust must never raise
+        _LOG.debug("reputation: global trust fetch failed for %s: %s", agent_id, exc)
+        return None
+
+
+def _blend_with_global_trust(
+    local_trust_score: float,
+    global_trust_score: float | None,
+    local_evidence_count: int,
+) -> tuple[float, float]:
+    """Pure: returns ``(blended_score, global_weight)``; local owns above threshold."""
+    if global_trust_score is None:
+        return local_trust_score, 0.0
+    evidence = max(0, int(local_evidence_count))
+    local_weight = min(1.0, evidence / float(BLEND_EVIDENCE_THRESHOLD))
+    global_weight = 1.0 - local_weight
+    blended = local_trust_score * local_weight + global_trust_score * global_weight
+    return blended, global_weight
+
+
 def compute_trust_metrics(agent_id: str) -> dict:
-    """Compute trust metrics for one agent using registry stats + quality ratings."""
+    """Trust metrics for one agent, blended with federated global score in hosted mode."""
     total_calls, successful_calls, avg_latency_ms = _load_agent_stats(agent_id)
     decay_multiplier = _load_agent_decay_multiplier(agent_id)
     quality_summary = get_agent_quality_summary(agent_id)
-    return _build_trust_metrics(
+    metrics = _build_trust_metrics(
         agent_id=agent_id,
         total_calls=total_calls,
         successful_calls=successful_calls,
@@ -612,6 +669,14 @@ def compute_trust_metrics(agent_id: str) -> dict:
         average_quality_rating=quality_summary["average_quality_rating"],
         decay_multiplier=decay_multiplier,
     )
+    global_score = _fetch_global_trust_score(agent_id)
+    local_evidence_count = total_calls + int(quality_summary["rating_count"] or 0)
+    blended, global_weight = _blend_with_global_trust(
+        metrics["trust_score"], global_score, local_evidence_count,
+    )
+    metrics["trust_score"] = round(blended, 2)
+    metrics["blended_global_weight"] = round(global_weight, 4)
+    return metrics
 
 
 def _load_dispute_rates_map(agent_ids: list[str]) -> dict[str, int]:
