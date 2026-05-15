@@ -184,13 +184,21 @@ def _agent_with_curve(curve_json: str | None = None) -> dict:
 
 
 def _settle_agent_payout(agent, caller_owner_id, price_cents, dispute_window_hours=72):
-    """Run a deterministic settle: charge caller, payout agent, return wallet rows."""
+    """Run a deterministic settle: charge caller (price + fee), payout agent.
+
+    fee_bearer_policy='caller' -> caller pays price + fee, agent receives
+    full price, platform receives fee. Net ledger movement is zero, which
+    matches the production flow and keeps the audit invariants intact.
+    """
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    distribution = payments.compute_success_distribution(
+        price_cents, platform_fee_pct=10, fee_bearer_policy="caller",
+    )
     charge_tx_id = payments.pre_call_charge(
         caller_wallet["wallet_id"],
-        price_cents,
+        int(distribution["caller_charge_cents"]),
         agent["agent_id"],
     )
     from core import payout_curve as _pc
@@ -212,6 +220,7 @@ def _settle_agent_payout(agent, caller_owner_id, price_cents, dispute_window_hou
         "agent_wallet": payments.get_wallet(agent_wallet["wallet_id"]),
         "platform_wallet": payments.get_wallet(platform_wallet["wallet_id"]),
         "charge_tx_id": charge_tx_id,
+        "distribution": distribution,
     }
 
 
@@ -276,3 +285,198 @@ class TestSettlementCreatesHold:
         # Replay must NOT inflate either cache.
         assert agent_wallet_after["balance_cents"] == 1000
         assert agent_wallet_after["held_cents"] == 1000
+
+
+# ---------------------------------------------------------------------------
+# 4. Payout-curve clawback consumes hold
+# ---------------------------------------------------------------------------
+
+
+def _settle_with_curve(curve_json: str | None, price_cents: int = 1000):
+    """Helper: register agent + caller, settle a single job, return refs.
+
+    Charges caller_charge_cents (price + fee) so the ledger stays balanced.
+    """
+    agent = _agent_with_curve(curve_json)
+    caller_owner = f"user:caller-{uuid.uuid4().hex[:8]}"
+    _fund_caller_wallet(caller_owner, price_cents * 2)
+    caller_wallet = payments.get_wallet_by_owner(caller_owner)
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    distribution = payments.compute_success_distribution(
+        price_cents, platform_fee_pct=10, fee_bearer_policy="caller",
+    )
+    charge_tx_id = payments.pre_call_charge(
+        caller_wallet["wallet_id"],
+        int(distribution["caller_charge_cents"]),
+        agent["agent_id"],
+    )
+    job_id = f"job-{uuid.uuid4().hex[:8]}"
+    from core import payout_curve as _pc
+    curve = _pc.parse_curve(agent.get("payout_curve"))
+    payments.post_call_payout(
+        agent_wallet["wallet_id"],
+        platform_wallet["wallet_id"],
+        charge_tx_id,
+        price_cents,
+        agent["agent_id"],
+        platform_fee_pct=10,
+        fee_bearer_policy="caller",
+        job_id=job_id,
+        dispute_window_hours=72,
+        payout_curve=curve,
+    )
+    return {
+        "agent": agent,
+        "caller_wallet": caller_wallet,
+        "agent_wallet": payments.get_wallet(agent_wallet["wallet_id"]),
+        "platform_wallet": payments.get_wallet(platform_wallet["wallet_id"]),
+        "charge_tx_id": charge_tx_id,
+        "job_id": job_id,
+        "curve": curve,
+        "price_cents": price_cents,
+        "distribution": distribution,
+    }
+
+
+class TestPayoutCurveClawbackConsumesHold:
+    def test_full_clawback_consumes_hold_and_marks_clawed_full(self, isolated_db):
+        ctx = _settle_with_curve('{"1": 0.0, "5": 1.0}')
+        # Agent payout = 1000, fraction at 1-star = 0.0 -> clawback = 1000.
+        from core import payout_curve as _pc
+        result = _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=0.0,
+        )
+        assert result["applied"] is True
+        assert result["clawback_cents"] == 1000
+
+        from core.payments import holds as _holds
+        with db.get_db_connection() as conn:
+            hold = conn.execute(
+                "SELECT status, release_reason, clawback_cents FROM wallet_holds WHERE job_id = %s",
+                (ctx["job_id"],),
+            ).fetchone()
+        assert hold["status"] == "clawed_full"
+        assert hold["release_reason"] == _holds.RELEASE_REASON_RATING_CLAWBACK
+        assert int(hold["clawback_cents"]) == 1000
+
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["balance_cents"] == 0
+        assert agent_after["held_cents"] == 0
+
+        caller_after = payments.get_wallet(ctx["caller_wallet"]["wallet_id"])
+        # Caller paid 1100 (1000 price + 100 fee) and got 1000 clawed back.
+        # Initial deposit was 2000, so balance now = 2000 - 1100 + 1000 = 1900.
+        assert caller_after["balance_cents"] == 1900
+
+    def test_partial_clawback_consumes_hold_and_releases_remainder(self, isolated_db):
+        ctx = _settle_with_curve('{"3": 0.5, "5": 1.0}')
+        # Agent payout = 1000, fraction at 3-star = 0.5 -> clawback = 500;
+        # hold was sized at min_fraction=0.5 -> 500 reserved -> clawed_full
+        # since clawback == hold.amount (500 == 500).
+        from core import payout_curve as _pc
+        result = _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=0.5,
+        )
+        assert result["applied"] is True
+        with db.get_db_connection() as conn:
+            hold = conn.execute(
+                "SELECT status, clawback_cents FROM wallet_holds WHERE job_id = %s",
+                (ctx["job_id"],),
+            ).fetchone()
+        assert hold["status"] == "clawed_full"
+        assert int(hold["clawback_cents"]) == 500
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["balance_cents"] == 500
+        assert agent_after["held_cents"] == 0
+
+    def test_partial_clawback_smaller_than_hold_releases_remainder(self, isolated_db):
+        # Curve floors at 0.25 (i.e., min_fraction = 0.25 -> hold 750), but
+        # only the 3-star fraction = 0.7 fires -> clawback = 300. Remainder
+        # 450 must release with the same hold update.
+        ctx = _settle_with_curve('{"3": 0.7, "1": 0.25, "5": 1.0}')
+        from core import payout_curve as _pc
+        result = _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=0.7,
+        )
+        assert result["applied"] is True
+        assert result["clawback_cents"] == 300
+        with db.get_db_connection() as conn:
+            hold = conn.execute(
+                "SELECT status, amount_cents, clawback_cents FROM wallet_holds WHERE job_id = %s",
+                (ctx["job_id"],),
+            ).fetchone()
+        assert hold["status"] == "clawed_partial"
+        assert int(hold["amount_cents"]) == 750
+        assert int(hold["clawback_cents"]) == 300
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        # held drops by full hold (750), balance drops by clawback (300).
+        assert agent_after["balance_cents"] == 700
+        assert agent_after["held_cents"] == 0
+
+    def test_top_rating_releases_hold_cleanly(self, isolated_db):
+        ctx = _settle_with_curve('{"1": 0.5, "5": 1.0}')
+        # 5-star -> fraction 1.0 -> no clawback, but the hold should release.
+        from core import payout_curve as _pc
+        result = _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=1.0,
+        )
+        assert result["applied"] is False
+        with db.get_db_connection() as conn:
+            hold = conn.execute(
+                "SELECT status, release_reason FROM wallet_holds WHERE job_id = %s",
+                (ctx["job_id"],),
+            ).fetchone()
+        from core.payments import holds as _holds
+        assert hold["status"] == "released"
+        assert hold["release_reason"] == _holds.RELEASE_REASON_RATING_RELEASE
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["held_cents"] == 0
+        assert agent_after["balance_cents"] == 1000  # full payout retained
+
+    def test_clawback_is_idempotent(self, isolated_db):
+        ctx = _settle_with_curve('{"1": 0.5, "5": 1.0}')
+        from core import payout_curve as _pc
+        first = _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=0.5,
+        )
+        second = _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=0.5,
+        )
+        assert first["applied"] is True
+        assert second["applied"] is False
+        assert second["reason"] == "already_applied"
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        # Wallet state unchanged after the second call.
+        assert agent_after["balance_cents"] == 500
+        assert agent_after["held_cents"] == 0
