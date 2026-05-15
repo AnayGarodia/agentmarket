@@ -357,6 +357,15 @@ def _lock_dispute_funds_conn(conn: _db.DbConnection, dispute_id: str) -> dict:
     Lock dispute funds into escrow.
     If payout already happened, claw back from agent/platform into dispute escrow.
     If payout has not happened yet, charge remains held and no extra movement is needed.
+
+    When the underlying job has an active wallet_holds row (i.e. the
+    dispute window hasn't expired and the agent didn't withdraw the
+    held slice), the hold is consumed in this same transaction so the
+    held_cents cache stays consistent. When no hold exists (pre-deploy
+    job OR window expired before the dispute was filed) the existing
+    debit path runs unchanged — and will surface InsufficientBalanceError
+    upstream if the agent's balance is short, mirroring the historical
+    defense-in-depth behaviour.
     """
     ctx = _dispute_context_conn(conn, dispute_id)
     escrow_wallet_id = _get_or_create_wallet_id_conn(
@@ -380,6 +389,7 @@ def _lock_dispute_funds_conn(conn: _db.DbConnection, dispute_id: str) -> dict:
     agent_wallet_id = str(ctx["agent_wallet_id"])
     platform_wallet_id = str(ctx["platform_wallet_id"])
     agent_id = str(ctx["agent_id"])
+    job_id = str(ctx["job_id"])
 
     agent_paid = _related_sum_conn(
         conn,
@@ -396,6 +406,27 @@ def _lock_dispute_funds_conn(conn: _db.DbConnection, dispute_id: str) -> dict:
     total_locked = agent_paid + platform_paid
 
     if total_locked > 0:
+        # Consume the agent-side hold first (if any). This drops held_cents
+        # by the full hold amount in the same transaction as the debit
+        # below, so the available_cents = balance - held invariant survives
+        # even if a partial-clawback dispute later replays.
+        from core import observability as _obs
+        from core.payments import holds as _holds
+
+        consumed = _holds.consume_hold_conn(
+            conn,
+            job_id=job_id,
+            clawback_cents=int(agent_paid),
+            reason=_holds.RELEASE_REASON_DISPUTE_CLAWBACK,
+        )
+        if consumed is not None:
+            _obs.wallet_hold_released_total.labels(
+                reason=_holds.RELEASE_REASON_DISPUTE_CLAWBACK
+            ).inc()
+            _obs.wallet_hold_clawed_total.labels(
+                reason=_holds.RELEASE_REASON_DISPUTE_CLAWBACK
+            ).inc()
+
         _debit_wallet_conn(
             conn,
             agent_wallet_id,

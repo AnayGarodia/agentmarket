@@ -454,6 +454,85 @@ class TestPayoutCurveClawbackConsumesHold:
         assert agent_after["held_cents"] == 0
         assert agent_after["balance_cents"] == 1000  # full payout retained
 
+    def test_dispute_clawback_consumes_hold(self, isolated_db):
+        """Filing a dispute on a settled job consumes the active hold and
+        clears the agent's held_cents in the same transaction as the
+        escrow lock-up.
+        """
+        ctx = _settle_with_curve(None)  # no curve -> hold full payout
+        from core.payments import trust_disputes as _td
+        from core.payments import holds as _holds
+
+        # Build a dispute manually so we can drive the lock helper directly
+        # without standing up the full /jobs/{id}/dispute HTTP route.
+        # Use jobs.create_job to get the full row shape, then update it to
+        # the post-settlement state so trust_disputes can find the wallet
+        # IDs + charge_tx_id it expects.
+        from core import jobs as _jobs
+        real_job_id = _jobs.create_job(
+            agent_id=str(ctx["agent"]["agent_id"]),
+            caller_owner_id=str(ctx["caller_wallet"]["owner_id"]),
+            caller_wallet_id=str(ctx["caller_wallet"]["wallet_id"]),
+            agent_wallet_id=str(ctx["agent_wallet"]["wallet_id"]),
+            platform_wallet_id=str(ctx["platform_wallet"]["wallet_id"]),
+            price_cents=1000,
+            caller_charge_cents=int(ctx["distribution"]["caller_charge_cents"]),
+            platform_fee_pct_at_create=10,
+            fee_bearer_policy="caller",
+            client_id=None,
+            charge_tx_id=ctx["charge_tx_id"],
+            input_payload={"task": "hold-test"},
+            agent_owner_id=str(ctx["agent"]["owner_id"]),
+        )["job_id"]
+        # Re-point ctx['job_id'] at the real row so the wallet_holds row
+        # we want to consume needs to match the real_job_id key. Re-create
+        # the hold using the real id since trust_disputes reads by job_id.
+        with db.get_db_connection() as conn:
+            with conn:  # commits on exit; required so the next caller can BEGIN
+                conn.execute(
+                    "UPDATE wallet_holds SET job_id = %s WHERE job_id = %s",
+                    (real_job_id, ctx["job_id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE jobs SET status='complete', settled_at = %s
+                    WHERE job_id = %s
+                    """,
+                    ("2026-05-15T00:00:00+00:00", real_job_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO disputes (
+                        dispute_id, job_id, filed_by_owner_id, side, status,
+                        reason, filing_deposit_cents, filed_at
+                    ) VALUES (%s, %s, %s, 'caller', 'pending', %s, 0, %s)
+                    """,
+                    (
+                        "dispute-test-1",
+                        real_job_id,
+                        ctx["caller_wallet"]["owner_id"],
+                        "Test dispute for hold consumption",
+                        "2026-05-15T00:00:00+00:00",
+                    ),
+                )
+        ctx["job_id"] = real_job_id
+
+        result = _td.lock_dispute_funds("dispute-test-1")
+        assert int(result["locked_cents"]) > 0
+
+        with db.get_db_connection() as conn:
+            hold = conn.execute(
+                "SELECT status, release_reason FROM wallet_holds WHERE job_id = %s",
+                (ctx["job_id"],),
+            ).fetchone()
+        assert hold is not None
+        assert hold["status"] == "clawed_full"
+        assert hold["release_reason"] == _holds.RELEASE_REASON_DISPUTE_CLAWBACK
+
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["held_cents"] == 0
+        assert agent_after["balance_cents"] == 0
+
     def test_clawback_is_idempotent(self, isolated_db):
         ctx = _settle_with_curve('{"1": 0.5, "5": 1.0}')
         from core import payout_curve as _pc
