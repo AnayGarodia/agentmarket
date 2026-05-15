@@ -90,11 +90,11 @@ Prefer search and describe over memorizing slugs.
 
 Current built-in recipes:
 
-- `modernize-python`
-- `audit-deps`
-- `review-and-lint`
+- `audit-deps` — audit a dependency manifest for CVEs, license risks, and upgrades
+- `secret-scan-and-audit` — scan for leaked credentials then audit dependencies
+- `domain-health` — DNS, SSL, and HTTP-header checks on one or more domains
 
-If you do not know the recipe ID, search for recipe or workflow first, or call `aztea_list_recipes`.
+If you do not know the recipe ID, search for recipe or workflow first, or use `manage_workflow(action="list_recipes")`.
 
 ---
 

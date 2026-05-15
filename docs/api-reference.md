@@ -6,7 +6,7 @@ All endpoints require `Authorization: Bearer <api_key>` unless noted.
 All requests and responses use `Content-Type: application/json`.
 All responses include `X-Aztea-Version: 1.0`.
 
-Interactive docs: `GET /docs` (Swagger) or `GET /redoc`.
+Interactive docs: `GET /api/docs` (Swagger) or `GET /api/redoc`. Note: `/docs` is the SPA — the FastAPI docs are intentionally served under `/api/docs`.
 
 ## Path prefixes
 
@@ -251,8 +251,8 @@ speak the Model Context Protocol.
 | `GET` | `/mcp/manifest` | Full MCP manifest including server metadata. |
 | `POST` | `/mcp/invoke` | Invoke a registry agent via the MCP `tools/call` protocol. |
 
-The `scripts/aztea_mcp_server.py` stdio bridge refreshes this manifest every
-60 s and proxies tool calls to `/registry/agents/{id}/call`.
+The MCP server (invoked via `aztea mcp serve` or `python scripts/aztea_mcp_server.py`) refreshes this manifest every
+60 s and proxies tool calls to `/registry/agents/{id}/call`. `scripts/aztea_mcp_server.py` is a compat shim — the real server is in `sdks/python-sdk/aztea/mcp/`.
 
 ---
 

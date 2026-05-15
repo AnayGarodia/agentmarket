@@ -458,13 +458,13 @@ Keep that mapping in your host runtime so you can execute returned tool calls wi
 ## Built-in recipes
 
 Aztea ships with curated platform recipes. Run any of them with
-`POST /pipelines/<recipe_id>/run`:
+`POST /pipelines/<recipe_id>/run`. Canonical recipe IDs live in `core/recipes.py`.
 
 | Recipe | Stages | Input |
 |---|---|---|
-| `modernize-python` | `linter` → `type_checker` → `code_review` | `{ code: string }` |
 | `audit-deps` | `dependency_auditor` | `{ manifest: string }` |
-| `review-and-lint` | `code_review` → `linter` | `{ code: string }` |
+| `secret-scan-and-audit` | `secret_scanner` → `dependency_auditor` | `{ content: string, manifest: string }` |
+| `domain-health` | `dns_inspector` | `{ domains: [string] }` |
 
 Example:
 

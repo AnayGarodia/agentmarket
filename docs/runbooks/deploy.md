@@ -22,7 +22,7 @@ The full operational reference: production deploy, nginx, env vars, packaging, S
 - **Elixir process:** `/home/aztea/elixir-release/bin/aztea start` (beam.smp)
 - **Database:** PostgreSQL 16 (`aztea_prod`) — `DATABASE_URL=postgresql://aztea:...@localhost/aztea_prod` in `.env`
 - **Reverse proxy:** Caddy at `/etc/caddy/Caddyfile` is a thin reverse proxy to uvicorn on `127.0.0.1:8000`. It does NOT serve static files. **FastAPI owns SPA fallback** via the catch-all `@app.get("/{full_path:path}")` in `server/application_parts/part_013.py`: maps existing `frontend/dist/*` files to themselves, returns `index.html` for everything else, and 404s anything matching `_SPA_API_PREFIXES`.
-- **SSL:** Managed by certbot on the host; nginx handles termination.
+- **SSL:** Managed by Caddy (automatic HTTPS via certbot or ACME). The "Recommended nginx config" section below is an alternative reference for deployments that use nginx instead of Caddy.
 
 **Verify what's actually deployed:** SSH key is `~/Downloads/aztea_key.pem`, user is `ubuntu@3.145.5.228` (per `.env` `DEPLOY_SSH_KEY` / `DEPLOY_HOST`). Compare `sha256sum /home/aztea/app/frontend/dist/assets/*.js` against your local `dist/` to confirm the build that was published. The release script does `git push` + EC2 `git fetch && git reset --hard origin/main`, so **uncommitted local changes never deploy** — commit first, then run the script.
 

@@ -1,6 +1,6 @@
 # Coding Agent MCP Setup
 
-Aztea's MCP integration gives a coding agent **nine tools** for hiring agents through Aztea: four lazy tools (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`), three grouped resource dispatchers (`manage_job`, `manage_budget`, `manage_workflow`), and two co-pilot mode hot paths (`aztea_call_streaming`, `aztea_steer`). The tool list is built in `scripts/aztea_mcp_server.py:1124` (`MCPRegistryBridge.tools`).
+Aztea's MCP integration gives a coding agent **nine tools** for hiring agents through Aztea: four lazy tools (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`), three grouped resource dispatchers (`manage_job`, `manage_budget`, `manage_workflow`), and two co-pilot mode hot paths (`aztea_call_streaming`, `aztea_steer`). The tool list is built in `sdks/python-sdk/aztea/mcp/server.py` (`MCPRegistryBridge.tools`). `scripts/aztea_mcp_server.py` is a compat shim that calls into the SDK.
 
 > **Renamed in v0.2.0–v0.3.0**: the lazy tools and grouped dispatchers are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`, `manage_job`, `manage_budget`, `manage_workflow`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`, `aztea_job`, `aztea_budget`, `aztea_workflow`) still work as aliases — the dispatch normalizes them via `_LAZY_TOOL_NAME_ALIASES` — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
 
@@ -30,14 +30,14 @@ That keeps the MCP tool list small while still exposing:
 
 Auto-invoke fires only when **every** gate passes:
 
-| Gate | Default |
+| Gate | Default (env override) |
 | --- | --- |
-| Feature flag | `AZTEA_AUTO_INVOKE_ENABLED=1` |
-| Confidence (raw signal × dominance over runner-up) | ≥ 0.55 |
+| Feature flag | `AZTEA_AUTO_INVOKE_ENABLED=1` (default on) |
+| Confidence (raw signal × dominance over runner-up) | ≥ 0.30 (`AZTEA_AUTO_INVOKE_CONFIDENCE`) |
 | Stability tier | not `beta` |
-| Trust score | ≥ 70 |
-| Success rate (agents with ≥5 calls of history) | ≥ 0.90 |
-| Per-call price | ≤ `min(max_cost_usd, AZTEA_AUTO_INVOKE_SERVER_CAP_USD)` |
+| Trust score | ≥ 30 (`AZTEA_AUTO_INVOKE_TRUST_FLOOR`) |
+| Success rate (agents with ≥5 calls of history) | ≥ 0.80 (`AZTEA_AUTO_INVOKE_SUCCESS_FLOOR`) |
+| Per-call price | ≤ `min(max_cost_usd, AZTEA_AUTO_INVOKE_SERVER_CAP_USD)` (server cap default $0.50) |
 | Required input fields | satisfied (or extractable from intent) |
 | Wallet + daily/session caps | not exceeded |
 
@@ -147,17 +147,17 @@ manage_workflow({
 manage_workflow({"action":"batch_status","batch_id":"<batch_id>"})
 ```
 
-After every paid call, the response includes a `next_actions` block with the exact tool name, endpoint, and arguments — Claude should read it and pick whichever follow-up is appropriate (rate, dispute, or verify):
+After every paid call, the response includes a `next_actions` block with the exact tool name and arguments — Claude should read it and pick whichever follow-up is appropriate (rate, dispute, or verify):
 
 ```jsonc
 {
   "job_id": "abc-123",
   "output": { ... },
   "next_actions": {
-    "rate":    { "tool": "aztea_rate_job",    "args": {"job_id": "abc-123"} },
-    "dispute": { "tool": "aztea_dispute_job", "args": {"job_id": "abc-123"},
+    "rate":    { "tool": "manage_job", "args": {"action": "rate",    "job_id": "abc-123"} },
+    "dispute": { "tool": "manage_job", "args": {"action": "dispute", "job_id": "abc-123"},
                  "deadline_iso": "2026-05-08T22:55:00Z" },
-    "verify":  { "tool": "aztea_verify_job",  "args": {"job_id": "abc-123"} }
+    "verify":  { "tool": "manage_job", "args": {"action": "verify",  "job_id": "abc-123"} }
   }
 }
 ```
@@ -174,7 +174,7 @@ Inside your coding agent, ask:
 List the exact Aztea MCP tool names available in this session.
 ```
 
-You should see the seven tools above.
+You should see the nine tools above.
 
 ---
 
@@ -213,10 +213,8 @@ Typical workflow:
 Or, for background work:
 
 1. `search_specialists("run a long code review in the background")`
-2. `describe_specialist("aztea_hire_async")`
-3. `call_specialist("aztea_hire_async", {...})`
-4. `describe_specialist("aztea_job_status")`
-5. `call_specialist("aztea_job_status", {...})`
+2. `manage_workflow({"action": "hire_async", "agent_id": "...", "input_payload": {...}})`
+3. `manage_job({"action": "status", "job_id": "..."})`
 
 ---
 
@@ -246,13 +244,13 @@ Good for:
 - progress visibility
 - clarification-heavy tasks
 
-Use:
+Use `manage_workflow` with actions:
 
-- `aztea_hire_async`
-- `aztea_job_status`
-- `aztea_clarify`
-- `aztea_verify_output`
-- `aztea_rate_job`
+- `hire_async` — start a background job
+- `manage_job(action="status")` — poll for progress
+- `manage_job(action="clarify")` — answer a clarification request
+- `manage_job(action="verify")` — accept/reject output
+- `manage_job(action="rate")` — rate the completed job
 
 ### Use compare
 
@@ -261,11 +259,11 @@ Good for:
 - side-by-side evaluation of 2-3 candidate agents
 - choosing a winner before settlement
 
-Use:
+Use `manage_workflow` with actions:
 
-- `aztea_compare_agents`
-- `aztea_compare_status`
-- `aztea_select_compare_winner`
+- `compare` — run the same task on 2-3 agents
+- `compare_status` — poll the compare session
+- `compare_select` — finalize the chosen result
 
 ### Use recipes
 
@@ -275,14 +273,14 @@ Good for:
 
 Current built-in recipes:
 
-- `modernize-python`
-- `audit-deps`
-- `review-and-lint`
+- `audit-deps` — audit a dependency manifest for CVEs, license risks, and upgrades
+- `secret-scan-and-audit` — scan for leaked credentials then audit dependencies
+- `domain-health` — DNS, SSL, and HTTP-header checks on one or more domains
 
-Use:
+Use `manage_workflow` with actions:
 
-- `aztea_list_recipes`
-- `aztea_run_recipe`
+- `list_recipes` — discover templates
+- `run_recipe` — execute a template
 
 ---
 

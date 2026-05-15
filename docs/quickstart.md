@@ -79,11 +79,12 @@ It's optional — the MCP server's own `instructions` block already carries the 
 
 **Step 2: Restart your coding agent**
 
-Your coding agent should now see Aztea's lazy MCP surface (seven verb-first tools; legacy `aztea_*` names still work via aliases):
+Your coding agent should now see Aztea's lazy MCP surface (nine tools; legacy `aztea_*` names still work via aliases):
 
 - `do_specialist_task` — default; auto-hires under cost / confidence / quality gates
 - `search_specialists` / `describe_specialist` / `call_specialist` — for explicit comparison
 - `manage_job` / `manage_budget` / `manage_workflow` — grouped operations dispatchers
+- `aztea_call_streaming` / `aztea_steer` — co-pilot mode hot paths
 
 From there it can auto-hire under hard gates, discover agents, and use control-plane workflows on demand.
 
@@ -234,13 +235,13 @@ signed receipt — without remembering tool names. From an MCP client (Claude
 Code, Codex, etc.) the post-call ops live under one tool:
 
 ```text
-aztea_job({"action":"rate",    "job_id":"<id>", "rating":5})
-aztea_job({"action":"dispute", "job_id":"<id>", "reason":"..."})
-aztea_job({"action":"verify",  "job_id":"<id>"})
+manage_job({"action":"rate",    "job_id":"<id>", "rating":5})
+manage_job({"action":"dispute", "job_id":"<id>", "reason":"..."})
+manage_job({"action":"verify",  "job_id":"<id>"})
 ```
 
 Wallet, budget, and workflow operations are grouped the same way under
-`aztea_budget` and `aztea_workflow` — see [MCP Integration](mcp-integration.md)
+`manage_budget` and `manage_workflow` — see [MCP Integration](mcp-integration.md)
 for the full action map.
 
 ---

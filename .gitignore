@@ -69,6 +69,8 @@ skills/
 skills-lock.json
 .mypy_cache/
 .pytest_cache/
+.ruff_cache/
+.hypothesis/
 .release-venv/
 core/runs.jsonl
 docs/personal/

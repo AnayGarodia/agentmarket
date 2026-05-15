@@ -23,14 +23,14 @@ Most Aztea built-in agents are pure Python + HTTP and have no system-level depen
 | Broken Link Crawler      | None (pure Python: httpx + bs4) | —                                  | —                                        |
 | PDF Document Parser      | None (pure Python: pymupdf + pdfplumber) | —                            | `pdf_document_parser.runtime_missing` if `pymupdf` is absent |
 | Web Search               | `BRAVE_SEARCH_API_KEY` env var | `echo $BRAVE_SEARCH_API_KEY \| head -c 8` | `web_search.no_api_key`              |
-| Linter (JS/TS)           | Node.js ≥ 18 + npx         | `node --version && npx --version`      | `linter_agent.node_not_available` (Python/ruff path still works) |
-| Type Checker (tsc)       | Node.js ≥ 18 + npx         | `npx tsc --version`                    | `type_checker.tsc_not_available` (mypy path still works) |
 | Multi-Language Executor  | Node.js, Deno, Bun, Go, Rust | see per-language check below         | `multi_language_executor.runtime_not_available` |
-| Shell Executor           | POSIX shell (`/bin/sh`)    | `which sh`                             | Always available on Linux                |
 | DB Sandbox               | None (stdlib `sqlite3`)    | —                                      | —                                        |
 | Python Code Executor     | Python 3.10+               | `python --version`                     | —                                        |
-| Multi-File Executor      | Python 3.10+               | `python --version`                     | —                                        |
-| Semantic Codebase Search | `git` (for git-clone path) | `git --version`                        | `semantic_codebase_search.git_not_available` |
+| Linter (JS/TS) *(sunset)*     | Node.js ≥ 18 + npx    | `node --version && npx --version`      | `linter_agent.node_not_available` (Python/ruff path still works) |
+| Type Checker (tsc) *(sunset)* | Node.js ≥ 18 + npx    | `npx tsc --version`                    | `type_checker.tsc_not_available` (mypy path still works) |
+| Shell Executor *(sunset)*     | POSIX shell (`/bin/sh`) | `which sh`                           | Always available on Linux                |
+| Multi-File Executor *(sunset)* | Python 3.10+           | `python --version`                    | —                                        |
+| Semantic Codebase Search *(sunset)* | `git` (for git-clone path) | `git --version`             | `semantic_codebase_search.git_not_available` |
 
 All other agents (CVE Lookup, DNS Inspector, Dependency Auditor, etc.) require only standard network access and the Python packages in `requirements.txt`.
 
@@ -64,7 +64,7 @@ pip check   # should report "No broken requirements"
 python -m playwright install chromium 2>&1 | tail -5
 python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop(); print('OK')"
 
-# Node.js (Linter JS/TS, Type Checker tsc)
+# Node.js (Multi-Language Executor; also Linter/TypeChecker if sunset agents are still resolvable)
 node --version      # want ≥ 18.0.0
 npx --version
 
@@ -80,11 +80,8 @@ go version 2>/dev/null || echo "go not installed"
 # Rust (Multi-Language Executor — optional)
 rustc --version 2>/dev/null || echo "rust not installed"
 
-# Git (Semantic Codebase Search git-clone path)
-git --version
-
-# ruff (Linter — Python path)
-ruff --version
+# ruff (Linter — sunset but still callable via historical IDs)
+ruff --version 2>/dev/null || echo "ruff not installed (sunset agent only)"
 ```
 
 ---
