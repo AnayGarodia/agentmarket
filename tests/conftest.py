@@ -30,6 +30,18 @@ os.environ.setdefault("AZTEA_BYPASS_LEGAL_GATE", "1")
 os.environ.setdefault("API_KEY", "test-master-key")
 os.environ.setdefault("SERVER_BASE_URL", "http://localhost:8000")
 
+# Effectively disable the global per-IP/per-key rate limiter for the test suite.
+# Why: a 120 rpm / 10 rps burst was leaking generic `rate_limit_exceeded` 429s
+# into tests that intend to exercise narrower limits (per-job steer cap of 20)
+# or that fan out many requests in one fixture. The flags are captured at
+# feature_flags import time, so they must be set before any aztea import.
+# Dedicated rate-limit tests (tests/integration/test_auth_rate_limits.py)
+# don't depend on hitting the global cap.
+os.environ.setdefault("AZTEA_RATE_LIMIT_DEFAULT_RPM", "1000000")
+os.environ.setdefault("AZTEA_RATE_LIMIT_WORKER_RPM", "1000000")
+os.environ.setdefault("AZTEA_RATE_LIMIT_ANON_RPM", "1000000")
+os.environ.setdefault("AZTEA_RATE_LIMIT_BURST_RPS", "1000000")
+
 try:
     from hypothesis import HealthCheck, settings
 
@@ -50,3 +62,21 @@ except ImportError:
     # Hypothesis not installed yet; property tests will surface the missing dep
     # at collection time rather than silently skipping.
     pass
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_store_per_test():
+    """Wipe core.rate_limit's in-process LRU store before every test.
+
+    Why: even with bumped limits above, the store grows unboundedly across
+    a session if not reset, which can amplify the cost of the LRU-evict
+    sweep and (historically) caused cascading flakiness when limits were
+    lower. This keeps each test starting from a clean slate.
+    """
+    from core import rate_limit
+
+    rate_limit.reset_store_for_tests()
+    yield
