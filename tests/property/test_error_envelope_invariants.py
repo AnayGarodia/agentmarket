@@ -25,7 +25,7 @@ import json
 import string
 
 import pytest
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from core.error_codes import make_error
@@ -95,7 +95,10 @@ def test_data_alias_is_honoured_when_details_is_none(error: str, message: str, d
 def test_details_wins_over_data_alias(error: str, message: str, details, data) -> None:
     # If both are passed, ``details`` wins. This is the documented precedence
     # in make_error's docstring; pinning it stops a future refactor from
-    # accidentally swapping the order.
+    # accidentally swapping the order. When details is None the alias path
+    # legitimately takes over — that's covered by
+    # test_data_alias_is_honoured_when_details_is_none, so skip it here.
+    assume(details is not None)
     envelope = make_error(error, message, details, data=data)
     assert envelope["details"] is details or envelope["details"] == details
 

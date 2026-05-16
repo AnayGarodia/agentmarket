@@ -244,11 +244,15 @@ def test_fix15_off_catalog_patterns_short_circuit_search():
     # Off-catalog: at least one pattern should match.
     assert _hit("find recent papers on attention mechanisms")
     assert _hit("dall-e style image generator")
-    assert _hit("test my endpoint latency p99")
+    assert _hit("audit my app for OWASP top 10")
 
     # On-catalog: no off-catalog pattern should match.
+    # Endpoint latency / load testing is on-catalog since the 2026-05-11
+    # audit added load_tester + lighthouse_auditor; the off-catalog
+    # pattern was removed in the same audit (see _OFF_CATALOG_PATTERNS).
     assert not _hit("scan code for hardcoded secrets")
     assert not _hit("audit my package.json for cves")
+    assert not _hit("test my endpoint latency p99")
 
 
 # ---------------------------------------------------------------------------

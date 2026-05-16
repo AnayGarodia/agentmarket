@@ -631,7 +631,11 @@ def test_orchestration_depth_exceeded_error_code_is_defined():
 
 
 def test_registry_call_request_rejects_overly_large_payload():
-    oversized_text = "x" * (70 * 1024)
+    # Reference the runtime constant so the test stays in sync if the
+    # cap moves again (was 64KB → 256KB on 2026-04-…; hardcoded 70KB
+    # silently went stale and made this test pass-by-omission).
+    from core.models.messages_ops import _PAYLOAD_MAX_BYTES
+    oversized_text = "x" * (_PAYLOAD_MAX_BYTES + 1024)
     with pytest.raises(ValidationError) as exc_info:
         models.RegistryCallRequest.model_validate({"blob": oversized_text})
     assert "too large" in str(exc_info.value)
