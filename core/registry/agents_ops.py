@@ -121,7 +121,11 @@ _OFF_CATALOG_PATTERNS = [
     (
         "image generation",
         lambda toks: bool(
-            {"dall", "midjourney", "stable", "diffusion"} & toks
+            # "dall e" splits to {"dall", "e"}; "dall-e" stays as one token;
+            # "dalle" is the no-separator spelling. Include all three so the
+            # off-catalog pattern catches the canonical brand spellings users
+            # actually type.
+            {"dall", "dall-e", "dalle", "midjourney", "stable", "diffusion"} & toks
         )
         and ("image" in toks or "picture" in toks),
     ),
