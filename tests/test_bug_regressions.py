@@ -856,13 +856,25 @@ _PROBE_PATH = "/__rate_limit_probe"
 
 
 def _build_rate_limit_client(monkeypatch, *, master_key: str = "ratelimit-master"):
-    """Spin up a TestClient with a fixed master key and a clean rate-limit store."""
+    """Spin up a TestClient with a fixed master key and a clean rate-limit store.
+
+    Why: the top-level tests/conftest.py bumps AZTEA_RATE_LIMIT_* env vars to
+    effective-infinity for the rest of the suite (so cumulative requests in
+    unrelated integration tests don't cascade into spurious 429s). These
+    *dedicated* rate-limit tests need the canonical 120/600/60/10 numbers
+    to exercise the limiter, so we restore them explicitly here. Anchor in
+    one place — feature_flags reads via attribute access in limit_for_scope.
+    """
     from fastapi.testclient import TestClient
 
     import server.application as server
-    from core import rate_limit
+    from core import feature_flags, rate_limit
 
     monkeypatch.setattr(server, "_MASTER_KEY", master_key)
+    monkeypatch.setattr(feature_flags, "RATE_LIMIT_DEFAULT_RPM", 120)
+    monkeypatch.setattr(feature_flags, "RATE_LIMIT_WORKER_RPM", 600)
+    monkeypatch.setattr(feature_flags, "RATE_LIMIT_ANON_RPM", 60)
+    monkeypatch.setattr(feature_flags, "RATE_LIMIT_BURST_RPS", 10)
     rate_limit.reset_store_for_tests()
     client = TestClient(server.app, raise_server_exceptions=False)
     return client, server, rate_limit
