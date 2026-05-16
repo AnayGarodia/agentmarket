@@ -542,6 +542,11 @@ _LAZY_DO_TOOL: dict[str, Any] = {
                 ],
                 "description": "Optional. Render the result in a specific shape. Canonical JSON `output` stays intact; rendered string is attached as `rendered_output`.",
             },
+            "private_task": {
+                "type": "boolean",
+                "default": False,
+                "description": "When true, suppress public work-example recording for this call. Use for sensitive inputs (PII, credentials, internal data). The signed receipt still records the run, but the input/output bodies are never replayed publicly.",
+            },
         },
         "required": ["intent"],
     },
@@ -601,6 +606,11 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
                     "text",
                 ],
                 "description": "Optional. Render the result in a specific shape. The canonical JSON `output` stays intact; the rendered string is added as `rendered_output`.",
+            },
+            "private_task": {
+                "type": "boolean",
+                "default": False,
+                "description": "When true, suppress public work-example recording for this call. Use for sensitive inputs (PII, credentials, internal data). The signed receipt still records the run, but the input/output bodies are never replayed publicly.",
             },
         },
         "required": ["slug"],
@@ -965,6 +975,36 @@ def _session_refund(session_state: dict[str, Any], amount_cents: Any) -> None:
     session_state["spent_cents"] = max(
         0, int(session_state.get("spent_cents") or 0) - int(amount_cents)
     )
+
+
+def _session_reconcile_async_refund(
+    session_state: dict[str, Any],
+    job_id: str | None,
+    refunded_cents: Any,
+) -> None:
+    """Decrement the session counter when an async-discovered refund lands.
+
+    Audit 2026-05-16 #19: pre-1.7.14 only synchronous failures (where the
+    inline response carried `refunded: true`) decremented the counter.
+    Sweeper-triggered and dispute-driven refunds were invisible, so the
+    MCP counter monotonically diverged from the wallet ledger.
+
+    The set ``_refunded_job_ids`` guards against double-decrementing if
+    the same job's status is polled repeatedly.
+    """
+    if not job_id or refunded_cents is None:
+        return
+    refunded_ids: set[str] = session_state.setdefault("_refunded_job_ids", set())
+    if job_id in refunded_ids:
+        return
+    try:
+        amount = int(refunded_cents)
+    except (TypeError, ValueError):
+        return
+    if amount <= 0:
+        return
+    refunded_ids.add(job_id)
+    _session_refund(session_state, amount)
 
 
 def _workflow_hints(query: str) -> list[str]:
@@ -2209,7 +2249,27 @@ class RegistryBridge:
             ):
                 parsed["output"] = parsed.get("structuredContent")
             return True, parsed if isinstance(parsed, dict) else {"output": parsed}
-        return False, parsed if isinstance(parsed, dict) else {"raw_body": parsed}
+        # Audit 2026-05-16 #9: never return a bare `{"raw_body": ""}` to the
+        # caller — that's the symptom users saw. Always wrap upstream
+        # failures in a structured envelope so the caller can branch on
+        # `error` and `status_code`.
+        body_for_envelope = parsed if isinstance(parsed, dict) else {"raw_body": parsed}
+        if (
+            not body_for_envelope
+            or body_for_envelope == {"raw_body": ""}
+            or "error" not in body_for_envelope
+        ):
+            body_for_envelope = {
+                "error": "AGENT_INTERNAL_ERROR",
+                "message": (
+                    f"Agent endpoint returned HTTP {response.status_code} "
+                    "with no parseable body."
+                ),
+                "status_code": response.status_code,
+                "tool_name": tool_name,
+                **(body_for_envelope if isinstance(body_for_envelope, dict) else {}),
+            }
+        return False, body_for_envelope
 
     def _auth_required_response(self) -> tuple[bool, dict[str, Any]]:
         return False, {
@@ -2309,6 +2369,10 @@ class RegistryBridge:
             output_format = str(arguments.get("output_format") or "").strip()
             if output_format:
                 body["output_format"] = output_format
+            # Audit 2026-05-16 #4: surface private_task through do_specialist_task
+            # so sensitive inputs (PII, credentials) skip work-example recording.
+            if arguments.get("private_task") is not None:
+                body["private_task"] = bool(arguments.get("private_task"))
             workspace_notice = _attach_workspace_context(
                 body, body.get("input") if isinstance(body.get("input"), dict) else None
             )

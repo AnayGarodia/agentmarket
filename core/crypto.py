@@ -74,12 +74,64 @@ def sign_payload(private_pem: str, payload) -> str:
     ``private_pem`` must be the PEM produced by :func:`generate_signing_keypair`
     (or any PKCS#8 PEM Ed25519 key). Returns the base64-encoded raw
     signature (88 characters).
+
+    NOTE: prefer :func:`sign_output_v2` for new code — the v1 form signs
+    only the output bytes, so the same output across two different
+    ``job_id``s produces an identical signature (audit 2026-05-16 #5).
     """
     key = serialization.load_pem_private_key(private_pem.encode("utf-8"), password=None)
     if not isinstance(key, ed25519.Ed25519PrivateKey):
         raise ValueError("private_pem must be an Ed25519 PEM key.")
     signature_bytes = key.sign(canonical_json(payload))
     return base64.b64encode(signature_bytes).decode("ascii")
+
+
+# Audit 2026-05-16 #5: bind every signature to (job_id, agent_id, output)
+# so a signature minted for job A cannot be replayed onto a forged job B
+# whose output happens to canonicalise to the same bytes. The string
+# encodes the binding clearly so an offline verifier knows exactly what
+# domain the signature speaks to.
+OUTPUT_SIG_SCHEME_V2 = "Ed25519+aztea-output-sig/2"
+
+
+def build_output_sigil(job_id: str, agent_id: str, output) -> dict:
+    """Construct the canonical dict that v2 output signatures cover.
+
+    Why a dict and not raw bytes: keeping the binding fields explicit
+    lets verifiers fail loudly if anyone forwards a signature against a
+    different job_id or agent_id. ``output_hash`` is computed here (over
+    the canonicalised output) so the sigil itself stays compact.
+    """
+    import hashlib
+
+    output_hash = hashlib.sha256(canonical_json(output)).hexdigest()
+    return {
+        "v": "aztea/output-sig/2",
+        "job_id": str(job_id),
+        "agent_id": str(agent_id),
+        "output_hash": output_hash,
+    }
+
+
+def sign_output_v2(private_pem: str, job_id: str, agent_id: str, output) -> str:
+    """Sign the v2 sigil (job_id + agent_id + output_hash) with Ed25519.
+
+    Pair with :data:`OUTPUT_SIG_SCHEME_V2` when persisting alongside
+    ``output_signature_alg`` so verifiers can route to the right path.
+    """
+    return sign_payload(private_pem, build_output_sigil(job_id, agent_id, output))
+
+
+def verify_output_v2(
+    public_pem: str,
+    job_id: str,
+    agent_id: str,
+    output,
+    signature_b64: str,
+) -> bool:
+    return verify_signature(
+        public_pem, build_output_sigil(job_id, agent_id, output), signature_b64
+    )
 
 
 def verify_signature(public_pem: str, payload, signature_b64: str) -> bool:

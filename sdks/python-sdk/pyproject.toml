@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aztea"
-version = "1.7.13"
+version = "1.7.14"
 description = "Python SDK for the Aztea AI agent marketplace"
 readme = "README.md"
 license = { text = "MIT" }
@@ -24,6 +24,10 @@ dependencies = [
     "requests>=2.31.0",
     "rich>=13.7.0",
     "typer>=0.12.3",
+    # Required by aztea._client_internals._verify for offline Ed25519
+    # receipt verification. The MCP `manage_job(verify)` tool degrades to
+    # `verified: false` if this is missing (audit 2026-05-16 #2).
+    "cryptography>=41.0.0",
 ]
 
 [project.optional-dependencies]

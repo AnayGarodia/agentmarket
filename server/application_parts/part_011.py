@@ -898,11 +898,23 @@ def wallet_audit(
                 decoded_payload = _decode_payload(
                     row.get("output_payload"), default=None,
                 )
-                ok = _crypto.verify_signature(
-                    public_pem,
-                    decoded_payload,
-                    row.get("output_signature") or "",
-                )
+                signature_alg = str(row.get("output_signature_alg") or "")
+                if signature_alg == _crypto.OUTPUT_SIG_SCHEME_V2:
+                    # Audit 2026-05-16 #5: v2 binds (job_id, agent_id, output)
+                    # — verifier must reconstruct the same sigil to match.
+                    ok = _crypto.verify_output_v2(
+                        public_pem,
+                        str(r.get("job_id") or ""),
+                        agent_id,
+                        decoded_payload,
+                        row.get("output_signature") or "",
+                    )
+                else:
+                    ok = _crypto.verify_signature(
+                        public_pem,
+                        decoded_payload,
+                        row.get("output_signature") or "",
+                    )
             except Exception as exc:
                 failed += 1
                 if first_failure is None:

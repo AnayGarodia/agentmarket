@@ -322,16 +322,32 @@ def _execute_builtin_agent_inner(
     runner = BUILTIN_AGENT_RUNNERS.get(agent_id)
     if runner is None:
         raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
+    # Audit 2026-05-16 #7: agents that just print to stdout produced
+    # `partials=[]`, so `stop_when` predicates never fired. Emit synthetic
+    # lifecycle partials around every call so the predicate evaluator has
+    # at least the start/finish boundary to match on, while runners that
+    # explicitly call emit_partial still get their own fine-grained events.
+    if emit_partial is not None:
+        try:
+            emit_partial({"stage": "started", "agent_id": agent_id})
+        except Exception:
+            _LOG.exception("emit_partial lifecycle start failed for %s", agent_id)
     # Runners returned by _module_runner accept emit_partial; the few
     # one-off runners (e.g. _run_quality_judgment) don't. Try the kwarg
     # form first, fall back to single-arg for back-compat.
     if emit_partial is not None:
         try:
-            return _finalize(runner(payload, emit_partial=emit_partial))
+            output = _finalize(runner(payload, emit_partial=emit_partial))
         except TypeError:
-            # Runner does not accept emit_partial; legacy single-arg form.
-            pass
-    return _finalize(runner(payload))
+            output = _finalize(runner(payload))
+    else:
+        output = _finalize(runner(payload))
+    if emit_partial is not None:
+        try:
+            emit_partial({"stage": "completed", "agent_id": agent_id})
+        except Exception:
+            _LOG.exception("emit_partial lifecycle end failed for %s", agent_id)
+    return output
 
 
 # No agents currently use the degraded-unchargeable path; keep the set
@@ -366,7 +382,9 @@ def _degraded_unchargeable_error(agent_id: str) -> dict[str, Any]:
     }
 
 
-def _sign_builtin_output(agent: dict | None, output: dict) -> dict[str, str | None]:
+def _sign_builtin_output(
+    agent: dict | None, output: dict, *, job_id: str | None = None
+) -> dict[str, str | None]:
     sig = {"signature": None, "alg": None, "did": None, "signed_at": None}
     if not agent:
         return sig
@@ -380,8 +398,19 @@ def _sign_builtin_output(agent: dict | None, output: dict) -> dict[str, str | No
                 registry.ensure_agent_signing_keys(agent["agent_id"])
             )
         if private_pem and agent_did_value:
-            sig["signature"] = _crypto.sign_payload(private_pem, output)
-            sig["alg"] = str(agent.get("signing_alg") or "ed25519")
+            # Audit 2026-05-16 #5: v2 signatures bind (job_id, agent_id,
+            # output_hash) so a signature can't be replayed across jobs
+            # that happen to produce the same output bytes. Fall back to
+            # v1 only when job_id isn't threaded (shouldn't happen for
+            # new code; kept for legacy callers).
+            if job_id:
+                sig["signature"] = _crypto.sign_output_v2(
+                    private_pem, job_id, str(agent["agent_id"]), output
+                )
+                sig["alg"] = _crypto.OUTPUT_SIG_SCHEME_V2
+            else:
+                sig["signature"] = _crypto.sign_payload(private_pem, output)
+                sig["alg"] = str(agent.get("signing_alg") or "ed25519")
             sig["did"] = agent_did_value
             sig["signed_at"] = datetime.now(timezone.utc).isoformat()
     except Exception:
@@ -651,7 +680,11 @@ def _process_pending_builtin_job(job: dict) -> bool:
                     event_type="job.failed_quality",
                 )
             return True
-    signature = _sign_builtin_output(agent, output if isinstance(output, dict) else {})
+    signature = _sign_builtin_output(
+        agent,
+        output if isinstance(output, dict) else {},
+        job_id=str(claimed["job_id"]),
+    )
     completed = jobs.update_job_status(
         claimed["job_id"],
         "complete",

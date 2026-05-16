@@ -312,3 +312,55 @@ def jobs_get_receipt(
     return JSONResponse(content=receipt_obj)
 
 
+# --- Well-known static endpoints --------------------------------------------
+#
+# Registered in shard 13 so they resolve BEFORE the SPA catch-all in shard 14.
+# robots.txt previously returned the SPA HTML (audit 2026-05-16 #16);
+# /.well-known/security.txt 404'd (audit #17). Both are tiny, immutable
+# strings — inlining keeps the surface auditable in one place rather than
+# loading from disk at request time.
+
+_SECURITY_TXT_CONTACT = os.environ.get(
+    "SECURITY_TXT_CONTACT", "mailto:security@example.invalid"
+)
+_SECURITY_TXT_TTL_DAYS = 365
+
+
+def _robots_txt_body() -> str:
+    base = _SERVER_BASE_URL.rstrip("/")
+    return (
+        "User-agent: *\n"
+        "Disallow: /api/\n"
+        "Disallow: /admin/\n"
+        "Disallow: /jobs/\n"
+        "Disallow: /wallets/\n"
+        f"Sitemap: {base}/sitemap.xml\n"
+    )
+
+
+def _security_txt_body() -> str:
+    # RFC 9116 requires an Expires field; recompute on each request rather
+    # than at import time so a long-lived process doesn't drift past its
+    # own expiry.
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=_SECURITY_TXT_TTL_DAYS)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    canonical = f"{_SERVER_BASE_URL.rstrip('/')}/.well-known/security.txt"
+    return (
+        f"Contact: {_SECURITY_TXT_CONTACT}\n"
+        f"Expires: {expires_at}\n"
+        f"Preferred-Languages: en\n"
+        f"Canonical: {canonical}\n"
+    )
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots_txt() -> Response:
+    return Response(content=_robots_txt_body(), media_type="text/plain")
+
+
+@app.get("/.well-known/security.txt", include_in_schema=False)
+def security_txt() -> Response:
+    return Response(content=_security_txt_body(), media_type="text/plain")
+
+

@@ -629,6 +629,66 @@ def auth_socket_token(
 # ---------------------------------------------------------------------------
 
 
+_CLAWBACK_NOT_EVALUATED = "not_evaluated"
+_CLAWBACK_NO_AGENT = "agent_unavailable"
+_CLAWBACK_NOT_SETTLED = "settlement_pending"
+_CLAWBACK_NO_CURVE = "no_payout_curve"
+_CLAWBACK_TOP_RATING = "top_rating_no_clawback"
+
+
+def _resolve_rating_clawback(
+    agent: dict | None,
+    job: dict,
+    rating: int,
+) -> dict[str, Any]:
+    """Compute (and persist) the payout-curve clawback for a freshly-rated job.
+
+    Returns a typed dict on every path so callers can distinguish "we
+    evaluated and chose not to claw back" from "we never tried". The
+    `applied` boolean is the single source of truth for whether ledger
+    rows moved.
+    """
+    if not agent:
+        return {"applied": False, "clawback_cents": 0, "reason": _CLAWBACK_NO_AGENT}
+    if not job.get("settled_at"):
+        return {
+            "applied": False,
+            "clawback_cents": 0,
+            "reason": _CLAWBACK_NOT_SETTLED,
+        }
+    from core import payout_curve as _pc
+
+    raw_curve = agent.get("payout_curve")
+    curve = _pc.parse_curve(raw_curve) if raw_curve else None
+    if not curve:
+        return {"applied": False, "clawback_cents": 0, "reason": _CLAWBACK_NO_CURVE}
+
+    fraction = _pc.fraction_for_rating(curve, rating)
+    if fraction >= 1.0:
+        return {
+            "applied": False,
+            "clawback_cents": 0,
+            "payout_fraction": fraction,
+            "reason": _CLAWBACK_TOP_RATING,
+        }
+
+    distribution = payments.compute_success_distribution(
+        int(job.get("price_cents") or 0),
+        platform_fee_pct=int(
+            job.get("platform_fee_pct_at_create") or payments.PLATFORM_FEE_PCT
+        ),
+        fee_bearer_policy=str(job.get("fee_bearer_policy") or "caller"),
+    )
+    return _pc.apply_curve_clawback(
+        job_id=str(job["job_id"]),
+        agent_id=str(job["agent_id"]),
+        agent_wallet_id=str(job["agent_wallet_id"]),
+        caller_wallet_id=str(job["caller_wallet_id"]),
+        agent_payout_cents=int(distribution["agent_payout_cents"]),
+        payout_fraction=fraction,
+    )
+
+
 @app.post(
     "/jobs/{job_id}/rating",
     status_code=201,
@@ -725,31 +785,13 @@ def jobs_rate(
                     related_id=f"milestone:{milestone}",
                 )
 
-        clawback_result = None
-        if agent and job.get("settled_at"):
-            from core import payout_curve as _pc
-
-            raw_curve = agent.get("payout_curve")
-            curve = _pc.parse_curve(raw_curve) if raw_curve else None
-            fraction = _pc.fraction_for_rating(curve, body.rating)
-            if fraction < 1.0:
-                distribution = payments.compute_success_distribution(
-                    int(job.get("price_cents") or 0),
-                    platform_fee_pct=int(
-                        job.get("platform_fee_pct_at_create")
-                        or payments.PLATFORM_FEE_PCT
-                    ),
-                    fee_bearer_policy=str(job.get("fee_bearer_policy") or "caller"),
-                )
-                agent_payout_cents = int(distribution["agent_payout_cents"])
-                clawback_result = _pc.apply_curve_clawback(
-                    job_id=job_id,
-                    agent_id=str(job["agent_id"]),
-                    agent_wallet_id=str(job["agent_wallet_id"]),
-                    caller_wallet_id=str(job["caller_wallet_id"]),
-                    agent_payout_cents=agent_payout_cents,
-                    payout_fraction=fraction,
-                )
+        # Resolve clawback into a typed payload so callers can distinguish
+        # "we evaluated and chose not to claw back" from "we never tried".
+        # Pre-1.7.14 every branch but the inner happy-path returned plain
+        # `None`, which the 2026-05-16 audit flagged as Bug #15 — every
+        # rating response carried `clawback: null` and clients could not
+        # tell why.
+        clawback_result = _resolve_rating_clawback(agent, job, body.rating)
 
         _record_job_event(
             job,

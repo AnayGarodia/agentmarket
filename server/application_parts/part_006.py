@@ -251,6 +251,52 @@ def _set_sweeper_state(**updates: Any) -> None:
         _SWEEPER_STATE.update(updates)
 
 
+_PENDING_STARVATION_THRESHOLD_SECONDS = max(60, _SWEEPER_INTERVAL_SECONDS * 5)
+
+
+def _emit_pending_starvation_signal() -> None:
+    """Surface jobs that have sat in `pending` longer than the threshold.
+
+    Audit 2026-05-16 #6: three batch jobs sat in `pending` for 14+ minutes
+    while the worker pool reported 23/24 free slots. The bug went silent
+    because nothing logged or counted the stuck rows. This emits a single
+    structured warning per sweep pass partitioned by ``(agent_id,
+    endpoint_kind)`` so operators can see which agent has no worker,
+    independent of whether the underlying claim race is fixed.
+    """
+    cutoff_iso = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=_PENDING_STARVATION_THRESHOLD_SECONDS)
+    ).isoformat()
+    try:
+        with jobs._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT agent_id, COUNT(*) AS stuck_count
+                FROM jobs
+                WHERE status = 'pending' AND created_at < %s
+                GROUP BY agent_id
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+    except Exception:
+        _LOG.exception("pending.starvation.query_failed")
+        return
+    for row in rows:
+        agent_id = row["agent_id"] if "agent_id" in row.keys() else row[0]
+        stuck_count = (
+            int(row["stuck_count"]) if "stuck_count" in row.keys() else int(row[1])
+        )
+        if stuck_count <= 0:
+            continue
+        _LOG.warning(
+            "pending.starvation agent_id=%s stuck_count=%d threshold_seconds=%d",
+            agent_id,
+            stuck_count,
+            _PENDING_STARVATION_THRESHOLD_SECONDS,
+        )
+
+
 def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
     _set_sweeper_state(running=True, started_at=_utc_now_iso())
     while not stop_event.wait(_SWEEPER_INTERVAL_SECONDS):
@@ -262,6 +308,7 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
                 limit=_SWEEPER_LIMIT,
                 actor_owner_id="system:scheduler",
             )
+            _emit_pending_starvation_signal()
             _set_sweeper_state(
                 last_run_at=started,
                 last_summary=summary,

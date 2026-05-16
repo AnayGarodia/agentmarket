@@ -428,6 +428,23 @@ _IMAGE_TOKENS = frozenset({"image", "generate", "generation", "dall", "replicate
 _IMAGE_AGENT_HINTS = ("image", "generation", "replicate", "gpt-image")
 _FINANCIAL_TOKENS = frozenset({"edgar", "10-k", "sec", "revenue"})
 _FINANCIAL_AGENT_HINTS = ("edgar", "sec", "financial")
+# Audit 2026-05-16 #12: a bare CVE id without a package-pin signal should
+# route to cve_lookup, not dependency_auditor. The bonus matches
+# _DEPENDENCY_AUDIT_BONUS so the two never both win the same intent.
+_CVE_LOOKUP_BONUS = 70
+_CVE_LOOKUP_AGENT_HINTS = ("cve_lookup", "cve lookup", "cve-lookup")
+# Audit 2026-05-16 #14: "what is the capital of France" routed to
+# python_code_executor because no other candidate scored and the executor
+# took the default. Demote code-execution agents on chat-shaped prompts
+# (questions / no code tokens / no extracted strict fields) so a no-match
+# decision surfaces instead of a misleading "give me a code field" reply.
+_CHAT_INTENT_EXEC_PENALTY = 80
+_CODE_EXECUTOR_AGENT_HINTS = (
+    "python_code_executor",
+    "python code executor",
+    "multi_language_executor",
+    "multi language executor",
+)
 
 
 def _score_string_signals(c: CandidateAgent, intent_lower: str, tokens: set[str]) -> tuple[float, list[str]]:
@@ -523,6 +540,26 @@ def _score_intent_interlocks(
     if _FINANCIAL_TOKENS & tokens and any(t in combined for t in _FINANCIAL_AGENT_HINTS):
         score += _INTENT_INTERLOCK_BONUS
         reasons.append("financial filing intent")
+    # Audit 2026-05-16 #12: bare CVE id ("details for CVE-2021-44228")
+    # without package pins must dominate dependency_auditor → cve_lookup.
+    has_cve_id = bool(_CVE_ID_RE.search(intent))
+    has_packages = _looks_like_package_pinning(intent_lower)
+    if has_cve_id and not has_packages and any(
+        t in combined for t in _CVE_LOOKUP_AGENT_HINTS
+    ):
+        score += _CVE_LOOKUP_BONUS
+        reasons.append("cve lookup intent (bare cve id)")
+    # Audit 2026-05-16 #14: chat-shaped prompts must not route to code
+    # executors. Demote rather than ban so a curated keyword override can
+    # still rescue an explicit "run python: ..." prompt.
+    if (
+        _looks_like_question(intent)
+        and not _looks_like_code(intent)
+        and not has_strong_exec_verb
+        and any(t in combined for t in _CODE_EXECUTOR_AGENT_HINTS)
+    ):
+        score -= _CHAT_INTENT_EXEC_PENALTY
+        reasons.append("chat-shaped intent: code executor demoted")
     return score, reasons
 
 

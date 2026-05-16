@@ -880,10 +880,22 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "winner_agent_id": {
                     "type": "string",
-                    "description": "The chosen winning agent from that compare session.",
+                    "description": "The chosen winning agent UUID from that compare session.",
+                },
+                "winner_slug": {
+                    "type": "string",
+                    "description": "Alternative to winner_agent_id — chosen winning agent by slug.",
                 },
             },
-            "required": ["compare_id", "winner_agent_id"],
+            # Audit 2026-05-16 #18: handler already accepts either
+            # winner_agent_id OR winner_slug; the schema must reflect that
+            # so callers passing only winner_slug don't trip a misleading
+            # "agent_id is required" validation error.
+            "required": ["compare_id"],
+            "anyOf": [
+                {"required": ["winner_agent_id"]},
+                {"required": ["winner_slug"]},
+            ],
         },
     },
     {
@@ -2139,10 +2151,28 @@ def _resolve_agent_id(
         {"query": slug, "limit": 50},
     )
     if not ok:
+        # Audit 2026-05-16 #3: pre-1.7.14 every search failure surfaced as
+        # the same misleading "Could not resolve slug" error, even when the
+        # search service was simply slow (503/504/timeout). Distinguish so
+        # the caller knows whether to retry vs. fix the slug.
+        upstream_status = int(payload.get("status_code") or 0)
+        if upstream_status in (502, 503, 504, 408) or "timeout" in str(
+            payload.get("message", "")
+        ).lower():
+            return "", {
+                **payload,
+                "error": "AGENT_LOOKUP_TIMEOUT",
+                "message": (
+                    f"Registry search did not respond in time "
+                    f"(HTTP {upstream_status or 'timeout'}); the slug may exist. "
+                    "Retry in a few seconds."
+                ),
+                "retry_after_ms": 2000,
+            }
         return "", {
+            **payload,
             "error": "AGENT_LOOKUP_FAILED",
             "message": "Could not resolve slug to agent_id.",
-            **payload,
         }
     slug_lower = slug.lower()
     candidates_seen = []
