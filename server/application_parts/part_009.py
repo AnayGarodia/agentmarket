@@ -384,6 +384,30 @@ def jobs_compare_create(
         input_payload,
         private_task=private_task,
     )
+    # Audit 2026-05-16 #1: pre-1.7.14 compare would happily create sub-jobs
+    # with an empty input payload, charge the caller, and then every sub-job
+    # 422'd because the agents had required fields. Reject up-front so the
+    # caller can fix the request before any money moves. ``input_payload``
+    # is the caller-supplied portion; ``protocol`` is platform-injected and
+    # never carries actual task content.
+    caller_content_keys = [
+        k for k in input_payload.keys() if k != "protocol"
+    ]
+    if not caller_content_keys:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                "compare.empty_input",
+                (
+                    "Compare requires a non-empty input payload — pass `input`, "
+                    "`input_payload`, or `task` with the actual content. "
+                    "Audit 2026-05-16 #1: blocking creation here avoids "
+                    "charging for sub-jobs that would all 422 on the same "
+                    "validation."
+                ),
+                {"received_keys": list(input_payload.keys())},
+            ),
+        )
 
     resolved: list[dict[str, Any]] = []
     total_charged_cents = 0

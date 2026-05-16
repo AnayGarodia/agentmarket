@@ -54,9 +54,17 @@ def verify_job(client: "AzteaClient", job_id: str) -> JSONObject:
         import json
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     except Exception:
+        # As of SDK 1.7.14, ``cryptography`` is a hard runtime dependency.
+        # Hitting this branch means the user's environment is older than
+        # 1.7.14 OR a transitive install broke the dep — point them at the
+        # SDK upgrade rather than asking them to pip-install the dep
+        # manually, which only papers over a stale install.
         return {
             "verified": False,
-            "verification_error": "cryptography library not installed (pip install cryptography)",
+            "verification_error": (
+                "cryptography library not available; run "
+                "`pip install --upgrade aztea` (SDK 1.7.14+ declares it)"
+            ),
             "agent_did": agent_did,
             "output_hash": output_hash,
             "signature_payload": signature_payload,
@@ -111,12 +119,41 @@ def verify_job(client: "AzteaClient", job_id: str) -> JSONObject:
         except Exception:
             signature_bytes = base64.b64decode(signature_b64 + sig_pad)
         pk = Ed25519PublicKey.from_public_bytes(public_key_bytes)
-        signed_bytes = json.dumps(
-            output_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
+        # Audit 2026-05-16 #5: v2 receipts bind (job_id, agent_id,
+        # output_hash). Reconstruct the sigil before verifying when the
+        # signature payload advertises the v2 scheme. Pre-v2 receipts
+        # still verify via the legacy raw-output path.
+        signature_alg = str(signature_payload.get("signature_alg") or "")
+        if signature_alg == "Ed25519+aztea-output-sig/2":
+            import hashlib as _hashlib
+
+            output_hash_v2 = _hashlib.sha256(
+                json.dumps(
+                    output_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            sigil = {
+                "v": "aztea/output-sig/2",
+                "job_id": str(signature_payload.get("job_id") or job_id),
+                "agent_id": str(signature_payload.get("agent_id") or ""),
+                "output_hash": output_hash_v2,
+            }
+            signed_bytes = json.dumps(
+                sigil,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        else:
+            signed_bytes = json.dumps(
+                output_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
         pk.verify(signature_bytes, signed_bytes)
     except Exception as exc:
         return {

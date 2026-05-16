@@ -55,6 +55,7 @@ _PUBLIC_PATH_PREFIXES = (
     "/static",
     "/assets",
     "/favicon.ico",
+    "/robots.txt",
     "/config/public",
     "/public/docs",
     "/docs/oauth2-redirect",

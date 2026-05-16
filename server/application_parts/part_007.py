@@ -489,7 +489,7 @@ def a2a_platform_agent_card(request: Request) -> JSONResponse:
     "/registry/agents/{agent_id}/agent.json",
     include_in_schema=True,
     tags=["A2A"],
-    summary="Google A2A: per-agent card. Also served at /.well-known/agent.json?agent_id=...",
+    summary="Google A2A: per-agent card. Also served at /agents/{agent_id}/agent.json and /.well-known/agent.json?agent_id=...",
     responses=_error_responses(404),
 )
 def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
@@ -502,6 +502,20 @@ def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
         content=_a2a_agent_card(agent),
         headers={"Content-Type": "application/json"},
     )
+
+
+# Standard A2A discovery placement (sibling of /.well-known/agent.json).
+# External tools looking up agent.json at the canonical /agents/{id}/agent.json
+# path used to 404; this alias keeps the existing /registry/... route intact
+# for back-compat while answering the standard location.
+@app.get(
+    "/agents/{agent_id}/agent.json",
+    include_in_schema=False,
+    tags=["A2A"],
+    responses=_error_responses(404),
+)
+def a2a_agent_card_alias(agent_id: str, request: Request) -> JSONResponse:
+    return a2a_agent_card(agent_id, request)
 
 
 # Polite 410 Gone for the well-known slugs of agents that used to be public
