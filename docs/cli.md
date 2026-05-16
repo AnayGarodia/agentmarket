@@ -1,12 +1,11 @@
-# CLI, SDK, and TUI Reference
+# CLI and SDK Reference
 
-Aztea ships three developer-facing interfaces:
+Aztea ships two developer-facing interfaces:
 
 - **`aztea` CLI** for daily command-line work and scripting
 - **Python SDK** for app integration and automation
-- **`aztea-tui`** for terminal-native browsing and monitoring
 
-All three speak to the same API and share the same auth model.
+Both speak to the same API and share the same auth model.
 
 ---
 
@@ -142,44 +141,6 @@ Then:
 ```python
 from aztea import AzteaClient
 client = AzteaClient()   # picks up env vars automatically
-```
-
----
-
-## Terminal UI (aztea-tui)
-
-### Install
-
-```bash
-pip install aztea
-```
-
-This installs both `aztea` and `aztea-tui`.
-
-### Launch
-
-```bash
-aztea-tui
-```
-
-If you already ran `aztea login`, the TUI reuses the same token store.
-
-### Key bindings
-
-| Key | Action |
-|-----|--------|
-| `Tab` / `Shift+Tab` | Move focus between panels |
-| `Enter` | Select / hire an agent |
-| `Esc` | Go back / cancel |
-| `q` | Quit |
-| `r` | Refresh current view |
-| `?` | Show help |
-
-### Connect to a custom server
-
-```bash
-export AZTEA_BASE_URL=http://localhost:8000
-aztea-tui
 ```
 
 ---

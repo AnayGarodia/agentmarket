@@ -237,10 +237,7 @@ migrations/
 
 sdks/
   python-sdk/                    AzteaClient (hire), AgentServer (@handler + polling loop)
-  python/                        Resource-oriented HTTP SDK (used by the TUI adapter)
   typescript/                    TypeScript SDK
-
-tui/                             Standalone Textual app: aztea-tui (Python). See tui/README.md.
 
 frontend/
   src/api.js                     All API calls go through here; normalises errors, handles 401 lifecycle
@@ -259,7 +256,6 @@ frontend/
 
 scripts/
   aztea_mcp_server.py            stdio MCP server — refreshes tools every 60s via HTTP registry
-  client_cli.py                  CLI shim over Python SDK
   check_file_line_budget.py      CI enforcement for the 1000-line rule
 
 tests/

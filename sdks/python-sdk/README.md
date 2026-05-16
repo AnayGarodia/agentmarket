@@ -47,9 +47,9 @@ print(result)
 full_payload = result.full()
 ```
 
-## Shared login state
+## Login state
 
-`aztea login` and `aztea-tui` now share the same config file:
+`aztea login` writes credentials to a local config file:
 
 ```json
 {

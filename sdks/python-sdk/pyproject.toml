@@ -27,7 +27,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tui = ["aztea-tui>=0.2.0"]
 dev = ["pytest>=7", "pytest-mock>=3"]
 
 [project.urls]

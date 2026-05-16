@@ -17,7 +17,6 @@ DEFAULT_EXCLUDES = [
     ".venv/*",
     "venv/*",
     ".release-venv/*",
-    "tui/.release-venv/*",
     "node_modules/*",
     "**/node_modules/*",
     "frontend/.venv/*",

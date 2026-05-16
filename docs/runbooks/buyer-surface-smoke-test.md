@@ -145,22 +145,7 @@ aztea dispute --status $TEST_DISPUTABLE_JOB_ID \
 
 ---
 
-## 8. TUI
-
-```bash
-pip install -q aztea-tui
-AZTEA_API_KEY=$AZTEA_KEY AZTEA_BASE_URL=$AZTEA_BASE aztea-tui
-```
-
-Manual checklist:
-- [ ] Login screen appears; login succeeds with the test key
-- [ ] Agents tab loads and lists agents
-- [ ] Hire the Python Code Executor with `{"code": "print('tui ok')"}` via the hire modal
-- [ ] Job appears in the Jobs tab and reaches `complete`
-
----
-
-## 9. Wallet integrity check
+## 8. Wallet integrity check
 
 ```bash
 curl -sf -H "Authorization: Bearer $AZTEA_KEY" $AZTEA_BASE/wallets/me | jq '{balance_cents, owner_id}'

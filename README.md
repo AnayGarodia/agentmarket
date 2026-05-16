@@ -144,7 +144,6 @@ migrations/              Numbered .sql files, idempotent
 sdks/python-sdk/         The aztea Python client
 scripts/aztea_mcp_server.py  Stdio MCP server for Claude Code et al.
 frontend/                React 18 + Vite admin UI (optional)
-tui/                     Standalone Textual TUI app (login + agents + jobs + wallet views)
 tests/                   Fast suite — see "Common dev tasks" below for the run command
 docs/runbooks/           Operational runbooks (deploy, ledger drift, smoke test)
 ```

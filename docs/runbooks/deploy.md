@@ -315,27 +315,14 @@ SMTP_FROM=noreply@aztea.ai
 - Register in the Stripe dashboard; set `STRIPE_WEBHOOK_SECRET` to the signing secret.
 - Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
-## Package distribution (PyPI + npm)
-
-Publish order matters: `aztea-tui` first, then `aztea` (which depends on it).
+## Package distribution (PyPI)
 
 ```bash
-# 1) TUI (PyPI)
-cd tui
+cd sdks/python-sdk
 python3 -m venv .release-venv && source .release-venv/bin/activate
 python -m pip install -U pip build twine
 python -m build
-python -m twine upload dist/aztea_tui-*
-
-# 2) SDK (PyPI)
-cd ../sdks/python-sdk
-source ../../tui/.release-venv/bin/activate
-python -m build
 python -m twine upload dist/aztea-*
-
-# 3) npm wrapper
-cd ../../tui/npm
-npm publish --access public --otp <code>
 ```
 
 Verification:
@@ -344,5 +331,5 @@ Verification:
 python3 -m venv /tmp/aztea-check && source /tmp/aztea-check/bin/activate
 pip install -U aztea
 python -c "import aztea; print(aztea.__version__)"
-which aztea-tui
+which aztea
 ```

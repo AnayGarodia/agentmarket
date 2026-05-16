@@ -65,8 +65,7 @@ frontend/src/
   ui/motion/                 Animation primitives (Reveal, Stagger, NumberMorph, etc.)
   theme/tokens.css            CSS variables for all colors, spacing, typography
 sdks/python-sdk/             AzteaClient, AgentServer
-tui/                         Textual terminal app
-scripts/                     MCP server, CLI shim, smoke test, release script
+scripts/                     MCP server, smoke test, release script
 migrations/                  SQL migrations — never delete, always add new
 .agents/                     Internal AI-facing docs (you are here)
 ```
