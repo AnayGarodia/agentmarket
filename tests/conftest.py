@@ -50,3 +50,25 @@ except ImportError:
     # Hypothesis not installed yet; property tests will surface the missing dep
     # at collection time rather than silently skipping.
     pass
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_store_per_test():
+    """Wipe core.rate_limit's in-process LRU store before every test.
+
+    Why: the rate limiter (PR #49) keeps a process-wide deque of request
+    timestamps per key. Without a reset, cumulative requests across
+    tests in the same pytest session can exhaust per-key buckets and
+    cascade into spurious `assert 429 == X` failures in unrelated
+    tests — pytest-randomly varies the order, so the cascade hits a
+    different set each run. The rate-limit-specific tests in
+    tests/test_bug_regressions.py and tests/integration/test_auth_rate_limits.py
+    already reset explicitly; this brings every other test up to that
+    baseline.
+    """
+    from core import rate_limit
+
+    rate_limit.reset_store_for_tests()
+    yield
