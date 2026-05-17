@@ -187,13 +187,19 @@ server {
 aztea.ai {
     # …existing reverse_proxy directives…
 
-    @elixir_socket path /elixir/socket /elixir/socket/*
-    reverse_proxy @elixir_socket 127.0.0.1:4000 {
-        header_up Connection {http.request.header.Connection}
-        header_up Upgrade    {http.request.header.Upgrade}
+    # Phoenix mounts the socket at /socket (see elixir/lib/aztea_web/endpoint.ex);
+    # strip the /elixir prefix before forwarding or you'll get 404s from Cowboy.
+    handle /elixir/socket* {
+        uri strip_prefix /elixir
+        reverse_proxy 127.0.0.1:4000 {
+            header_up Connection {http.request.header.Connection}
+            header_up Upgrade    {http.request.header.Upgrade}
+        }
     }
 }
 ```
+
+**Caddy gotcha (2026-05-17):** the earlier example used `@elixir_socket` matcher + bare `reverse_proxy` and did not strip the path prefix. Phoenix mounts at `/socket`, so it returned `404 Not Found` for `/elixir/socket/websocket`. The `uri strip_prefix /elixir` directive is required. `handle_path /elixir/socket*` does NOT work either — it strips too much (`/elixir/socket`), leaving `/websocket`, which Phoenix also rejects.
 
 ## Realtime job events (Elixir sidecar)
 
