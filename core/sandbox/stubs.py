@@ -82,23 +82,10 @@ def _simple_stub(
 
 _STUB_TEMPLATES: dict[str, dict[str, Any]] = {}
 
-#  sandbox_browser_session / _navigate / _screenshot / _console_logs landed
-# as real implementations in this change set — see core.sandbox.browser.
-# The remaining browser verbs below still stub against the same Playwright
-# pool follow-up issue so callers see a consistent surface.
-
-for verb, desc in {
-    "sandbox_browser_click": "Click selector",
-    "sandbox_browser_fill": "Fill selector with value",
-    "sandbox_browser_network": "Read network captures",
-    "sandbox_browser_a11y_tree": "Return the a11y tree",
-    "sandbox_browser_eval": "Evaluate JS in the page",
-    "sandbox_browser_axe_audit": "Run axe-core accessibility audit",
-    "sandbox_browser_lighthouse": "Run Lighthouse audit",
-    "sandbox_browser_record": "Record a click sequence",
-    "sandbox_browser_replay": "Replay a recorded sequence",
-}.items():
-    _STUB_TEMPLATES[verb] = _browser_stub(desc)
+# Every browser verb is now a real implementation in core.sandbox.browser.
+# The browser-stub template helper above is retained only for symmetry with
+# the other stub categories and as the template a future "browser_pdf" /
+# new verb would adopt.
 
 _STUB_TEMPLATES["sandbox_tunnel_open"] = {
     "planned_input_schema": {
@@ -106,10 +93,21 @@ _STUB_TEMPLATES["sandbox_tunnel_open"] = {
         "required": ["sandbox_id", "service", "port"],
         "properties": {
             "sandbox_id": {"type": "string"},
-            "service": {"type": "string"},
-            "port": {"type": "integer"},
-            "auth": {"type": "string", "enum": ["bearer", "none"]},
-            "hostname_hint": {"type": "string"},
+            "service": {"type": "string", "description": "Compose service to expose"},
+            "port": {"type": "integer", "description": "Container port to publish"},
+            "auth": {
+                "type": "string",
+                "enum": ["bearer", "none"],
+                "description": "Edge auth — bearer token issued by Aztea, or open",
+            },
+            "hostname_hint": {
+                "type": "string",
+                "description": "Optional human-readable hostname prefix (e.g. 'checkout-fix')",
+            },
+            "ttl_minutes": {
+                "type": "integer",
+                "description": "Tunnel lifetime; defaults to sandbox lifetime",
+            },
         },
         "additionalProperties": False,
     },
@@ -117,80 +115,148 @@ _STUB_TEMPLATES["sandbox_tunnel_open"] = {
         "type": "object",
         "properties": {
             "tunnel_id": {"type": "string"},
-            "public_url": {"type": "string"},
+            "public_url": {"type": "string", "format": "uri"},
+            "auth_token": {"type": "string"},
             "expires_at": {"type": "integer"},
         },
     },
-    "tracking_issue": "live-sandbox: public tunnels with TLS + edge auth",
+    "tracking_issue": "live-sandbox: public tunnels with TLS + Caddy/Cloudflare edge",
     "reason": (
-        "Public tunnels require an edge proxy (Caddy/Cloudflare) provisioned "
-        "alongside the engine. Out of scope for the engine PR."
+        "Public tunnels need an always-on edge proxy (Caddy with on-demand "
+        "TLS, or Cloudflare Tunnel) that proxies <hostname_hint>-<sandbox_id>."
+        "aztea.run to the container's port. The proxy must enforce the "
+        "bearer-token auth and expire when the sandbox stops. This is "
+        "infra work outside the agent module — tracked as its own rollout "
+        "alongside the webhook-inbox follow-up which builds on it."
     ),
 }
-_STUB_TEMPLATES["sandbox_tunnel_close"] = _STUB_TEMPLATES["sandbox_tunnel_open"]
+_STUB_TEMPLATES["sandbox_tunnel_close"] = {
+    **_STUB_TEMPLATES["sandbox_tunnel_open"],
+    "planned_input_schema": {
+        "type": "object",
+        "required": ["sandbox_id", "tunnel_id"],
+        "properties": {
+            "sandbox_id": {"type": "string"},
+            "tunnel_id": {"type": "string"},
+        },
+        "additionalProperties": False,
+    },
+}
 
 _STUB_TEMPLATES["sandbox_webhook_inbox"] = _simple_stub(
-    issue="live-sandbox: webhook inbox + replay",
+    issue="live-sandbox: webhook inbox + replay (builds on tunnels)",
     reason=(
-        "Webhook capture requires a per-sandbox proxy in front of the tunnel "
-        "to record incoming Stripe/GitHub payloads. Builds on the tunnel "
-        "issue above."
+        "Webhook capture is the proxy in front of sandbox_tunnel_open. It "
+        "buffers incoming POSTs (Stripe, GitHub Apps, etc.), signs each "
+        "with an Aztea receipt so replays are tamper-evident, and lets the "
+        "caller list / replay events at will. Cannot land before tunnels."
     ),
-    out_props={"events": {"type": "array"}, "count": {"type": "integer"}},
+    in_props={
+        "tunnel_id": {"type": "string"},
+        "since": {"type": "string", "format": "date-time"},
+        "limit": {"type": "integer"},
+    },
+    out_props={
+        "events": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "received_at": {"type": "integer"},
+                    "method": {"type": "string"},
+                    "path": {"type": "string"},
+                    "headers": {"type": "object"},
+                    "body_b64": {"type": "string"},
+                    "receipt": {"type": "object"},
+                },
+            },
+        },
+        "count": {"type": "integer"},
+    },
 )
 # sandbox_outbound_record / _replay landed as real engine actions in this
 # change set (see core.sandbox.vcr). The recorder PROXY itself — the
 # in-network HTTP middleware that captures requests — is still a follow-up;
 # the cassette format and the record/replay flip are now stable.
-_STUB_TEMPLATES["sandbox_inject_failure"] = _simple_stub(
-    issue="live-sandbox: chaos/failure injection",
+# sandbox_inject_failure is now an HTTP-layer chaos implementation in
+# core.sandbox.chaos (only sandbox_http_request is affected). The
+# NET_ADMIN-class kernel chaos (tc/qdisc, in-container toxiproxy) remains
+# the follow-up issue for arbitrary TCP/UDP traffic.
+_STUB_TEMPLATES["sandbox_network_capture"] = _simple_stub(
+    issue="live-sandbox: tcpdump + PCAP export (NET_RAW sidecar)",
     reason=(
-        "Packet loss + latency injection requires NET_ADMIN-capable sidecars; "
-        "tracked separately so the v0 default-deny posture stays intact."
+        "Wire-level packet capture needs a privileged sidecar attached to "
+        "the sandbox's docker network with NET_RAW. v0 stays default-deny "
+        "(no CAP_NET_RAW on any container); the sidecar lands as a separate "
+        "infra PR that operators can opt into per-host. HTTP-layer "
+        "introspection is already available via sandbox_browser_network "
+        "and sandbox_http_request response capture."
     ),
     in_props={
-        "target": {"type": "string"},
-        "kind": {"type": "string", "enum": ["latency", "loss", "abort"]},
-        "value": {"type": "number"},
+        "service": {"type": "string"},
+        "duration_seconds": {"type": "integer"},
+        "filter": {"type": "string", "description": "BPF filter expression"},
     },
-)
-_STUB_TEMPLATES["sandbox_network_capture"] = _simple_stub(
-    issue="live-sandbox: tcpdump + PCAP export",
-    reason="Requires NET_RAW-capable sidecar; tracked alongside chaos injection.",
+    out_props={
+        "pcap_path": {"type": "string"},
+        "packet_count": {"type": "integer"},
+        "duration_seconds": {"type": "integer"},
+    },
 )
 _STUB_TEMPLATES["sandbox_trace"] = _simple_stub(
-    issue="live-sandbox: strace/dtrace/py-spy attach",
+    issue="live-sandbox: strace / py-spy / perf attach (PTRACE sidecar)",
     reason=(
-        "Process attach requires PTRACE_ATTACH and varies per host kernel; "
-        "deferred to a privileged-helper PR."
+        "Process attach requires SYS_PTRACE on the target container and the "
+        "right kernel headers / debug symbols on the host. Both are "
+        "host-policy concerns, not agent-module work. Deferred to the "
+        "privileged-helper sidecar PR alongside network_capture."
     ),
     in_props={
+        "service": {"type": "string"},
         "pid": {"type": "integer"},
-        "tool": {"type": "string", "enum": ["strace", "py-spy", "perf"]},
+        "tool": {
+            "type": "string",
+            "enum": ["strace", "py-spy", "perf", "async-profiler"],
+        },
+        "duration_seconds": {"type": "integer"},
+    },
+    out_props={
+        "flamegraph_url": {"type": "string"},
+        "summary": {"type": "string"},
+        "samples": {"type": "integer"},
     },
 )
-_STUB_TEMPLATES["sandbox_link"] = _simple_stub(
-    issue="live-sandbox: multi-sandbox network linking",
-    reason=(
-        "Cross-sandbox docker network attach; tracked as a follow-up so the "
-        "v0 single-sandbox path doesn't depend on it."
-    ),
-    in_props={"other_sandbox_id": {"type": "string"}},
-)
+# sandbox_link landed as a real implementation in core.sandbox.link.
+# Multi-host overlay (Docker Swarm / k8s service mesh) is a separate
+# infra follow-up.
 # sandbox_batch_start landed as a real implementation in this change set —
 # see core.sandbox.lifecycle.batch_start. The wallet-hold integration is
 # still tracked separately (see batch_start's billing_notice).
 _STUB_TEMPLATES["sandbox_share"] = _simple_stub(
-    issue="live-sandbox: shared read-only / collab sessions",
-    reason="Edge multiplexer required for terminal-share; v0 stays single-actor.",
-    in_props={"access": {"type": "string", "enum": ["read", "full"]}},
-    out_props={"share_url": {"type": "string"}},
+    issue="live-sandbox: shared collab sessions (edge multiplexer)",
+    reason=(
+        "Terminal-share / co-view is a separate product surface. It needs "
+        "an edge multiplexer (Caddy + Websocat or a custom relay) plus a "
+        "consent model so the inviter can scope access (read / full). "
+        "Tracked as its own infra rollout, not engine work."
+    ),
+    in_props={
+        "access": {"type": "string", "enum": ["read", "full"]},
+        "ttl_minutes": {"type": "integer"},
+        "actor_hint": {"type": "string"},
+    },
+    out_props={
+        "share_id": {"type": "string"},
+        "share_url": {"type": "string", "format": "uri"},
+        "join_token": {"type": "string"},
+        "expires_at": {"type": "integer"},
+    },
 )
-_STUB_TEMPLATES["sandbox_export_snapshot"] = _simple_stub(
-    issue="live-sandbox: export snapshot to user-owned bucket",
-    reason="Snapshot export needs Aztea wallet bucket creds — tracked next to the wallet PR.",
-    in_props={"destination_uri": {"type": "string"}},
-)
+# sandbox_export_snapshot now ships the file:// destination path in
+# core.sandbox.export. Cloud-bucket destinations (s3://, gs://, etc.)
+# remain the hosted-mode follow-up because they require wallet bucket
+# credentials.
 
 
 def stub_for(action: str) -> dict[str, Any]:

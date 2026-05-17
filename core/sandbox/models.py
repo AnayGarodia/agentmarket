@@ -98,6 +98,7 @@ ALL_ACTIONS = (
     "sandbox_browser_a11y_tree",
     "sandbox_browser_eval",
     "sandbox_browser_axe_audit",
+    "sandbox_browser_close",
     "sandbox_browser_lighthouse",
     "sandbox_browser_record",
     "sandbox_browser_replay",

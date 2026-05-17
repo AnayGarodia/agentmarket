@@ -16,10 +16,13 @@ from typing import Any, Callable
 
 from core.sandbox import (
     browser,
+    chaos,
     database,
+    export,
     filesystem,
     http_ops,
     lifecycle,
+    link,
     observability,
     run_ops,
     snapshots,
@@ -127,12 +130,25 @@ HANDLERS: dict[str, Handler] = {
     # outbound vcr
     "sandbox_outbound_record": vcr.outbound_record,
     "sandbox_outbound_replay": vcr.outbound_replay,
-    # browser session (minimum viable slice)
+    # browser session — full surface
     "sandbox_browser_session": browser.session_open,
     "sandbox_browser_close": browser.session_close,
     "sandbox_browser_navigate": browser.navigate,
     "sandbox_browser_screenshot": browser.screenshot,
     "sandbox_browser_console_logs": browser.console_logs,
+    "sandbox_browser_click": browser.click,
+    "sandbox_browser_fill": browser.fill,
+    "sandbox_browser_eval": browser.eval_js,
+    "sandbox_browser_network": browser.network,
+    "sandbox_browser_a11y_tree": browser.a11y_tree,
+    "sandbox_browser_axe_audit": browser.axe_audit,
+    "sandbox_browser_lighthouse": browser.lighthouse,
+    "sandbox_browser_record": browser.record_start,
+    "sandbox_browser_replay": browser.replay,
+    # multi-sandbox / export / chaos
+    "sandbox_link": link.link,
+    "sandbox_export_snapshot": export.export_snapshot,
+    "sandbox_inject_failure": chaos.inject_failure,
     # audit + cost
     "sandbox_audit": _audit_action,
     "sandbox_cost": _cost_action,
