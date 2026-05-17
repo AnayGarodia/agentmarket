@@ -19,6 +19,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import time
+
+from core.sandbox import chaos as _chaos
 from core.sandbox.docker_cli import run_docker
 from core.sandbox.models import SandboxInvalidInput
 from core.sandbox.secrets_store import all_secret_values, redact
@@ -51,6 +54,19 @@ def sandbox_http(payload: dict[str, Any]) -> dict[str, Any]:
     container = _http_helper_container(state)
     if not shutil.which("docker"):
         raise SandboxInvalidInput("docker not available")
+    # Audit 2026-05-17 stub fill: sandbox_inject_failure rules are evaluated
+    # against every URL before the curl call. The chaos layer can short-
+    # circuit (loss/abort) or delay before proceeding.
+    chaos_outcome = _apply_chaos(state, url)
+    if chaos_outcome.get("action") == "loss":
+        return _synthetic_response(state, status=None, body="", timed_out=True)
+    if chaos_outcome.get("action") == "abort":
+        return _synthetic_response(
+            state,
+            status=int(chaos_outcome.get("status") or 503),
+            body=str(chaos_outcome.get("synthetic_body") or ""),
+            timed_out=False,
+        )
     return _curl_in_container(
         state=state,
         container=container,
@@ -205,6 +221,38 @@ def _ensure_jar_path(state: SandboxState, jar_key: str) -> Path:
 def _shell_quote(value: str) -> str:
     """Pure: minimal POSIX shell quote suitable for sh -lc."""
     return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def _apply_chaos(state: SandboxState, url: str) -> dict[str, Any]:
+    """Side-effect: consult chaos.apply_to_url and sleep on a delay rule."""
+    outcome = _chaos.apply_to_url(state.sandbox_id, url)
+    if outcome.get("action") == "delay":
+        delay_ms = int(outcome.get("delay_ms") or 0)
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+    return outcome
+
+
+def _synthetic_response(
+    state: SandboxState,
+    *,
+    status: int | None,
+    body: str,
+    timed_out: bool,
+) -> dict[str, Any]:
+    """Pure: shape a synthetic chaos response in the normal sandbox_http envelope."""
+    state.touch()
+    return {
+        "sandbox_id": state.sandbox_id,
+        "status_code": status,
+        "headers": {},
+        "body": body,
+        "duration_ms": None,
+        "jar_key": "default",
+        "stderr": "",
+        "chaos_applied": True,
+        "timed_out": timed_out,
+    }
 
 
 def _require(payload: dict[str, Any]) -> SandboxState:
