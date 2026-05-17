@@ -14,6 +14,7 @@ _None at present._
 
 ## Done — recent
 <!-- Last 5–10 shipped items with date and commit short sha. Trim aggressively. -->
+- 2026-05-17 — **Prod-side: suspended the 6 misconfigured agents from the test report.** `POST /admin/agents/{id}/suspend` against prod for `image_generator_agent` (4fb167bd), `type_checker` (5b140628), `linter_agent` (7ec4c987), `sql_explainer` (91258740), `arxiv_research_agent` (9e673f6e), `financial_research_agent` (b7741251) — all returned 200; verified each row now reports `status=suspended` via `GET /registry/agents/{id}`. `docs_grounder` (7a93b924) also shows suspended on prod (consistent with the code-side SUNSET_DEPRECATED_AGENT_IDS add). All 7 hidden from default catalog listings.
 - 2026-05-17 — **Five 2026-05-17 test-report fixes.** (1) Streaming pipeline cut from public MCP: `aztea_call_streaming` + `aztea_steer` removed from the 7-tool lazy surface (was 9); dispatch returns `tool_not_supported` for legacy clients; backend mechanics (`/jobs` stop_when + `/jobs/{id}/messages` steer) still work and are reachable via `manage_job`. (2) `docs_grounder` sunsetted: added to `SUNSET_DEPRECATED_AGENT_IDS`, removed from `CURATED_PUBLIC_BUILTIN_AGENT_IDS`; curated count 29 → 28. The other 6 misconfigured agents from the report are prod-DB-only — see Backlog. (3) `hire_batch` registry-search timeout: new `registry.get_agents_by_ids()` (bulk SELECT … WHERE agent_id IN (…)); `POST /jobs/batch` hoists per-row `registry.get_agent` to one query. (4) Recipe step DB transaction discipline: `core/pipelines/executor.py` now calls `_reset_thread_db_state()` between nodes and on step-exception, closing the `InFailedSqlTransaction` leak observed in `domain-health`. (5) `/registry/agents/{id}/call` 504 envelope now includes `retry_via`, `retry_async_path: /jobs`, and `retry_payload: {agent_id}` so SDKs can auto-retry on the async route without consulting docs. SDK 1.7.15 → 1.7.16. Docs swept (CLAUDE.md, README.md, docs/cli.md, docs/quickstart.md, docs/mcp-integration.md, docs/claude-code-power-user.md, docs/oss-vs-hosted.md).
 - 2026-05-17 — **Cut public SKILL.md publishing.** `aztea publish *.skill.md` now exits 2 with a clear "publish via .py handler or agent.md" hint. `_detect.py` no longer defaults ambiguous .md files to SKILL.md (raises with an actionable error instead). Wizard collapsed from 3 options to 2 (External webhook, Python handler). Server-side `/skills` POST + `/skills/validate` restricted to master callers (used for Aztea-authored composer tools). Test report 2026-05-17 confirmed prompt-only SKILL.md tools fail the brutal value test — a caller's own LLM can replicate them. Plus CLI hardening: local agent.md JSON metadata pre-validation (name/description/endpoint/price/schemas), HTTPS endpoint reachability probe (`AZTEA_SKIP_ENDPOINT_PROBE=1` for tests), structured server error envelope rendering. SDK bumped 1.7.14 → 1.7.15. (193 unit tests + 32 wizard tests + skill auth-matrix all green.)
 - 2026-05-17 — Elixir realtime fan-out fully live. Caddyfile patched on prod (`/etc/caddy/Caddyfile` now uses `handle /elixir/socket*` + `uri strip_prefix /elixir` to forward `/socket/...` to Phoenix on 127.0.0.1:4000); `sudo systemctl reload caddy` applied; WebSocket handshake against `https://aztea.ai/elixir/socket/websocket?token=…` now returns 403 for bad tokens (was 404 — Phoenix is reachable). `AZTEA_ELIXIR_EVENTS=1`, `ELIXIR_INTERNAL_SHARED_SECRET` set on both services, port 4000 ok, `aztea-elixir.service` active and sweeping. Caddy reference in `docs/runbooks/deploy.md` corrected so the bug doesn't reappear on a future provision.
@@ -40,17 +41,8 @@ _None at present._
 
 ### From the 2026-05-17 extensive test report
 
-All 5 items addressed at the code level on 2026-05-17 (commit pending). The
-follow-up below covers what's left at the operational / prod-data layer.
-
-- [ ] **Delist 6 prod-DB-only misconfigured agents.** `docs_grounder` was
-  sunsetted in code; the remaining six from the test report —
-  `image_generator_agent`, `type_checker`, `linter_agent`, `sql_explainer`,
-  `arxiv_research_agent`, `financial_research_agent` — aren't in
-  `server/builtin_agents/` and are likely third-party listings or live
-  rows that need an admin delist call against prod. Run a one-off
-  delist script after deploy: `aztea-cli admin delist <agent_id>` per
-  agent, OR `DELETE /registry/agents/{id}` with the master key.
+All 5 items addressed at the code level + prod-side cleanup on 2026-05-17.
+Nothing outstanding from the report.
 
 ### Pre-existing
 - [ ] **Postgres charge race-guard hardening.** `core/payments/base.py:18` notes phantom-read risk under READ COMMITTED. SQLite path uses `BEGIN IMMEDIATE` and is solid. Add a Postgres concurrency stress test before high-load prod traffic.
