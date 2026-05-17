@@ -15,6 +15,7 @@ import pytest
 
 from tests.integration.support import *  # noqa: F401,F403
 from tests.integration.support import (
+    TEST_MASTER_KEY,
     _auth_headers,
     _manifest,
     _register_agent_via_api,
@@ -24,6 +25,12 @@ from tests.integration.support import (
 
 # ---------------------------------------------------------------------------
 # SKILL.md content parity across /skills and /skills/validate
+#
+# 2026-05-17: public SKILL.md publishing was removed. Both /skills and
+# /skills/validate are now master-only. Parity tests run as master to keep
+# the scanner-equivalence coverage in place for Aztea-authored compositions.
+# Non-master callers are covered by test_publish_skill_public_is_disabled
+# in test_publish_flow.py.
 # ---------------------------------------------------------------------------
 
 
@@ -51,10 +58,9 @@ _SKILL_KEY_LEAK = (
     ids=["clean", "prompt_injection", "embedded_api_key"],
 )
 def test_skill_post_blocks_consistently(client, body, expected_status):
-    user = _register_user()
     resp = client.post(
         "/skills",
-        headers=_auth_headers(user["raw_api_key"]),
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={"skill_md": body, "price_per_call_usd": 0.02},
     )
     assert resp.status_code == expected_status, resp.text
@@ -62,10 +68,9 @@ def test_skill_post_blocks_consistently(client, body, expected_status):
 
 def test_skill_validate_blocks_injected_content(client):
     """Fixed: /skills/validate now runs the same scanner as /skills."""
-    user = _register_user()
     resp = client.post(
         "/skills/validate",
-        headers=_auth_headers(user["raw_api_key"]),
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={"skill_md": _SKILL_INJECTION},
     )
     assert resp.status_code == 400, resp.text
@@ -76,14 +81,44 @@ def test_skill_validate_blocks_injected_content(client):
 
 def test_skill_validate_passes_clean_content(client):
     """Control: clean content still gets a valid=true preview."""
+    resp = client.post(
+        "/skills/validate",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": _SKILL_CLEAN},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json().get("valid") is True
+
+
+# ---------------------------------------------------------------------------
+# Public route is closed: 2026-05-17 — non-master callers can't publish
+# SKILL.md at all. Pinned here so a future "accidentally re-open the route"
+# regression catches us.
+# ---------------------------------------------------------------------------
+
+
+def test_skill_post_non_master_is_403(client):
+    user = _register_user()
+    resp = client.post(
+        "/skills",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"skill_md": _SKILL_CLEAN, "price_per_call_usd": 0.02},
+    )
+    assert resp.status_code == 403, resp.text
+    envelope = resp.json().get("detail", resp.json())
+    assert envelope.get("error") == "skills.public_publish_disabled"
+
+
+def test_skill_validate_non_master_is_403(client):
     user = _register_user()
     resp = client.post(
         "/skills/validate",
         headers=_auth_headers(user["raw_api_key"]),
         json={"skill_md": _SKILL_CLEAN},
     )
-    assert resp.status_code == 200, resp.text
-    assert resp.json().get("valid") is True
+    assert resp.status_code == 403, resp.text
+    envelope = resp.json().get("detail", resp.json())
+    assert envelope.get("error") == "skills.public_publish_disabled"
 
 
 # ---------------------------------------------------------------------------

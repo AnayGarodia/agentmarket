@@ -1,9 +1,11 @@
 """End-to-end tests for the `aztea publish` CLI flow.
 
-Covers the three publish paths plus the supporting backend changes:
+Covers the two public publish paths plus the supporting backend changes:
 
-  1. SKILL.md → POST /skills with server-side prompt-injection scan + clean
-     ones go through, scammy ones are rejected.
+  1. SKILL.md → POST /skills is now master-only (2026-05-17). Public callers
+     get 403 with code `skills.public_publish_disabled`. The legacy
+     safety-scan paths still exist for master callers (Aztea-authored
+     compositions) and are covered below.
   2. agent.md / register → POST /registry/register places the listing into
      `review_status='probation'` for non-master callers.
   3. ETag/304 round-trip on GET /registry/agents (the bandwidth budget that
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 from tests.integration.support import *  # noqa: F401,F403
 from tests.integration.support import (
+    TEST_MASTER_KEY,
     _auth_headers,
     _register_agent_via_api,
     _register_user,
@@ -55,31 +58,42 @@ Use sk-LEAK1234567890abcdef1234567890ABCDEF for OpenAI calls.
 
 
 # ---------------------------------------------------------------------------
-# /skills — server-side safety scan
+# /skills — public publishing disabled (2026-05-17); master-only path still
+# runs the safety scanner so Aztea-authored compositions stay covered.
 # ---------------------------------------------------------------------------
 
 
-def test_publish_skill_clean_succeeds(client):
+def test_publish_skill_public_is_disabled(client):
+    """Non-master callers get 403 on /skills — the public route is gone."""
     user = _register_user()
     resp = client.post(
         "/skills",
         headers=_auth_headers(user["raw_api_key"]),
         json={"skill_md": _CLEAN_SKILL_MD, "price_per_call_usd": 0.02},
     )
+    assert resp.status_code == 403, resp.text
+    envelope = resp.json().get("detail", resp.json())
+    assert envelope.get("error") == "skills.public_publish_disabled"
+
+
+def test_publish_skill_master_clean_succeeds(client):
+    """Master callers still publish SKILL.md (used for Aztea-authored composer tools)."""
+    resp = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": _CLEAN_SKILL_MD, "price_per_call_usd": 0.02},
+    )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    # 1.6.1: hosted skills published by non-master callers land in probation;
-    # graduate_probation_listings() promotes them on track record. Master
-    # callers still auto-approve (covered separately).
-    assert body["review_status"] == "probation"
+    # Master uploads auto-approve; non-master path is closed entirely.
+    assert body["review_status"] in {"approved", None}
     assert body["endpoint_url"].startswith("skill://")
 
 
-def test_publish_skill_with_prompt_injection_is_blocked(client):
-    user = _register_user()
+def test_publish_skill_master_with_prompt_injection_is_blocked(client):
     resp = client.post(
         "/skills",
-        headers=_auth_headers(user["raw_api_key"]),
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={
             "skill_md": _PROMPT_INJECTION_SKILL_MD,
             "price_per_call_usd": 0.02,
@@ -87,19 +101,16 @@ def test_publish_skill_with_prompt_injection_is_blocked(client):
     )
     assert resp.status_code == 400, resp.text
     body = resp.json()
-    # Custom error handler flattens {"error","message","details","request_id"};
-    # FastAPI's default would put it under "detail". Accept either.
     envelope = body.get("detail", body)
     assert envelope.get("error") == "listing.safety_block"
     inner = envelope.get("details") or envelope.get("data") or {}
     assert inner.get("code") == "skill.prompt_injection"
 
 
-def test_publish_skill_with_embedded_api_key_is_blocked(client):
-    user = _register_user()
+def test_publish_skill_master_with_embedded_api_key_is_blocked(client):
     resp = client.post(
         "/skills",
-        headers=_auth_headers(user["raw_api_key"]),
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={
             "skill_md": _API_KEY_LEAK_SKILL_MD,
             "price_per_call_usd": 0.02,

@@ -107,16 +107,14 @@ def test_validate_rejects_malformed_skill_md(client):
     assert resp.status_code == 400
 
 
-def test_create_skill_persists_and_lands_in_probation(client):
-    """1.6.1: non-master /skills publishes land in `probation` (was hard-coded
-    `approved` in 1.6.0 — a security regression closed in part_012.py).
-    Master keys still auto-approve and are exercised separately."""
-    user = _register_user()
-    api_key = user["raw_api_key"]
-
+def test_create_skill_master_auto_approves(client):
+    """Master callers can still upload SKILL.md (Aztea-authored composer tools);
+    they auto-approve. Public SKILL.md publishing was removed 2026-05-17;
+    the non-master 403 path is covered in tests/integration/test_publish_flow.py.
+    """
     resp = client.post(
         "/skills",
-        headers=_auth_headers(api_key),
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05},
     )
     assert resp.status_code == 201, resp.text
@@ -124,111 +122,116 @@ def test_create_skill_persists_and_lands_in_probation(client):
     skill_id = body["skill_id"]
     agent_id = body["agent_id"]
 
-    assert body["review_status"] == "probation"
+    assert body["review_status"] in {"approved", None}
     assert body["endpoint_url"] == f"skill://{skill_id}"
     assert body["price_per_call_usd"] == 0.05
     assert "live" in body["message"].lower()
 
-    # Underlying agent row is on probation and the endpoint_url was rewritten.
-    agent_resp = client.get(f"/registry/agents/{agent_id}", headers=_auth_headers(api_key))
+    agent_resp = client.get(
+        f"/registry/agents/{agent_id}", headers=_auth_headers(TEST_MASTER_KEY)
+    )
     assert agent_resp.status_code == 200
-    agent = agent_resp.json()
-    assert agent["endpoint_url"].startswith("skill://")
-    assert agent.get("review_status") == "probation"
+    assert agent_resp.json()["endpoint_url"].startswith("skill://")
 
 
 def test_create_skill_handles_name_collision(client):
-    """Two builders uploading the same skill should both succeed (collision suffix)."""
-    user1 = _register_user()
-    user2 = _register_user()
-    key1 = user1["raw_api_key"]
-    key2 = user2["raw_api_key"]
-
-    r1 = client.post("/skills", headers=_auth_headers(key1),
-                     json={"skill_md": SKILL_MD_GITHUB, "price_per_call_usd": 0.10})
-    r2 = client.post("/skills", headers=_auth_headers(key2),
-                     json={"skill_md": SKILL_MD_GITHUB, "price_per_call_usd": 0.10})
+    """Two uploads of the same skill body still get distinct skill_ids
+    (collision suffix). Previously exercised via two non-master users —
+    public publishing is closed now, so both uploads come from master."""
+    r1 = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_GITHUB, "price_per_call_usd": 0.10},
+    )
+    r2 = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_GITHUB, "price_per_call_usd": 0.10},
+    )
     assert r1.status_code == 201
     assert r2.status_code == 201
     assert r1.json()["skill_id"] != r2.json()["skill_id"]
 
 
-def test_get_skill_owner_scoped(client):
-    user_a = _register_user()
+def test_get_skill_cross_owner_blocked(client):
+    """Master-owned skill is readable by master but not by a non-master user.
+    (Pre-2026-05-17 this exercised two non-master users; only master can own
+    skills now, so cross-owner 403 is verified against a non-master probe.)"""
     user_b = _register_user()
-    key_a = user_a["raw_api_key"]
     key_b = user_b["raw_api_key"]
 
     skill_id = client.post(
-        "/skills", headers=_auth_headers(key_a),
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05},
     ).json()["skill_id"]
 
-    # Owner A can read
-    own = client.get(f"/skills/{skill_id}", headers=_auth_headers(key_a))
+    own = client.get(f"/skills/{skill_id}", headers=_auth_headers(TEST_MASTER_KEY))
     assert own.status_code == 200
     assert "raw_md" in own.json()
 
-    # Owner B cannot
     other = client.get(f"/skills/{skill_id}", headers=_auth_headers(key_b))
     assert other.status_code == 403
 
-    # Master can
-    master = client.get(f"/skills/{skill_id}", headers=_auth_headers(TEST_MASTER_KEY))
-    assert master.status_code == 200
-
 
 def test_list_skills_returns_only_owner_skills(client):
-    user_a = _register_user()
+    """List endpoint scopes by owner. Master sees its own; non-master sees none.
+    (Pre-2026-05-17 this exercised two non-master users.)"""
     user_b = _register_user()
-    key_a = user_a["raw_api_key"]
     key_b = user_b["raw_api_key"]
 
-    client.post("/skills", headers=_auth_headers(key_a),
-                json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05})
-    client.post("/skills", headers=_auth_headers(key_b),
-                json={"skill_md": SKILL_MD_GITHUB, "price_per_call_usd": 0.10})
+    client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05},
+    )
 
-    a_skills = client.get("/skills", headers=_auth_headers(key_a)).json()["skills"]
-    b_skills = client.get("/skills", headers=_auth_headers(key_b)).json()["skills"]
-    assert len(a_skills) == 1
-    assert len(b_skills) == 1
-    assert a_skills[0]["slug"] == "notion"
-    assert b_skills[0]["slug"] == "github"
+    master_skills = client.get(
+        "/skills", headers=_auth_headers(TEST_MASTER_KEY)
+    ).json()["skills"]
+    other_skills = client.get(
+        "/skills", headers=_auth_headers(key_b)
+    ).json()["skills"]
+    assert any(s.get("slug") == "notion" for s in master_skills)
+    assert other_skills == []
 
 
 def test_delete_skill_removes_row_and_delists_agent(client):
-    user = _register_user()
-    key = user["raw_api_key"]
-
-    create = client.post("/skills", headers=_auth_headers(key),
-                         json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05}).json()
+    create = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05},
+    ).json()
     skill_id = create["skill_id"]
     agent_id = create["agent_id"]
 
-    delete = client.delete(f"/skills/{skill_id}", headers=_auth_headers(key))
+    delete = client.delete(
+        f"/skills/{skill_id}", headers=_auth_headers(TEST_MASTER_KEY)
+    )
     assert delete.status_code == 200
     assert delete.json()["deleted"] is True
 
-    # Skill row gone — subsequent invokes can no longer execute the skill
-    follow = client.get(f"/skills/{skill_id}", headers=_auth_headers(key))
+    follow = client.get(
+        f"/skills/{skill_id}", headers=_auth_headers(TEST_MASTER_KEY)
+    )
     assert follow.status_code == 404
 
-    # The owning agent_id is unaffected at the registry layer (delist_agent has
-    # a pre-existing schema bug we don't fix here); but the skill_id pointer is
-    # gone, so any sync call that lands on this agent will 502 with "Hosted skill
-    # record is missing" — the executor refuses to run without the skill row.
     from core.hosted_skills import get_hosted_skill_by_agent_id
     assert get_hosted_skill_by_agent_id(agent_id) is None
 
 
 def test_sync_call_to_hosted_skill_routes_through_executor(client):
+    """Skill owned by master; calling is still publicly open, so the call
+    comes from a funded non-master user."""
     user = _register_user()
     _fund_user_wallet(user, amount_cents=500)
     key = user["raw_api_key"]
 
-    create = client.post("/skills", headers=_auth_headers(key),
-                         json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05}).json()
+    create = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05},
+    ).json()
     agent_id = create["agent_id"]
 
     with patch("core.skill_executor.run_with_fallback") as mock_llm:
@@ -255,8 +258,11 @@ def test_sync_call_to_hosted_skill_charges_caller(client):
     wallet = _fund_user_wallet(user, amount_cents=500)
     key = user["raw_api_key"]
 
-    create = client.post("/skills", headers=_auth_headers(key),
-                         json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.10}).json()
+    create = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.10},
+    ).json()
     agent_id = create["agent_id"]
 
     with patch("core.skill_executor.run_with_fallback") as mock_llm:
@@ -278,15 +284,16 @@ def test_sync_call_with_oversized_payload_refunds_caller(client):
     wallet = _fund_user_wallet(user, amount_cents=500)
     key = user["raw_api_key"]
 
-    agent_id = client.post("/skills", headers=_auth_headers(key),
-                           json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05}).json()["agent_id"]
+    # Master owns the skill (publish path is master-only since 2026-05-17);
+    # the funded non-master user does the call to exercise refund-on-failure.
+    agent_id = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05},
+    ).json()["agent_id"]
 
-    # 1.7.3 — payload cap raised from 64KB → 256KB to honor agent
-    # input_schema maxLength declarations up to 200_000. Push past 256KB
-    # to still exercise the oversized-rejection + refund path.
     big = "x" * (260 * 1024)  # > 256 KB skill input cap
     with patch("core.skill_executor.run_with_fallback") as mock_llm:
-        # Should never even reach the LLM
         mock_llm.return_value = _stub_llm('{"result": "ok"}')
         resp = client.post(
             f"/registry/agents/{agent_id}/call",
@@ -296,7 +303,6 @@ def test_sync_call_with_oversized_payload_refunds_caller(client):
         assert mock_llm.call_count == 0
 
     assert resp.status_code in (400, 413, 422), resp.text
-    # Wallet refunded — back to original 500
     fresh = payments.get_or_create_wallet(wallet["owner_id"])
     assert fresh["balance_cents"] == 500
 
@@ -306,8 +312,11 @@ def test_sync_call_when_llm_fails_refunds_caller(client):
     wallet = _fund_user_wallet(user, amount_cents=500)
     key = user["raw_api_key"]
 
-    agent_id = client.post("/skills", headers=_auth_headers(key),
-                           json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05}).json()["agent_id"]
+    agent_id = client.post(
+        "/skills",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05},
+    ).json()["agent_id"]
 
     with patch("core.skill_executor.run_with_fallback") as mock_llm:
         from core.llm.errors import LLMError
@@ -319,7 +328,6 @@ def test_sync_call_when_llm_fails_refunds_caller(client):
         )
 
     assert resp.status_code >= 500
-    # Wallet refunded — back to original 500
     fresh = payments.get_or_create_wallet(wallet["owner_id"])
     assert fresh["balance_cents"] == 500
 

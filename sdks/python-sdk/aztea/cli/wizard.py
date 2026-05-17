@@ -1,15 +1,19 @@
 """Interactive `aztea publish` wizard.
 
 Drops the user into a guided flow when `aztea publish` is invoked with no
-path argument. Handles the three publishing paths in plain English:
+path argument. Handles the two publishing paths in plain English:
 
-    1. Hosted skill (*.skill.md)        — runs on Aztea, no infra
-    2. External webhook (agent.md)      — manifest pointing at your URL
-    3. Python handler (.py)             — scaffold + your endpoint URL
+    1. External webhook (agent.md)      — manifest pointing at your URL
+    2. Python handler (.py)             — scaffold + your endpoint URL
 
 Generates a starter file in the current working directory, then dispatches
 into the existing `publish` flow so the safety scanner and registration
 logic stay identical to the path-given case.
+
+SKILL.md hosted-skill publishing was removed 2026-05-17. The brutal test:
+"can the caller's own LLM trivially replicate this from a prompt?"
+SKILL.md tools failed that test. Specialized agents — code, live data,
+real integrations — pass it, which is why .py and agent.md stay.
 """
 from __future__ import annotations
 
@@ -90,8 +94,6 @@ def run_wizard(
     try:
         kind = _ask_kind()
         if kind == 1:
-            path = _wizard_skill_md()
-        elif kind == 2:
             path = _wizard_agent_md()
         else:
             path = _wizard_python_handler()
@@ -141,16 +143,12 @@ def _ask_kind() -> int:
         "What kind of agent are you publishing?",
         options=[
             (
-                "Hosted skill",
-                "markdown-only, runs on Aztea (easiest)",
-            ),
-            (
                 "External webhook",
-                "manifest pointing at a URL you host",
+                "agent.md manifest pointing at a URL you host",
             ),
             (
                 "Python handler",
-                ".py file with def handler(payload)",
+                ".py file with def handler(payload); you host the endpoint",
             ),
         ],
         default=1,
@@ -158,54 +156,7 @@ def _ask_kind() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Path 1 — hosted SKILL.md
-# ---------------------------------------------------------------------------
-
-
-def _wizard_skill_md() -> Path:
-    name = _p.ask(
-        "Name (lowercase, dashes ok)",
-        default=_default_name_from_cwd(),
-        validator=_p.slug_validator,
-    )
-    description = _p.ask(
-        "One-sentence description",
-        validator=_p.description_validator,
-        hint="What does your agent do, in plain English?",
-    )
-    emoji = _p.ask(
-        "Emoji (optional, press Enter to skip)",
-        default="",
-        validator=_p.emoji_validator,
-    )
-    body = _p.multiline_or_editor(
-        "Now write your skill body — the prompt the LLM sees.",
-        initial=_skill_body_seed(name, description),
-        suffix=".skill.md",
-    )
-    if not body:
-        body = "Describe what your agent should do here."
-
-    rendered = Template(_load_template("skill_md.template")).substitute(
-        name=name,
-        description=description,
-        body=body,
-        emoji_line=f"\nemoji: {emoji}" if emoji else "",
-    )
-    return _write_file(f"{name}.skill.md", rendered)
-
-
-def _skill_body_seed(name: str, description: str) -> str:
-    return (
-        f"# {name}\n\n"
-        f"{description}\n\n"
-        "## Instructions\n"
-        "Describe how the LLM should respond. Keep it short and concrete.\n"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Path 2 — agent.md manifest
+# Path 1 — agent.md manifest
 # ---------------------------------------------------------------------------
 
 

@@ -1,18 +1,25 @@
 """publish: list a new agent on Aztea from the terminal.
 
 Usage:
-    aztea publish ./word-counter.skill.md
     aztea publish ./agent.md --price 0.05 --tags research
     aztea publish ./my_handler.py --endpoint https://my.host/run
 
 Auto-detects file kind. Runs the verification gate before hitting the server.
 Fire-and-forget — exits as soon as the listing is registered. Buyers using
 `aztea` MCP will see the new agent within ~5 s.
+
+Note: SKILL.md hosted-skill publishing is no longer a public path
+(2026-05-17). Specialized agents — code execution, live data, real
+integrations — pass our value test; prompt-only SKILL.md tools do not.
+Use the .py handler path or the agent.md external-endpoint path.
 """
 from __future__ import annotations
 
 import json
 import re
+import socket
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
@@ -85,9 +92,26 @@ except ImportError:
 # Single command (not a Typer sub-app) so `aztea publish <path>` reads
 # naturally at the top level alongside `aztea hire ...`.
 
-_DEFAULT_SKILL_PRICE_USD = 0.02
 _DEFAULT_AGENT_MD_PRICE_USD = 0.05
 _DEFAULT_PY_HANDLER_PRICE_USD = 0.05
+
+# How long the pre-flight reachability check waits for an endpoint to answer.
+# Long enough to catch a slow first-byte but short enough that a typo doesn't
+# cost the author 30 seconds before the error message lands. Matches the
+# server's probe budget loosely.
+_ENDPOINT_PROBE_TIMEOUT_S = 8.0
+
+# Required top-level fields in an agent.md JSON metadata block, in the order
+# the user is most likely to forget them. The server validates this too, but
+# catching it client-side gives a faster, more concrete error.
+_AGENT_MD_REQUIRED_FIELDS = (
+    "name",
+    "description",
+    "endpoint_url",
+    "price_per_call_usd",
+    "input_schema",
+    "output_schema",
+)
 
 
 def _write_template_stub(kind: str) -> None:
@@ -97,16 +121,16 @@ def _write_template_stub(kind: str) -> None:
     """
     from string import Template
     kind_lower = (kind or "").strip().lower()
-    if kind_lower not in {"skill", "agent", "python"}:
+    if kind_lower not in {"agent", "python"}:
         from .output import error
         error(
-            f"Unknown template kind {kind!r}. Use one of: skill, agent, python.",
+            f"Unknown template kind {kind!r}. Use one of: agent, python. "
+            "(SKILL.md publishing was removed 2026-05-17.)",
             code="publish.template_kind",
         )
         raise typer.Exit(code=2)
 
     template_map = {
-        "skill":  ("skill_md.template",  "my_new_skill.skill.md"),
         "agent":  ("agent_md.template",  "agent.md"),
         "python": ("handler_py.template", "my_new_agent.py"),
     }
@@ -116,10 +140,10 @@ def _write_template_stub(kind: str) -> None:
 
     # Placeholder substitutions — user will edit before publishing.
     subs = {
-        "name":        "my-new-skill" if kind_lower == "skill" else "my_new_agent",
+        "name":        "my_new_agent",
         "description": "TODO: describe what this agent does in one sentence.",
         "emoji_line":  "",
-        "body":        "TODO: write the skill body here. See https://aztea.ai/docs/skill-md for the format.",
+        "body":        "TODO: fill in the rest.",
     }
     rendered = Template(raw).safe_substitute(subs)
 
@@ -224,11 +248,35 @@ def publish(
         error(str(exc), code="publish.detect")
         raise typer.Exit(code=1)
 
+    # SKILL.md publishing was removed 2026-05-17. Specialized agents — real
+    # code, live data, real integrations — pass our value test; prompt-only
+    # SKILL.md tools (a system prompt + I/O schema) don't, because callers
+    # can replicate them with their own LLM in seconds. Refuse cleanly and
+    # point at the supported paths so users aren't left guessing.
+    if detection.kind == "skill_md":
+        from .output import error
+        error(
+            "SKILL.md hosted-skill publishing is no longer supported.",
+            hint=(
+                "Publish as a .py handler (`aztea publish my_tool.py --endpoint "
+                "https://...`) or as an agent.md manifest (`aztea publish "
+                "agent.md`). See: https://aztea.ai/docs/publishing."
+            ),
+            code="publish.skill_md_removed",
+        )
+        raise typer.Exit(code=2)
+
     if not json_mode:
         banner(
             f"aztea publish · {detection.path.name}",
             subtitle=detection.reason,
         )
+
+    # Stage 0 — local agent.md metadata pre-validation. Server validates this
+    # too, but catching missing fields here saves a roundtrip and gives the
+    # author a concrete "you forgot X" rather than a generic 422.
+    if detection.kind == "agent_md":
+        _validate_agent_md_metadata_or_exit(detection, json_mode=json_mode)
 
     findings: list[Any] = []  # list[VerificationFinding] (typed loose for the import-fallback path)
     findings.extend(_static_scan(detection))
@@ -290,6 +338,15 @@ def publish(
                     )
                 raise typer.Exit(code=2 if _has_block_findings(findings) else 3)
 
+            # Stage 3 — pre-flight endpoint reachability for paths that hand
+            # us a URL. Catches "endpoint typo" or "container not started" at
+            # the CLI before the server roundtrip. The server reruns its own
+            # probe; this is purely UX, not security. Skipped in --dry-run
+            # (the user is intentionally not committing) and json mode (CI
+            # contexts often deploy and probe separately).
+            if not dry_run and not json_mode and detection.kind in {"agent_md", "python_handler"}:
+                _probe_endpoint_or_exit(detection, endpoint, json_mode=json_mode)
+
             if dry_run:
                 _emit_findings(findings, json_mode=json_mode, explain=explain)
                 if not json_mode:
@@ -325,7 +382,7 @@ def publish(
     except typer.Exit:
         raise
     except Exception as exc:  # noqa: BLE001 — funnel into the standard error UX
-        handle_error(exc)
+        _handle_publish_error(exc, detection=detection, json_mode=json_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -449,37 +506,9 @@ def _register(
     tags: list[str],
     endpoint: Optional[str],
 ) -> dict[str, Any]:
-    if detection.kind == "skill_md":
-        # Precedence: --price flag > frontmatter `price_usd` > default.
-        # Pre-1.7.0 the frontmatter step was missing — every skill
-        # without a CLI flag landed at $0.02 even when the file said
-        # `price_usd: 0.005`. (P3-23 from the eval.)
-        effective_price = price
-        if effective_price is None:
-            try:
-                from core.skill_parser import parse_skill_md as _parse_for_price
-                _parsed = _parse_for_price(detection.raw, source=str(detection.path))
-                if _parsed.price_per_call_usd is not None:
-                    effective_price = _parsed.price_per_call_usd
-            except Exception:
-                # If parsing fails here, /skills will surface the same
-                # error with a better message — don't block the flow.
-                pass
-        if effective_price is None:
-            effective_price = _DEFAULT_SKILL_PRICE_USD
-        body = {
-            "skill_md": detection.raw,
-            "price_per_call_usd": float(effective_price),
-        }
-        # 1.7.3 — listing-safety scan + AST + clone-detection can run
-        # 60+ seconds on the server. The SDK default 30s read timeout
-        # was less than the server budget, so users saw ReadTimeout
-        # + a phantom listing (the server completed but the client
-        # gave up). 90s leaves margin even on a busy host.
-        return client._request_json(
-            "POST", "/skills", json_body=body, timeout=90.0,
-        )
-
+    # skill_md is refused at the entry point of `publish()` — we never reach
+    # here for it. If you're reading this confused: that's intentional;
+    # SKILL.md publishing was removed 2026-05-17.
     if detection.kind == "agent_md":
         body: dict[str, Any] = {"manifest_content": detection.raw}
         if price is not None:
@@ -625,7 +654,6 @@ def _emit_receipt(
 
 def _human_kind(kind: str) -> str:
     return {
-        "skill_md": "hosted skill",
         "agent_md": "external endpoint (manifest)",
         "python_handler": "external endpoint (python)",
     }.get(kind, kind)
@@ -642,6 +670,347 @@ def _finding_dict(f: Any) -> dict[str, Any]:
         "message": getattr(f, "message", ""),
         "detail": getattr(f, "detail", {}) or {},
     }
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight validation helpers (added 2026-05-17)
+# ---------------------------------------------------------------------------
+
+
+def _validate_agent_md_metadata_or_exit(
+    detection: DetectionResult,
+    *,
+    json_mode: bool,
+) -> None:
+    """Local pre-validation of the agent.md JSON metadata block.
+
+    Server runs the authoritative validation, but catching the common mistakes
+    here gives the author a concrete "missing field X" error within milliseconds
+    rather than a 422 with a generic schema message. Failures here are blocking;
+    the publish flow exits with a non-zero code.
+    """
+    from .output import error
+
+    metadata: dict[str, Any] | None = None
+    for match in _AGENT_MD_JSON_RE.finditer(detection.raw):
+        try:
+            candidate = json.loads(match.group(1))
+        except json.JSONDecodeError as exc:
+            error(
+                f"Couldn't parse the JSON metadata block in {detection.path.name}: {exc}.",
+                hint=(
+                    "agent.md needs one fenced ```json``` block at the top "
+                    "containing the listing metadata. Run `aztea publish "
+                    "--from-template agent` for a working starter."
+                ),
+                code="publish.agent_md.json_invalid",
+            )
+            raise typer.Exit(code=2)
+        if isinstance(candidate, dict):
+            metadata = candidate
+            break
+
+    if metadata is None:
+        error(
+            f"No JSON metadata block found in {detection.path.name}.",
+            hint=(
+                "agent.md must contain one ```json``` fenced block with "
+                "fields name, description, endpoint_url, price_per_call_usd, "
+                "input_schema, output_schema. See "
+                "https://aztea.ai/docs/agent-md."
+            ),
+            code="publish.agent_md.no_metadata",
+        )
+        raise typer.Exit(code=2)
+
+    missing = [f for f in _AGENT_MD_REQUIRED_FIELDS if not metadata.get(f)]
+    if missing:
+        error(
+            f"agent.md metadata is missing required fields: {', '.join(missing)}.",
+            hint=(
+                "Every agent.md listing needs all six. "
+                "input_schema / output_schema must be valid JSON Schema objects "
+                "with `type: object`. See https://aztea.ai/docs/agent-md for "
+                "examples."
+            ),
+            code="publish.agent_md.missing_fields",
+        )
+        raise typer.Exit(code=2)
+
+    # Price sanity. The server rejects out-of-range too, but a $250 typo is
+    # the kind of mistake the author wants to catch instantly.
+    price = metadata.get("price_per_call_usd")
+    try:
+        price_val = float(price)
+    except (TypeError, ValueError):
+        error(
+            f"price_per_call_usd must be a number, got {price!r}.",
+            code="publish.agent_md.price_not_number",
+        )
+        raise typer.Exit(code=2)
+    if price_val < 0.0 or price_val > 25.0:
+        error(
+            f"price_per_call_usd={price_val} is outside the allowed range (0–25 USD).",
+            hint="Most third-party tools price between $0.01 and $1.00.",
+            code="publish.agent_md.price_out_of_range",
+        )
+        raise typer.Exit(code=2)
+
+    # Endpoint must be https in prod. The SSRF check on the server catches
+    # private / loopback URLs; here we just nudge the obvious case so a
+    # missing scheme doesn't waste a roundtrip.
+    endpoint_url = str(metadata.get("endpoint_url", "")).strip()
+    if not endpoint_url.startswith(("http://", "https://")):
+        error(
+            f"endpoint_url must be an http(s) URL; got {endpoint_url!r}.",
+            hint="Prefix with `https://`.",
+            code="publish.agent_md.endpoint_scheme",
+        )
+        raise typer.Exit(code=2)
+
+    # Schemas must at least be objects with type=object. The server runs the
+    # full JSON Schema validator; this catches the trivial "I put a string
+    # instead of {}" mistake.
+    for field in ("input_schema", "output_schema"):
+        schema = metadata.get(field)
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            error(
+                f"{field} must be a JSON Schema object with `type: object`.",
+                hint=(
+                    "Use {\"type\": \"object\", \"properties\": {...}, "
+                    "\"required\": [...]}."
+                ),
+                code=f"publish.agent_md.{field}_invalid",
+            )
+            raise typer.Exit(code=2)
+
+
+def _probe_endpoint_or_exit(
+    detection: DetectionResult,
+    cli_endpoint: Optional[str],
+    *,
+    json_mode: bool,
+) -> None:
+    """Pre-flight reachability check for paths that hand us a public URL.
+
+    Why: a typo or a not-yet-deployed endpoint is the most common reason a
+    fresh listing fails the server probe. Hitting it client-side gives the
+    author sub-second feedback ("DNS doesn't resolve") instead of waiting on
+    the server to retry, time out, and translate the failure into a 400.
+
+    This is purely UX. Security still lives on the server (SSRF, probe,
+    safety scan re-run). Skipping it would not weaken security.
+
+    Set ``AZTEA_SKIP_ENDPOINT_PROBE=1`` in tests / CI where the endpoint is
+    deliberately a fixture (mock host, no real DNS).
+    """
+    import os as _os
+    if _os.environ.get("AZTEA_SKIP_ENDPOINT_PROBE", "").strip() in {"1", "true", "yes"}:
+        return
+
+    from .output import error, warn as _warn
+
+    endpoint_url = ""
+    if detection.kind == "python_handler":
+        endpoint_url = (cli_endpoint or "").strip()
+    elif detection.kind == "agent_md":
+        endpoint_url = _extract_endpoint_from_agent_md(detection.raw)
+    if not endpoint_url:
+        # python_handler without --endpoint is caught later in _register with
+        # a typer.BadParameter; agent.md without endpoint_url is caught in
+        # the metadata validator above. Both have their own clear messages.
+        return
+
+    parsed = urllib.parse.urlparse(endpoint_url)
+    host = parsed.hostname or ""
+    if not host:
+        error(
+            f"Endpoint URL {endpoint_url!r} has no hostname.",
+            code="publish.endpoint.no_host",
+        )
+        raise typer.Exit(code=2)
+
+    # DNS — the cheapest and most common failure mode. socket.getaddrinfo
+    # respects the system resolver / hosts file.
+    try:
+        socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        error(
+            f"Could not resolve hostname {host!r}: {exc.strerror or exc}.",
+            hint=(
+                "Check the URL for typos. If the host is correct, make sure "
+                "DNS has propagated before re-publishing."
+            ),
+            code="publish.endpoint.dns",
+        )
+        raise typer.Exit(code=2)
+
+    # HTTP reachability. We send a HEAD with a tight budget. A 405 / 501 /
+    # any 4xx/5xx is still "reachable" — only network errors are blocking.
+    request = urllib.request.Request(endpoint_url, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=_ENDPOINT_PROBE_TIMEOUT_S) as resp:  # noqa: S310
+            status = resp.status
+    except urllib.error.HTTPError as http_exc:
+        # The endpoint answered; it just doesn't speak HEAD. Server probe
+        # will hit it properly with POST. Surface as info, not failure.
+        if not json_mode:
+            _warn(
+                f"Endpoint answered HEAD with HTTP {http_exc.code}; "
+                "treating as reachable. The server probe will retry with POST."
+            )
+        return
+    except urllib.error.URLError as url_exc:
+        reason = getattr(url_exc, "reason", url_exc)
+        error(
+            f"Could not reach {endpoint_url}: {reason}.",
+            hint=(
+                "Make sure the endpoint is publicly reachable over HTTPS. If "
+                "you're testing locally, deploy first or use a tunnel like "
+                "ngrok / Cloudflare Tunnel."
+            ),
+            code="publish.endpoint.unreachable",
+        )
+        raise typer.Exit(code=2)
+    except (TimeoutError, socket.timeout):
+        error(
+            f"Endpoint {endpoint_url} did not respond within "
+            f"{int(_ENDPOINT_PROBE_TIMEOUT_S)} s.",
+            hint=(
+                "Cold-start time is normal for serverless functions, but the "
+                "server probe is even tighter. Warm the endpoint, then retry."
+            ),
+            code="publish.endpoint.timeout",
+        )
+        raise typer.Exit(code=2)
+    except Exception as exc:  # noqa: BLE001 — bubble any unexpected I/O issue up
+        error(
+            f"Couldn't probe {endpoint_url}: {exc}.",
+            code="publish.endpoint.probe_failed",
+        )
+        raise typer.Exit(code=2)
+    # Anything in the 1xx–5xx range means the host is reachable; the server
+    # probe runs the real semantic check.
+    _ = status  # silence linter; we only care that the HEAD succeeded.
+
+
+def _handle_publish_error(
+    exc: Exception,
+    *,
+    detection: Optional[DetectionResult],
+    json_mode: bool,
+) -> None:
+    """Turn server error envelopes into actionable messages, fall back to handle_error.
+
+    The server returns structured envelopes for listing-specific failures
+    (listing.safety_block, REGISTRY_AGENT_LIMIT, skills.public_publish_disabled,
+    etc.). Without this, the user sees a generic AzteaError stringified.
+    """
+    from .output import error
+
+    payload = _extract_error_envelope(exc)
+    if payload is None:
+        handle_error(exc)
+        return
+
+    code = str(payload.get("code") or "")
+    message = str(payload.get("message") or "")
+    detail = payload.get("detail") or payload.get("data") or {}
+    if not isinstance(detail, dict):
+        detail = {}
+    hint = detail.get("hint") or None
+
+    # Special-case the message envelopes we know we generate server-side. The
+    # rest fall back to generic "code: message" rendering, which is still
+    # better than `AzteaError: 400 Bad Request`.
+    if code == "skills.public_publish_disabled":
+        error(
+            message
+            or "SKILL.md publishing is no longer publicly available.",
+            hint=(
+                hint
+                or "Publish a .py handler or agent.md manifest with `aztea publish` instead."
+            ),
+            code=code,
+        )
+        raise typer.Exit(code=1)
+
+    if code == error_codes_str("REGISTRY_AGENT_LIMIT"):
+        current = detail.get("current")
+        max_ = detail.get("max")
+        suffix = ""
+        if isinstance(current, int) and isinstance(max_, int):
+            suffix = f" ({current}/{max_} used)"
+        error(
+            (message or "Per-owner agent limit reached.") + suffix,
+            hint="Delete or archive an existing listing, then retry.",
+            code=code,
+        )
+        raise typer.Exit(code=1)
+
+    if code == "listing.safety_block":
+        # The server already gave us the specific finding. Pass it through.
+        finding_code = (detail or {}).get("code") or ""
+        finding_hint = _wizard.remediation_for(finding_code)
+        error(
+            message or "Listing was blocked by the safety scanner.",
+            hint=finding_hint
+            or "Run with `--explain` to see the matched line and detail.",
+            code=code,
+        )
+        raise typer.Exit(code=2)
+
+    # Unknown server envelope. Render generically but at least show the code
+    # so a support handler can correlate.
+    error(
+        message or "Publish failed.",
+        hint=hint if isinstance(hint, str) else None,
+        code=code or "publish.server_error",
+    )
+    raise typer.Exit(code=1)
+
+
+def _extract_error_envelope(exc: Exception) -> Optional[dict[str, Any]]:
+    """Pull a structured error envelope off an SDK exception if present.
+
+    Aztea SDK exceptions carry a `.body` (dict) or `.response_body` (str) on
+    HTTP errors. Most publish-related routes return
+    {"detail": {"code": ..., "message": ..., "data": ...}} or just
+    {"detail": "string"}. Normalise both shapes into a flat dict.
+    """
+    body = getattr(exc, "body", None)
+    if body is None:
+        body_str = getattr(exc, "response_body", None)
+        if isinstance(body_str, str):
+            try:
+                body = json.loads(body_str)
+            except json.JSONDecodeError:
+                return None
+    if not isinstance(body, dict):
+        return None
+    detail = body.get("detail")
+    if isinstance(detail, dict):
+        return detail
+    if isinstance(detail, str):
+        return {"code": "", "message": detail}
+    return None
+
+
+def error_codes_str(name: str) -> str:
+    """Best-effort import of canonical error code constants.
+
+    The SDK doesn't bundle core.error_codes; users on `pip install aztea`
+    won't have it. We fall back to the literal string the server uses, which
+    is also what core.error_codes defines.
+    """
+    try:
+        from core import error_codes as _ec  # type: ignore[import-not-found]
+        return getattr(_ec, name, name)
+    except ImportError:
+        # Mirror the canonical names that ship in core/error_codes.py.
+        return {
+            "REGISTRY_AGENT_LIMIT": "registry.agent_limit",
+        }.get(name, name)
 
 
 __all__ = ["publish"]

@@ -1,9 +1,13 @@
 """File-kind detection for `aztea publish`.
 
 Given a path on disk, decide whether the author is publishing:
-  - a hosted SKILL.md (zero-server, LLM-backed),
   - an agent.md manifest (author-hosted external endpoint), or
   - a Python handler (author wires up AzteaServer themselves).
+
+SKILL.md detection is still here so the CLI can produce a friendly
+"no longer supported" error pointing at the real publishing paths,
+rather than silently treating a SKILL.md as something it isn't.
+Hosted-skill publishing was removed 2026-05-17.
 
 Detection is intentionally cheap and offline. We never read more of a Python
 file than we need to fingerprint it, and we never execute any of it.
@@ -108,20 +112,24 @@ def detect(path: Path) -> DetectionResult:
                 reason="agent.md manifest (≥ 3 of the canonical sections present).",
             )
         if _matches_skill_md(expanded.name, text):
+            # Detected for the sole purpose of refusing it cleanly upstream.
+            # publish.py turns this into a "SKILL.md publishing was removed"
+            # error with a pointer to .py / agent.md.
             return DetectionResult(
                 kind="skill_md",
                 path=expanded,
                 raw=text,
-                reason="SKILL.md (frontmatter or `# skill:` heading detected).",
+                reason="SKILL.md detected (no longer publicly publishable).",
             )
-        # Default for .md: treat as SKILL.md. The hosted-skills parser is the
-        # most permissive and will surface a clean error if the body is
-        # actually unusable.
-        return DetectionResult(
-            kind="skill_md",
-            path=expanded,
-            raw=text,
-            reason=".md without explicit markers; treating as SKILL.md.",
+        # Ambiguous .md: refuse rather than guess. Used to default to
+        # SKILL.md, but SKILL.md publishing is gone, and silently routing
+        # to agent.md would just confuse the failure mode downstream.
+        raise DetectionError(
+            f"Couldn't tell whether {expanded.name} is an agent.md or "
+            "something else. agent.md manifests need at least 3 of the "
+            "canonical sections (Registry Endpoint, Registration Flow, "
+            "Settlement Flow Expectations, Registration Metadata). Add the "
+            "missing sections, or pass `kind: agent` in the YAML frontmatter."
         )
 
     raise DetectionError(

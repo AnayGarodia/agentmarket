@@ -15,14 +15,34 @@ from core import db as _db
 # column still exists; we just write ``approved`` on insert.
 
 
-@app.post("/skills/validate", responses=_error_responses(400, 401, 413))
+@app.post("/skills/validate", responses=_error_responses(400, 401, 403, 413))
 @limiter.limit("30/minute")
 def skills_validate(
     request: Request,
     body: dict = Body(...),
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> dict:
+    """Dry-run a SKILL.md against the safety scanner + parser.
+
+    Master-only as of 2026-05-17 to stay consistent with POST /skills (public
+    SKILL.md publishing was removed). Aztea-internal tooling still uses this.
+    """
     _require_scope(caller, "worker")
+    if caller["type"] != "master":
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                "skills.public_publish_disabled",
+                "SKILL.md validation is no longer publicly available.",
+                {
+                    "hint": (
+                        "Publish a .py handler or an agent.md manifest with "
+                        "`aztea publish` instead. See "
+                        "https://aztea.ai/docs/publishing."
+                    ),
+                },
+            ),
+        )
     raw_md = str((body or {}).get("skill_md") or "")
     if not raw_md.strip():
         raise HTTPException(status_code=400, detail="skill_md is required.")
@@ -96,11 +116,30 @@ def skills_create(
     body: dict = Body(...),
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> dict:
-    """Upload a SKILL.md, register an agent for it, and persist the skill row."""
+    """Upload a SKILL.md, register an agent for it, and persist the skill row.
+
+    Restricted to master callers as of 2026-05-17. Public SKILL.md publishing
+    was removed because prompt-only "tools" fail the value test: callers can
+    replicate them with their own LLM. The route remains for Aztea-authored
+    compositions only. Third-party authors should use `aztea publish` with a
+    .py handler or agent.md manifest.
+    """
     _require_scope(caller, "worker")
-    if caller["type"] == "agent_key":
+    if caller["type"] != "master":
         raise HTTPException(
-            status_code=403, detail="Agent-scoped keys cannot register hosted skills."
+            status_code=403,
+            detail=error_codes.make_error(
+                "skills.public_publish_disabled",
+                "SKILL.md hosted-skill publishing is no longer publicly available.",
+                {
+                    "hint": (
+                        "Publish a .py handler or an agent.md manifest with "
+                        "`aztea publish` instead — both pass our value test "
+                        "(real code / real integration). See "
+                        "https://aztea.ai/docs/publishing."
+                    ),
+                },
+            ),
         )
     payload = body or {}
     raw_md = str(payload.get("skill_md") or "")

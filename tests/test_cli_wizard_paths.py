@@ -42,6 +42,9 @@ def _stub_credentials(monkeypatch, tmp_path):
     monkeypatch.delenv("VISUAL", raising=False)
     monkeypatch.delenv("AZTEA_EDITOR", raising=False)
     monkeypatch.delenv("ALLOW_PRIVATE_OUTBOUND_URLS", raising=False)
+    # Endpoint URLs used here are fixtures (example.com etc.); skip the CLI
+    # reachability probe so tests exercise the wizard / scanner, not DNS.
+    monkeypatch.setenv("AZTEA_SKIP_ENDPOINT_PROBE", "1")
 
 
 @pytest.fixture
@@ -275,11 +278,12 @@ def test_agent_md_endpoint_with_percent_encoded_aztea_blocked(
 
 
 # ---------------------------------------------------------------------------
-# Editor-open branch of the wizard (Path 1, hosted skill)
+# Editor-open branch of the wizard (Python handler, kind=2 after the 2026-05-17
+# wizard-options reshuffle — SKILL.md path was removed).
 # ---------------------------------------------------------------------------
 
 
-def test_wizard_skill_md_editor_branch(runner, fake_tty, mock_build_client, tmp_path, monkeypatch):
+def test_wizard_python_handler_editor_branch(runner, fake_tty, mock_build_client, tmp_path, monkeypatch):
     """When the user picks 'open editor', wizard spawns ``$EDITOR`` via subprocess.
 
     We mock subprocess.run so no real editor is launched; the temp file the
@@ -291,9 +295,11 @@ def test_wizard_skill_md_editor_branch(runner, fake_tty, mock_build_client, tmp_
 
     def fake_run(args, *_, **__):  # pragma: no cover — invoked through wizard
         captured["calls"].append(args)
-        # Simulate the editor writing to the temp file.
+        # Simulate the editor writing to the temp file with a valid handler.
         Path(args[1]).write_text(
-            "Body authored by the editor.\nLine 2 of the body.\n",
+            'def handler(payload):\n'
+            '    """Echoes payload back. Authored via editor."""\n'
+            '    return {"result": str(payload)}\n',
             encoding="utf-8",
         )
         return MagicMock(returncode=0)
@@ -301,21 +307,26 @@ def test_wizard_skill_md_editor_branch(runner, fake_tty, mock_build_client, tmp_
     monkeypatch.setattr("aztea.cli.prompts.subprocess.run", fake_run)
 
     stdin = (
-        "1\n"                                                # kind = skill
+        "2\n"                                                # kind = python handler
         "editor-flow\n"                                      # name
         "Tests the editor branch end-to-end.\n"              # description
-        "\n"                                                 # emoji skip
-        "y\n"                                                # open editor? yes
-        "\n"                                                 # price (default)
-        "\n"                                                 # tags (skip)
+        "y\n"                                                # "Open the starter handler in your editor?"
+        "y\n"                                                # multiline_or_editor: "Open your editor?"
     )
-    result = runner.invoke(app, ["publish"], input=stdin)
+    # Python handler publishing needs --endpoint at the CLI level (the wizard
+    # currently writes the file and leaves the endpoint to the flag — see
+    # the "Deploy this file at the URL you'll provide next" hint).
+    result = runner.invoke(
+        app,
+        ["publish", "--endpoint", "https://my.host.example.com/run", "--price", "0.05"],
+        input=stdin,
+    )
     assert result.exit_code == 0, result.output
 
-    file_path = tmp_path / "editor-flow.skill.md"
+    file_path = tmp_path / "editor_flow.py"
     assert file_path.exists(), result.output
     body = file_path.read_text()
-    assert "Body authored by the editor." in body, body
+    assert "Authored via editor" in body, body
     assert captured["calls"], "expected subprocess.run to be invoked for the editor"
     assert captured["calls"][0][0] == "fake-editor-not-installed"
 

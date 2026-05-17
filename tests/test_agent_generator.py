@@ -782,20 +782,15 @@ def test_composition_caller_key_propagated(isolated_db, monkeypatch):
 
 def test_existing_skills_path_unchanged(app_client, monkeypatch):
     """POST /skills must remain reachable through the hosted-skill code path
-    and not silently route through the vibe-generator path.
+    (master-only as of 2026-05-17) and not silently route through the
+    vibe-generator path.
 
     Regression guard for accidental coupling between vibe-generator and
-    /skills. The actual review_status post-1.6.1 is `probation` for non-
-    master callers (graduate_probation_listings promotes on track record);
-    master callers still auto-approve. The original test's `== "approved"`
-    assertion was tied to the pre-1.6.1 bug where /skills hard-coded
-    `approved` regardless of caller scope (closed in part_012.py).
+    /skills. Public SKILL.md publishing was removed 2026-05-17, so the test
+    now exercises the master-only branch — master callers auto-approve;
+    the non-master 403 path is covered by test_publish_flow.py.
     """
-    from tests.integration.helpers import _register_user, _fund_user_wallet
-
-    user = _register_user()
-    _fund_user_wallet(user, amount_cents=200)
-    api_key = user["raw_api_key"]
+    from tests.integration.helpers import TEST_MASTER_KEY
 
     skill_md = """\
 ---
@@ -809,13 +804,12 @@ Use Notion API.
 """
     resp = app_client.post(
         "/skills",
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
         json={"skill_md": skill_md, "price_per_call_usd": 0.10},
     )
     assert resp.status_code in {200, 201}
     body = resp.json()
-    # The /skills path must produce a real listing (not a vibe row).
-    # `approved` (master) and `probation` (non-master, the new default) are
-    # both legitimate; vibe-path landings would carry other markers.
+    # Master callers still auto-approve. Anything else here means the request
+    # took an unintended path (e.g. silently into the vibe-generator).
     if "review_status" in body:
-        assert body["review_status"] in {"approved", "probation"}
+        assert body["review_status"] in {"approved", None}
