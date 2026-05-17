@@ -64,24 +64,22 @@ def test_quota_returns_billing_notice_and_receipt():
     assert out["receipt"]["payload"]["action"] == "sandbox_quota"
 
 
-@pytest.mark.parametrize("action", sorted(stubs_mod.stub_actions()))
-def test_every_stub_has_valid_jsonschema(action: str) -> None:
-    envelope = stubs_mod.stub_for(action)
-    in_schema = envelope["planned_input_schema"]
-    out_schema = envelope["planned_output_schema"]
-    # Both schemas must validate as JSON Schema (Draft 2020-12 by default).
-    jsonschema.Draft202012Validator.check_schema(in_schema)
-    jsonschema.Draft202012Validator.check_schema(out_schema)
-    assert envelope.get("tracking_issue"), f"stub {action} missing tracking_issue"
-    assert envelope.get("reason"), f"stub {action} missing reason"
+def test_stub_template_helpers_still_produce_valid_jsonschema():
+    """Template helpers (_browser_stub / _simple_stub) remain valid for future use.
 
-
-@pytest.mark.parametrize("action", sorted(stubs_mod.stub_actions()))
-def test_stub_dispatch_attaches_receipt(action: str) -> None:
-    out = live_sandbox.run({"action": action, "input": {"sandbox_id": "sbx_aaaaaaaaaaaaaaaa"}})
-    assert out["stubbed"] is True
-    assert "receipt" in out
-    assert out["receipt"]["payload"]["action"] == action
+    Why: the registry is empty today, but the helpers are kept so any
+    new sandbox verb can adopt the same envelope shape callers already
+    expect. This test fires the helpers directly to guard against
+    regressions in their schema shape.
+    """
+    for envelope in (
+        stubs_mod._browser_stub("Test description"),
+        stubs_mod._simple_stub(issue="test/issue", reason="test reason"),
+    ):
+        jsonschema.Draft202012Validator.check_schema(envelope["planned_input_schema"])
+        jsonschema.Draft202012Validator.check_schema(envelope["planned_output_schema"])
+        assert envelope.get("tracking_issue")
+        assert envelope.get("reason")
 
 
 def test_receipt_signature_verifies_against_local_pubkey(tmp_path, monkeypatch):
@@ -443,14 +441,17 @@ def test_every_new_fill_is_in_handlers_not_stubs():
     )
 
 
-def test_remaining_stubs_are_only_infra_blocked():
-    """The 6 remaining stubs are exactly the truly-infra-blocked verbs."""
-    expected = {
-        "sandbox_network_capture", "sandbox_share", "sandbox_trace",
-        "sandbox_tunnel_close", "sandbox_tunnel_open", "sandbox_webhook_inbox",
-    }
-    actual = set(stubs_mod.stub_actions())
-    assert actual == expected, f"unexpected stub set: {sorted(actual ^ expected)}"
+def test_stub_registry_is_empty():
+    """Every spec-declared verb now has a real handler — zero stubs remain."""
+    assert set(stubs_mod.stub_actions()) == set(), (
+        f"unexpected stubs still present: {sorted(stubs_mod.stub_actions())}"
+    )
+    # And ALL_ACTIONS must be fully covered by HANDLERS.
+    declared = set(sandbox_engine.ALL_ACTIONS)
+    handlers = set(sandbox_engine.HANDLERS.keys())
+    assert declared.issubset(handlers), (
+        f"verbs missing from HANDLERS: {sorted(declared - handlers)}"
+    )
 
 
 def test_chaos_off_rule_clears_existing(monkeypatch):
@@ -746,3 +747,234 @@ def test_v2_signature_verifies_through_sdk_path(monkeypatch):
         raise AssertionError("v2 sig should NOT verify against raw output bytes")
     except Exception:
         pass
+
+
+# --- The last 6 fills (this PR) ----------------------------------------------
+
+def test_tunnel_open_requires_published_service_port():
+    """Tunnel against a service with no published host port surfaces a clean error."""
+    sandbox_id = _register_stub_sandbox(
+        services={"web": {"container": "p-web", "ports": []}},
+    )
+    out = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "web", "port": 3000},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+def test_tunnel_open_degraded_local_when_no_tool(monkeypatch):
+    """With no cloudflared/ngrok installed, returns a localhost URL."""
+    from core.sandbox import tunnels
+    sandbox_id = _register_stub_sandbox(services={
+        "web": {
+            "container": "p-web",
+            "ports": [{"internal_port": "3000/tcp", "host_port": "12345"}],
+        },
+    })
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    out = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "web", "port": 3000},
+    })
+    assert "error" not in out, out
+    assert out["kind"] == "local"
+    assert out["public_url"] == "http://localhost:12345"
+    assert out["host_port"] == 12345
+    # Idempotent — same triple returns the same record.
+    out2 = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "web", "port": 3000},
+    })
+    assert out2["tunnel_id"] == out["tunnel_id"]
+    # Close it
+    close = live_sandbox.run({
+        "action": "sandbox_tunnel_close",
+        "input": {"sandbox_id": sandbox_id, "tunnel_id": out["tunnel_id"]},
+    })
+    assert close["closed"] is True
+    # Closing twice returns sandbox.not_found
+    again = live_sandbox.run({
+        "action": "sandbox_tunnel_close",
+        "input": {"sandbox_id": sandbox_id, "tunnel_id": out["tunnel_id"]},
+    })
+    assert again.get("error", {}).get("code") == "sandbox.not_found"
+
+
+def test_tunnel_validates_port_range():
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "port": 0},
+    })
+    assert "error" in out
+    out2 = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "port": 99999},
+    })
+    assert "error" in out2
+
+
+def test_webhook_inbox_capture_and_list():
+    """Sidecar starts on first call; subsequent POST is captured + listed."""
+    import urllib.request
+
+    sandbox_id = _register_stub_sandbox()
+    first = live_sandbox.run({
+        "action": "sandbox_webhook_inbox",
+        "input": {"sandbox_id": sandbox_id},
+    })
+    assert "error" not in first, first
+    capture_url = first["capture_url"]
+    # Fire a POST at the capture URL
+    req = urllib.request.Request(
+        f"{capture_url}/stripe/webhook",
+        data=b'{"event":"checkout.session.completed"}',
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": "test",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        body = resp.read().decode("utf-8")
+    import json as _json
+    received = _json.loads(body)
+    assert received["received"] is True
+    event_id = received["event_id"]
+    # List captured events
+    listing = live_sandbox.run({
+        "action": "sandbox_webhook_inbox",
+        "input": {"sandbox_id": sandbox_id},
+    })
+    assert listing["count"] >= 1
+    assert any(e.get("event_id") == event_id for e in listing["events"])
+    # Each event carries a receipt
+    captured = next(e for e in listing["events"] if e["event_id"] == event_id)
+    assert "receipt" in captured
+    # Cleanup
+    from core.sandbox import webhook_inbox as _wh
+    assert _wh.evict_for_sandbox(sandbox_id) is True
+
+
+def test_webhook_replay_requires_target_service():
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_webhook_inbox",
+        "input": {"sandbox_id": sandbox_id, "replay_event_id": "evt_missing"},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+def test_network_capture_refuses_without_env_flag(monkeypatch):
+    """NET_RAW gating: action returns a structured refusal when the env is off."""
+    monkeypatch.delenv("AZTEA_SANDBOX_ALLOW_NET_RAW", raising=False)
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_network_capture",
+        "input": {"sandbox_id": sandbox_id, "duration_seconds": 5},
+    })
+    assert "error" not in out, out
+    assert out["refused"] is True
+    assert out["elevated"] is False
+    assert "AZTEA_SANDBOX_ALLOW_NET_RAW" in out["reason"]
+    assert "next_step" in out
+
+
+def test_trace_refuses_without_env_flag(monkeypatch):
+    """PTRACE gating: action returns a structured refusal when the env is off."""
+    monkeypatch.delenv("AZTEA_SANDBOX_ALLOW_PTRACE", raising=False)
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {
+            "sandbox_id": sandbox_id, "service": "app", "pid": 1, "tool": "py-spy",
+        },
+    })
+    assert "error" not in out, out
+    assert out["refused"] is True
+    assert out["elevated"] is False
+    assert "AZTEA_SANDBOX_ALLOW_PTRACE" in out["reason"]
+
+
+def test_trace_validates_input_when_gated_on(monkeypatch):
+    """With the env flag set, input validation kicks in before any sidecar runs."""
+    monkeypatch.setenv("AZTEA_SANDBOX_ALLOW_PTRACE", "1")
+    sandbox_id = _register_stub_sandbox()
+    # Bad tool
+    out = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "pid": 100, "tool": "bogus"},
+    })
+    assert "error" in out
+    # Bad pid
+    out2 = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "pid": 0, "tool": "py-spy"},
+    })
+    assert "error" in out2
+    # Missing service
+    out3 = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {"sandbox_id": sandbox_id, "pid": 100, "tool": "py-spy"},
+    })
+    assert "error" in out3
+
+
+def test_share_grants_token_and_viewer_serves_it():
+    """share() mints a token; the viewer accepts it and returns the audit chain."""
+    import urllib.request
+    import urllib.error
+
+    sandbox_id = _register_stub_sandbox()
+    # Drop one audit entry so the response has something to show
+    live_sandbox.run({"action": "sandbox_quota", "input": {"sandbox_id": sandbox_id}})
+    out = live_sandbox.run({
+        "action": "sandbox_share",
+        "input": {"sandbox_id": sandbox_id, "access": "read", "ttl_minutes": 5},
+    })
+    assert "error" not in out, out
+    assert out["share_id"]
+    assert out["join_token"]
+    assert out["access"] == "read"
+    assert out["share_url"].startswith("http://127.0.0.1:")
+    # Hit the viewer with the right token
+    with urllib.request.urlopen(out["share_url"], timeout=5) as resp:
+        body = resp.read().decode("utf-8")
+    import json as _json
+    payload = _json.loads(body)
+    assert payload["sandbox_id"] == sandbox_id
+    assert payload["share_id"] == out["share_id"]
+    assert "audit" in payload
+    # Wrong token → 401
+    bad_url = out["share_url"].split("?")[0] + "?token=wrong"
+    try:
+        urllib.request.urlopen(bad_url, timeout=5)
+        raise AssertionError("expected 401")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 401
+    # Revoke
+    from core.sandbox import share as _share
+    assert _share.revoke(out["share_id"]) is True
+
+
+def test_share_refuses_full_access():
+    """v0 only grants read; full access is the wallet-table follow-up."""
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_share",
+        "input": {"sandbox_id": sandbox_id, "access": "full"},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+def test_share_validates_ttl():
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_share",
+        "input": {"sandbox_id": sandbox_id, "ttl_minutes": 99999},
+    })
+    assert "error" in out

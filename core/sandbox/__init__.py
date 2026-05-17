@@ -23,12 +23,17 @@ from core.sandbox import (
     http_ops,
     lifecycle,
     link,
+    network_capture as net_capture_mod,
     observability,
     run_ops,
+    share as share_mod,
     snapshots,
     stubs,
     sweeper,
+    trace as trace_mod,
+    tunnels,
     vcr,
+    webhook_inbox as webhook_mod,
 )
 from core.sandbox.models import (
     ALL_ACTIONS,
@@ -149,6 +154,13 @@ HANDLERS: dict[str, Handler] = {
     "sandbox_link": link.link,
     "sandbox_export_snapshot": export.export_snapshot,
     "sandbox_inject_failure": chaos.inject_failure,
+    # tunnels + webhooks + privileged sidecars + share
+    "sandbox_tunnel_open": tunnels.tunnel_open,
+    "sandbox_tunnel_close": tunnels.tunnel_close,
+    "sandbox_webhook_inbox": webhook_mod.webhook_inbox,
+    "sandbox_network_capture": net_capture_mod.network_capture,
+    "sandbox_trace": trace_mod.trace,
+    "sandbox_share": share_mod.share,
     # audit + cost
     "sandbox_audit": _audit_action,
     "sandbox_cost": _cost_action,

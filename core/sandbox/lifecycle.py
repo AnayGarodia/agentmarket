@@ -131,15 +131,23 @@ def stop(payload: dict[str, Any]) -> dict[str, Any]:
 
         out = snapshot_action({"sandbox_id": state.sandbox_id, "reason": "stop"})
         final_snapshot_id = out.get("snapshot_id")
-    # Close any browser sessions tied to this sandbox before the host
-    # containers go away. Without this, chromium children outlive their
-    # parent and leak file descriptors.
-    try:
-        from core.sandbox import browser as _browser
+    # Close any browser sessions, tunnels, share links, and webhook
+    # inboxes tied to this sandbox before the host containers go away.
+    # Without this, chromium children + tunneling processes outlive
+    # their parent and leak file descriptors / loopback ports.
+    for module_name in (
+        "core.sandbox.browser",
+        "core.sandbox.tunnels",
+        "core.sandbox.webhook_inbox",
+        "core.sandbox.share",
+    ):
+        try:
+            import importlib
 
-        _browser.evict_for_sandbox(state.sandbox_id)
-    except Exception:  # noqa: BLE001 — best-effort cleanup
-        _LOG.exception("browser eviction failed for %s", state.sandbox_id)
+            mod = importlib.import_module(module_name)
+            mod.evict_for_sandbox(state.sandbox_id)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            _LOG.exception("%s eviction failed for %s", module_name, state.sandbox_id)
     _teardown(state)
     remove(state.sandbox_id)
     return {
