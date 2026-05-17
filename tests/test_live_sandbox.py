@@ -132,19 +132,30 @@ _DOCKER_AVAILABLE = shutil.which("docker") is not None and os.environ.get("AZTEA
 def test_full_lifecycle_against_public_compose_repo():
     """Integration: boot → exec → db_query → snapshot → restore → fork → stop.
 
-    Uses a small Node+Postgres compose project as the source. The test
-    skips by default; export AZTEA_RUN_DOCKER_TESTS=1 to opt in.
+    Uses the canonical ``docker/awesome-compose`` Node + Postgres
+    fixture (public, MIT-licensed, stable URL). Skips when Docker
+    isn't reachable; opt in with ``AZTEA_RUN_DOCKER_TESTS=1``. Override
+    the repo via ``AZTEA_TEST_COMPOSE_REPO_URL`` if you want to point
+    it at your own fixture.
     """
     source_url = os.environ.get(
         "AZTEA_TEST_COMPOSE_REPO_URL",
-        "https://github.com/aztea/node-pg-fixture.git",
+        # docker's own canonical Node + Postgres compose example.
+        # MIT-licensed, intentionally minimal, kept up to date.
+        "https://github.com/docker/awesome-compose.git",
+    )
+    sub_path = os.environ.get(
+        "AZTEA_TEST_COMPOSE_SUBPATH", "nginx-nodejs-postgres",
     )
     start = live_sandbox.run(
         {
             "action": "sandbox_start",
             "input": {
                 "source": {"kind": "git", "url": source_url, "shallow": True},
-                "boot": {"strategy": "auto"},
+                "boot": {
+                    "strategy": "docker_compose",
+                    "compose_files": [f"{sub_path}/docker-compose.yml"],
+                },
                 "lifetime": {"max_minutes": 10},
                 "network": {"egress": "isolated"},
             },
@@ -154,18 +165,76 @@ def test_full_lifecycle_against_public_compose_repo():
     sandbox_id = start["sandbox_id"]
     assert start["status"] == "ready"
     try:
-        out = live_sandbox.run(
-            {
-                "action": "sandbox_exec",
-                "input": {"sandbox_id": sandbox_id, "cmd": "echo hello && env | wc -l"},
-            }
-        )
+        # exec a deterministic command
+        out = live_sandbox.run({
+            "action": "sandbox_exec",
+            "input": {"sandbox_id": sandbox_id, "cmd": "echo hello && env | wc -l"},
+        })
         assert out["exit_code"] == 0
         assert "hello" in out["stdout"]
-        snap = live_sandbox.run({"action": "sandbox_snapshot", "input": {"sandbox_id": sandbox_id}})
+        # snapshot
+        snap = live_sandbox.run({
+            "action": "sandbox_snapshot",
+            "input": {"sandbox_id": sandbox_id},
+        })
         assert "snapshot_id" in snap
+        # fork off the snapshot, exec inside the fork, then stop the fork
+        forked = live_sandbox.run({
+            "action": "sandbox_fork",
+            "input": {
+                "source_sandbox_id": sandbox_id,
+                "snapshot_id": snap["snapshot_id"],
+            },
+        })
+        assert "sandbox_id" in forked
+        live_sandbox.run({
+            "action": "sandbox_stop",
+            "input": {"sandbox_id": forked["sandbox_id"]},
+        })
     finally:
         live_sandbox.run({"action": "sandbox_stop", "input": {"sandbox_id": sandbox_id}})
+
+
+def test_contract_e2e_without_docker():
+    """A no-Docker contract walk: every lifecycle verb dispatches and chains receipts.
+
+    Why: even when AZTEA_RUN_DOCKER_TESTS=1 isn't set, we want a single
+    test that walks the full intended user journey through the engine
+    surface. We register a stub state directly so docker_available()
+    can fail and we still exercise dispatch + receipt + audit-chain.
+    """
+    sandbox_id = _register_stub_sandbox(services={
+        "app": {"container": "p-app", "image": "alpine:3",
+                "ports": [{"internal_port": "3000/tcp", "host_port": "12345"}]},
+    })
+    # quota → cost → audit cycle that exercises receipts and chain
+    quota = live_sandbox.run({"action": "sandbox_quota"})
+    assert quota["receipt"]["alg"] == "Ed25519"
+    cost = live_sandbox.run({"action": "sandbox_cost", "input": {"sandbox_id": sandbox_id}})
+    assert cost["spending"]["cap_cents"] >= 1
+    audit = live_sandbox.run({
+        "action": "sandbox_audit", "input": {"sandbox_id": sandbox_id},
+    })
+    assert audit["count"] >= 1
+    assert audit["merkle_root"]
+    # Status reflects the stub state we registered
+    status = live_sandbox.run({"action": "sandbox_status", "input": {"sandbox_id": sandbox_id}})
+    assert status["sandbox_id"] == sandbox_id
+    # Idempotency: same key + same start action returns the cached
+    # response with replayed=true.
+    first = live_sandbox.run({
+        "action": "sandbox_inject_failure",
+        "input": {"sandbox_id": sandbox_id, "kind": "abort", "target": "demo"},
+        "idempotency_key": "abc-123",
+    })
+    second = live_sandbox.run({
+        "action": "sandbox_inject_failure",
+        "input": {"sandbox_id": sandbox_id, "kind": "abort", "target": "demo"},
+        "idempotency_key": "abc-123",
+    })
+    assert "error" not in first
+    assert second.get("idempotency_replayed") is True
+    assert second["rule"]["rule_id"] == first["rule"]["rule_id"]
 
 
 # --- Spec / catalog wiring ---------------------------------------------------

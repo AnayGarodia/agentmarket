@@ -21,6 +21,7 @@ from core.sandbox import (
     export,
     filesystem,
     http_ops,
+    idempotency,
     lifecycle,
     link,
     network_capture as net_capture_mod,
@@ -193,9 +194,15 @@ def dispatch(payload: dict[str, Any]) -> dict[str, Any]:
             "input/payload must be an object",
         )
     sandbox_id = _resolve_sandbox_id(action, payload, inner_payload)
+    # Audit 2026-05-17 gap #11: dedup retry of mutating actions. If the
+    # same idempotency_key has a cached successful response, return it
+    # verbatim (with replayed=true) instead of re-executing.
+    cached = idempotency.lookup(action, idempotency_key)
+    if cached is not None:
+        return cached
     handler = HANDLERS.get(action)
     if handler is not None:
-        return _run_handler(
+        response = _run_handler(
             action=action,
             handler=handler,
             inner_payload=inner_payload,
@@ -203,6 +210,8 @@ def dispatch(payload: dict[str, Any]) -> dict[str, Any]:
             workspace_id=workspace_id,
             idempotency_key=idempotency_key,
         )
+        idempotency.store(action, idempotency_key, response)
+        return response
     if action in stubs.stub_actions():
         response = stubs.stub_for(action)
         return _wrap_with_receipt(action, inner_payload, response, sandbox_id, workspace_id, idempotency_key)
