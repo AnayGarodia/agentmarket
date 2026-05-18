@@ -27,6 +27,7 @@ DEFAULT_EXCLUDES = [
     "sdks/typescript/dist/*",
     "package-lock.json",
     ".claude/plugins/cache/*",
+    "docs/superpowers/plans/*",
 ]
 
 

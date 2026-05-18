@@ -85,6 +85,18 @@ JOB_SELF_DISPUTE = "job.self_dispute_not_allowed"
 JOB_RATE_STATUS_INVALID = "job.rate_invalid_status"
 JOB_INVALID_RATING = "job.invalid_rating"
 
+# Workspace lifecycle errors
+WORKSPACE_NOT_FOUND = "workspace.not_found"
+WORKSPACE_FORBIDDEN = "workspace.forbidden"
+WORKSPACE_SEALED = "workspace.sealed"
+WORKSPACE_QUOTA_EXCEEDED = "workspace.quota_exceeded"
+WORKSPACE_ARTIFACT_NOT_FOUND = "workspace.artifact.not_found"
+WORKSPACE_ARTIFACT_TOO_LARGE = "workspace.artifact.too_large"
+WORKSPACE_ARTIFACT_NAME_INVALID = "workspace.artifact.name_invalid"
+WORKSPACE_ARTIFACT_CONFLICT = "workspace.artifact.conflict"
+WORKSPACE_BACKING_EVICTED = "workspace.backing.evicted"
+WORKSPACE_SEAL_SIGNING_FAILED = "workspace.seal.signing_failed"
+
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,
     401: "auth.invalid_key",
