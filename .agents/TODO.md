@@ -46,6 +46,10 @@ _None at present._
 All 5 items addressed at the code level + prod-side cleanup on 2026-05-17.
 Nothing outstanding from the report.
 
+### From the 2026-05-18 cleanup sprint
+- [ ] **v1 isolation roadmap — gVisor on prod hosts.** B3: `isolation_backend='gvisor'` is wired correctly but no prod host has `runsc` registered. The default backend stays `'docker'`; `isolation.status_block()` is honest. v1 install: `apt-get install runsc` + add to `/etc/docker/daemon.json:runtimes` + `systemctl restart docker` on at least one executor. Once one host has runsc the agent description can re-claim gVisor as opt-in-and-real. Also unblocks B5 full uname masking (the only complete fix for `uname -r` leakage).
+- [ ] **v1 hire_batch idempotency_key dedup.** C2: hire_batch currently rejects per-job `idempotency_key` with a structured 422 + hint (pointing callers at cache_replay / client-side dedup). v1: implement server-side dedup using the existing `idempotency_requests` table (migration 0034). Key on `(caller_id, idempotency_key)`, 24h TTL, return same job_ids on duplicate submission. Schema additions: top-level `idempotency_key` field on `POST /jobs/batch`.
+
 ### Pre-existing
 - [ ] **Postgres charge race-guard hardening.** `core/payments/base.py:18` notes phantom-read risk under READ COMMITTED. SQLite path uses `BEGIN IMMEDIATE` and is solid. Add a Postgres concurrency stress test before high-load prod traffic.
 - [ ] **Worker disappearance reassign.** Today the lease times out and the caller is refunded rather than re-served. For built-in agents this is fine because the in-process worker pool is N-of-N. For third-party agents, decide whether a fallback retry to a different worker is in scope.

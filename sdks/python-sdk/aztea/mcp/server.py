@@ -444,6 +444,16 @@ _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
         "**Slug accepts both `snake_case` and `kebab-case` forms** — e.g. both "
         "`'regex_tester'` and `'regex-tester'` resolve to the same agent. The display "
         "name (e.g. `'Regex Tester'`) also resolves.\n\n"
+        "**Receipts are Ed25519-signed.** The response includes the agent's "
+        "DID (`did:web:<host>:agents:<agent_id>`); fetch the public key from "
+        "`/agents/{agent_id}/did.json`. Two signature schemes:\n"
+        "  - `ed25519` (v1): signs `canonical_json(output_payload)` only.\n"
+        "  - `Ed25519+aztea-output-sig/2` (v2): signs a sigil "
+        "`{v: 'aztea/output-sig/2', job_id, agent_id, output_hash}` so a "
+        "signature is non-portable across job_id or agent_id. v2 is used for "
+        "LLM-generated and compare-origin jobs. Reference verifier: "
+        "`core/crypto.py:verify_output_v2`. Full spec at "
+        "`/docs/api-reference#output-signature-schemes`.\n\n"
         "Aliased as `aztea_describe` for backward compatibility."
     ),
     "input_schema": {
