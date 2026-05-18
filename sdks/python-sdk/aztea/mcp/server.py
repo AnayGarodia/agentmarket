@@ -454,6 +454,17 @@ _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
         "LLM-generated and compare-origin jobs. Reference verifier: "
         "`core/crypto.py:verify_output_v2`. Full spec at "
         "`/docs/api-reference#output-signature-schemes`.\n\n"
+        "**Caching.** `quality.cacheable=true` agents serve identical inputs "
+        "from cache for `cache_ttl_seconds=86400` (24h default, max 168h). "
+        "The cache is global per `(agent_id, version_token, canonical_json("
+        "input))` — same input from a different caller still hits the same "
+        "cached output. The version_token is derived from "
+        "`endpoint_url + updated_at + reviewed_at`, so any change to the "
+        "agent listing automatically invalidates cached results. Cache hits "
+        "return `{cached: true, via: 'cache_replay', latency_ms: 0, "
+        "original_job_id, cache: {partition: 'global', default_ttl_hours: 24}}`. "
+        "Agents with host-side side-effects (e.g. shell_executor) are "
+        "non-cacheable regardless of the agent flag.\n\n"
         "Aliased as `aztea_describe` for backward compatibility."
     ),
     "input_schema": {

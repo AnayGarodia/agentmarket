@@ -377,3 +377,84 @@ def test_c11_search_catalog_only_lists_real_recipes():
         "the modernize-python regression: callers see a slug in search "
         "but run_recipe returns 'Pipeline not found'"
     )
+
+
+# ---------------------------------------------------------------------------
+# B11 — sandbox_restore receipt prev_hash chains to the prior receipt
+# (snapshot → exec → snapshot → restore). Source-level pin: build_receipt
+# reads _last_hash(sandbox_id) so the chain is automatic per sandbox.
+# ---------------------------------------------------------------------------
+
+
+def test_b11_restore_receipt_uses_chain_tail():
+    """build_receipt must pull prev_hash from _last_hash(sandbox_id)."""
+    src = Path("core/sandbox/receipts.py").read_text()
+    # The single source of truth — every receipt (including sandbox_restore)
+    # routes through build_receipt, which sets prev_hash via _last_hash.
+    assert "prev_hash = _last_hash(sandbox_id) if sandbox_id else \"\"" in src, (
+        "build_receipt must derive prev_hash from _last_hash(sandbox_id) "
+        "so the restore receipt's prev_hash chains to the snapshot receipt"
+    )
+
+
+# ---------------------------------------------------------------------------
+# D4 — describe_specialist tool description documents cache parameters
+# (ttl_seconds, partition, invalidation trigger).
+# ---------------------------------------------------------------------------
+
+
+def test_d4_describe_specialist_documents_cache_parameters():
+    """describe_specialist description must surface cache_ttl + partition."""
+    src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
+    idx = src.find('"name": "describe_specialist"')
+    assert idx >= 0
+    block = src[idx : idx + 6000]
+    for marker in ("cache_ttl_seconds", "version_token", "cache_replay"):
+        assert marker in block, (
+            f"describe_specialist must document {marker!r} so callers "
+            "know the cache lifetime / partitioning / invalidation rules"
+        )
+
+
+# ---------------------------------------------------------------------------
+# D5 — manage_workflow(session_audit) accepts include_receipts +
+# include_spend_breakdown to shrink the response.
+# ---------------------------------------------------------------------------
+
+
+def test_d5_session_audit_schema_includes_size_toggles():
+    """manage_workflow's session_audit schema must declare the size toggles."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    idx = src.find('"name": "manage_workflow"')
+    assert idx >= 0
+    block = src[idx : idx + 12000]
+    assert '"include_receipts"' in block
+    assert '"include_spend_breakdown"' in block
+
+
+def test_d5_session_audit_handler_forwards_size_toggles():
+    """_session_audit must forward include_receipts/include_spend_breakdown."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    idx = src.find("def _session_audit(")
+    assert idx >= 0
+    body = src[idx : idx + 2500]
+    assert 'args.get("include_receipts")' in body
+    assert 'args.get("include_spend_breakdown")' in body
+
+
+# ---------------------------------------------------------------------------
+# E2 — hire_batch description must document all-or-nothing slug resolution.
+# Verified against the manage_workflow description (work-order text said
+# this was likely already FIXED, just needs a pin).
+# ---------------------------------------------------------------------------
+
+
+def test_e2_hire_batch_description_documents_all_or_nothing():
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    idx = src.find('"name": "manage_workflow"')
+    assert idx >= 0
+    block = src[idx : idx + 6000]
+    assert "all-or-nothing" in block.lower(), (
+        "manage_workflow description must document the all-or-nothing "
+        "slug-resolution rule for hire_batch"
+    )

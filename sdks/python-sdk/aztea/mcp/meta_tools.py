@@ -1587,6 +1587,24 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                     "type": "boolean",
                     "description": "session_audit: when true, server-side Ed25519 verification runs on every signed receipt in the window using each agent's did:web public key. Returns {verified, failed, first_failure} plus an aggregate sha256 receipts_digest you can pin or paste anywhere — anyone can independently re-verify offline. Use this to prove a batch is cryptographically intact.",
                 },
+                "include_receipts": {
+                    "type": "boolean",
+                    "description": (
+                        "session_audit: when false, drops the receipts array AND the "
+                        "per-agent breakdown (which dominates response size at ~250B "
+                        "per entry). Combine with verify_all=true to get only the "
+                        "verification counts + digest. Default true."
+                    ),
+                },
+                "include_spend_breakdown": {
+                    "type": "boolean",
+                    "description": (
+                        "session_audit: explicit toggle for spend.by_agent[]. "
+                        "Defaults to mirror include_receipts; pass true with "
+                        "include_receipts=false to keep the breakdown but drop "
+                        "the receipts."
+                    ),
+                },
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
@@ -2593,6 +2611,17 @@ def _session_audit(
             params[key] = value
     if args.get("verify_all"):
         params["verify_all"] = "true"
+    # 2026-05-18 (D5): forward the two size-control flags so MCP callers can
+    # ask for a digest-only response. include_receipts=false alone now also
+    # drops the per-agent breakdown (server defaults include_spend_breakdown
+    # to mirror include_receipts), but a caller can opt back in by passing
+    # include_spend_breakdown=true explicitly even with include_receipts=false.
+    if args.get("include_receipts") is not None:
+        params["include_receipts"] = "true" if args.get("include_receipts") else "false"
+    if args.get("include_spend_breakdown") is not None:
+        params["include_spend_breakdown"] = (
+            "true" if args.get("include_spend_breakdown") else "false"
+        )
     # Bulk verification can do real Ed25519 work on N receipts. Allow a
     # generous server-side timeout when the caller asked for it. Default
     # request timeout otherwise.
