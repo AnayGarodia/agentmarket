@@ -360,6 +360,13 @@ _TOOLS: list[dict[str, Any]] = [
             "Submit an async job to an Aztea marketplace agent and return immediately with a job_id. "
             "The agent works in the background; poll with manage_job(action='status') to get progress and results. "
             "Use this by default for long-running tasks, for work that may need clarification, or whenever you want to manage several agents without blocking on each call."
+            "\n\n"
+            "WALL-CLOCK CAP: each agent has its own per-call wall-clock budget (typically 20-60 seconds for "
+            "sync-style agents, up to several minutes for long-running ones). Async submission does NOT bypass "
+            "that per-agent cap — exceeding it returns a structured failure 'Agent exceeded its X.Xs wall-clock "
+            "budget. Refunded.' and the job is auto-refunded. Inspect the agent's documented budget via "
+            "describe_specialist before submitting work known to be slower than the budget. If you need a "
+            "longer ceiling, prefer agents whose spec advertises one (e.g. live_sandbox), or split the task."
         ),
         "input_schema": {
             "type": "object",
@@ -743,9 +750,16 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "aztea_hire_batch",
         "description": (
-            "Hire up to 50 independent marketplace specialists in parallel under one atomic batch rail. "
+            "Hire up to 250 independent marketplace specialists in parallel under one atomic batch rail. "
             "Aztea opens escrow per job, tracks settlement/refunds, and returns a visible parallel_hire_trace. "
-            "Use this when a task naturally splits by file, package, endpoint, test case, or independent specialist role."
+            "Use this when a task naturally splits by file, package, endpoint, test case, or independent specialist role. "
+            "\n\n"
+            "Throughput: at saturation the scheduler drains roughly 0.5-1.5 jobs/sec — a 50-job batch typically "
+            "completes in 4-6 minutes wall-clock even with worker_pool.configured_parallelism >= 24. The "
+            "configured parallelism is the upper bound, not the realized throughput; per-job provisioning + "
+            "lease acquisition dominate when sync agent latency is sub-second. Plan budgets accordingly; "
+            "we report `worker_pool.observed_throughput_jobs_per_sec` on /jobs/batch/{id} status responses so "
+            "callers can validate against their own batches."
         ),
         "input_schema": {
             "type": "object",
@@ -804,9 +818,67 @@ _TOOLS: list[dict[str, Any]] = [
                                 "description": "If true, output is not recorded as a public work example.",
                                 "default": False,
                             },
+                            # ── Per-job governance fields (bug #1, 2026-05-18) ──
+                            # These map 1:1 onto JobCreateRequest fields and are
+                            # forwarded to /jobs/batch. The handler used to drop
+                            # them silently; now they round-trip into job records.
+                            "parent_job_id": {
+                                "type": "string",
+                                "description": "Optional parent job ID — establishes a child job under another job. tree_depth is server-derived; max depth is 10.",
+                            },
+                            "parent_cascade_policy": {
+                                "type": "string",
+                                "enum": ["detach", "fail_children_on_parent_fail"],
+                                "description": "Behavior when parent reaches terminal failure. Default 'detach'.",
+                            },
+                            "callback_url": {
+                                "type": "string",
+                                "description": "HTTPS URL the platform POSTs to on terminal state. See JobCreateRequest.callback_url.",
+                            },
+                            "callback_secret": {
+                                "type": "string",
+                                "description": "HMAC-SHA256 secret used to sign the callback body. Sent only on creation; never echoed back.",
+                            },
+                            "clarification_timeout_seconds": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 7 * 24 * 3600,
+                                "description": "Seconds to wait for caller clarification before applying clarification_timeout_policy.",
+                            },
+                            "clarification_timeout_policy": {
+                                "type": "string",
+                                "enum": ["fail", "proceed"],
+                                "description": "Action when clarification_timeout_seconds elapses.",
+                            },
+                            "output_verification_window_seconds": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 7 * 24 * 3600,
+                                "description": "Caller acceptance window after completion. Settlement is held until accepted/rejected or window expires.",
+                            },
+                            "stop_when": {
+                                "type": "array",
+                                "description": "Optional co-pilot stop predicates ({label, expr}). First JMESPath match aborts and bills per billing_unit.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "expr": {"type": "string"},
+                                    },
+                                    "required": ["label", "expr"],
+                                },
+                                "maxItems": 16,
+                            },
                         },
                         "required": [],
                         "anyOf": [{"required": ["agent_id"]}, {"required": ["slug"]}],
+                        # WHY (bug #1, 2026-05-18): keep additionalProperties=False
+                        # so unsupported per-job keys (e.g. `workspace_id`,
+                        # `max_spend_cents`, `per_job_cap_cents`,
+                        # `stop_when_json`, `tree_depth`) are rejected at the
+                        # schema layer with a clear 422 instead of being
+                        # silently dropped. `tree_depth` is server-derived and
+                        # callers must use the supported governance fields above.
                         "additionalProperties": False,
                     },
                 },
@@ -822,9 +894,10 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "aztea_compare_agents",
         "description": (
-            "Run the same task against 2-3 Aztea agents, wait for the compare session to finish, "
+            "Run the same task against 2-10 Aztea agents, wait for the compare session to finish, "
             "and return all results side by side. Use this before choosing a single winner to pay. "
-            "If the compare is still running when wait_seconds expires, poll it with aztea_compare_status."
+            "If the compare is still running when wait_seconds expires, poll it with aztea_compare_status. "
+            "Note: total count is across `agent_ids[]` + `slugs[]` combined; passing 1 of each still counts as 2."
         ),
         "input_schema": {
             "type": "object",
@@ -833,8 +906,14 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "array",
                     "items": {"type": "string"},
                     "minItems": 2,
-                    "maxItems": 3,
-                    "description": "2-3 unique agent IDs to compare.",
+                    "maxItems": 10,
+                    "description": "Up to 10 unique agent IDs to compare. Counted together with slugs[].",
+                },
+                "slugs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 10,
+                    "description": "Alternative to agent_ids[] — slugs resolved client-side. agent_ids[]+slugs[] total must be 2-10.",
                 },
                 "input_payload": {
                     "type": "object",
@@ -978,6 +1057,51 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        # Bug #6 (2026-05-18). Without this, callers had no way to enumerate
+        # their existing workspaces from MCP — the only path was the raw
+        # HTTP API. Read-only; thin wrapper over GET /workspaces.
+        "name": "aztea_workspace_list",
+        "description": (
+            "List the caller's Aztea workspaces, newest first. Returns "
+            "metadata only (id, status, created_at, expires_at, sealed_at, "
+            "artifact_count, total_bytes) — the seal manifest is excluded "
+            "for response size. Use aztea_workspace_get or aztea_workspace_inspect "
+            "for the per-workspace detail or signed manifest."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "default": 100,
+                    "description": "Max workspaces to return (1-500). Default 100.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "aztea_workspace_get",
+        "description": (
+            "Fetch a single workspace's metadata + artifact listing. "
+            "Read-only. Use aztea_workspace_inspect when you also need the "
+            "signed manifest (sealed workspaces only) — this action returns "
+            "the same shape without the manifest fetch, so it's cheaper."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {
+                    "type": "string",
+                    "description": "Workspace ID returned by aztea_workspace_list or aztea_pipeline_status.",
+                },
+            },
+            "required": ["workspace_id"],
+        },
+    },
+    {
         "name": "aztea_pipeline_status",
         "description": (
             "Poll an existing pipeline or recipe run by run_id. "
@@ -1014,7 +1138,7 @@ _TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "recipe_id": {
                     "type": "string",
-                    "description": "Recipe identifier from GET /recipes, e.g. 'review-and-lint', 'modernize-python', 'audit-deps'. Same string accepted as recipe_name historically.",
+                    "description": "Recipe identifier from GET /recipes, e.g. 'audit-deps', 'secret-scan-and-audit', 'security-audit-sealed', 'domain-health'. Same string accepted as recipe_name historically.",
                 },
                 "recipe_name": {
                     "type": "string",
@@ -1156,6 +1280,13 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         # Workspaces v0 (PR 4): inspect a run's auto-workspace — status,
         # artifact list, and the signed manifest if sealed.
         "workspace_inspect": "aztea_workspace_inspect",
+        # Workspaces CRUD surface (bug #6, 2026-05-18). The HTTP endpoints
+        # (/workspaces and /workspaces/{id}) existed but had no caller-
+        # facing MCP action — every `workspace_*` action returned
+        # "Unknown action". These are the minimum CRUD shape callers need
+        # to manage workspaces across multiple recipe runs.
+        "workspace_list": "aztea_workspace_list",
+        "workspace_get": "aztea_workspace_get",
     },
 }
 
@@ -1491,6 +1622,8 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_run_pipeline": _annotations(read_only=False, idempotent=False),
     "aztea_pipeline_status": _annotations(read_only=True, idempotent=False),
     "aztea_workspace_inspect": _annotations(read_only=True, idempotent=True),
+    "aztea_workspace_list": _annotations(read_only=True, idempotent=True),
+    "aztea_workspace_get": _annotations(read_only=True, idempotent=True),
     "aztea_run_recipe": _annotations(read_only=False, idempotent=False),
     # Grouped tools dispatch to varied actions; mark as non-read-only.
     "manage_job": _annotations(read_only=False, idempotent=False),
@@ -1751,6 +1884,10 @@ def call_meta_tool(
             return _pipeline_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_workspace_inspect":
             return _workspace_inspect(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_workspace_list":
+            return _workspace_list(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_workspace_get":
+            return _workspace_get(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_run_recipe":
             ok, result = _run_recipe(session, base, hdrs, timeout, arguments)
             if ok:
@@ -2723,6 +2860,20 @@ def _job_status(
     if ok_msgs:
         messages = msgs_body.get("messages") or []
         result["messages"] = messages
+        # Surface partial_output / streaming guidance. 2026-05-18 bug #15:
+        # compare and copilot jobs emit `partial_output` messages but the
+        # only caller-facing subscribe path is the messages endpoint via
+        # repeated GET with `since_message_id`. There is no SSE/WebSocket
+        # surface today — make that explicit so callers don't hunt for one.
+        partials = [m for m in messages if m.get("type") == "partial_output"]
+        if partials:
+            result["partial_outputs_note"] = (
+                f"{len(partials)} partial_output message(s) attached. "
+                "There is no SSE/WebSocket subscription today — poll "
+                "manage_job(action='status', since_message_id=...) to stream "
+                "incrementally. Partials are advisory; the canonical result "
+                "lives in `output_payload` once the job is complete."
+            )
         # Surface clarification requests prominently
         clarifications = [
             m for m in messages if m.get("type") == "clarification_request"
@@ -3325,14 +3476,22 @@ def _dispute_status(
     status = str(result.get("status") or "").lower()
     judgments = result.get("judgments") or []
     eta_hint = None
-    if status == "pending":
+    if status in ("pending", "judging"):
+        # WHY: the prior copy promised 1-2 minutes; observed reality is more
+        # often 20-40 minutes because the judge-thread isn't always elected
+        # immediately and the queue ticks at the server-side sweep cadence
+        # (default 30s, env-tunable). Don't lie. The server-side eta_hint
+        # in /disputes/{id} is the source of truth for the precise interval.
         eta_hint = (
-            "Pending. LLM judges run on a 60s interval; expect first verdict "
-            "within 1-2 minutes. If 2 judges agree, dispute resolves immediately."
+            "Pending. LLM judges run on a sweeper loop; first verdict typically "
+            "lands in 5-30 minutes (worst-case longer if the elected judge "
+            "thread is being re-acquired after a worker restart). Two matching "
+            "judgments resolve the dispute immediately. See the server-side "
+            "next_judge_run_by timestamp for a precise window."
         )
     elif status == "tied":
         eta_hint = "Tied after 2 rounds. Will auto-resolve to caller in 48h per policy."
-    elif status == "resolved":
+    elif status in ("resolved", "final"):
         eta_hint = "Resolved. Outcome and split visible in this response."
     result.setdefault(
         "note",
@@ -3621,6 +3780,29 @@ def _agent_id_from_bulk(spec: dict, slug_to_agent_id: dict[str, str]) -> str:
     return slug_to_agent_id.get(slug, "")
 
 
+# WHY (bug #1, 2026-05-18): callers had been sending per-job governance
+# fields (parent_job_id, callback_url, callback_secret, output_verification_
+# window_seconds, stop_when, idempotency_key, etc.) into hire_batch for
+# months — every one was silently dropped because the handler only forwarded
+# agent_id/input_payload/budget_cents/max_price_cents/private_task. Now:
+# every supported wire-schema field is forwarded; unrecognized keys return
+# 422 with the explicit list. Schema validation at the JSON layer (via
+# additionalProperties=False in _TOOLS[aztea_hire_batch]) is the first line
+# of defense — this map exists so the handler stays honest if the schema
+# drifts and a key slips through.
+_HIRE_BATCH_ALLOWED_PER_JOB_FIELDS = frozenset({
+    "agent_id", "slug",
+    "input_payload", "input", "arguments",
+    "budget_cents", "max_price_cents",
+    "private_task",
+    "parent_job_id", "parent_cascade_policy",
+    "callback_url", "callback_secret",
+    "clarification_timeout_seconds", "clarification_timeout_policy",
+    "output_verification_window_seconds",
+    "stop_when",
+})
+
+
 def _hire_batch(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
@@ -3642,11 +3824,33 @@ def _hire_batch(
     # falls back to per-slug for backwards compatibility with older servers.
     slug_to_agent_id = _bulk_resolve_slugs_or_empty(session, base, hdrs, timeout, raw_jobs)
     jobs_body = []
-    for spec in raw_jobs:
+    for index, spec in enumerate(raw_jobs):
         if not isinstance(spec, dict):
             return False, {
                 "error": "INVALID_INPUT",
                 "message": "Each job spec must be an object.",
+            }
+        # bug #1: reject unsupported per-job fields with a clear 422 instead
+        # of dropping them silently. Fields the server-side schema does not
+        # accept (workspace_id, max_spend_cents, per_job_cap_cents,
+        # stop_when_json, tree_depth) must surface as explicit errors so the
+        # caller can correct the request rather than discover the drop after
+        # the fact in the returned job record.
+        unsupported = sorted(
+            k for k in spec.keys() if k not in _HIRE_BATCH_ALLOWED_PER_JOB_FIELDS
+        )
+        if unsupported:
+            return False, {
+                "error": "INVALID_INPUT",
+                "status_code": 422,
+                "message": (
+                    f"jobs[{index}] contains unsupported field(s): "
+                    f"{', '.join(unsupported)}. "
+                    "Per-job spec accepts only the wire-schema governance "
+                    "fields documented on `aztea_hire_batch.jobs[].properties`."
+                ),
+                "unsupported_fields": unsupported,
+                "supported_fields": sorted(_HIRE_BATCH_ALLOWED_PER_JOB_FIELDS),
             }
         bulk_hit = _agent_id_from_bulk(spec, slug_to_agent_id)
         if bulk_hit:
@@ -3670,6 +3874,26 @@ def _hire_batch(
             job["max_price_cents"] = int(spec["max_price_cents"])
         if spec.get("private_task") is not None:
             job["private_task"] = bool(spec["private_task"])
+        # bug #1+16: forward per-job governance through to /jobs/batch so they
+        # round-trip into the resulting job records instead of nulling out.
+        if spec.get("parent_job_id"):
+            job["parent_job_id"] = str(spec["parent_job_id"]).strip()
+        if spec.get("parent_cascade_policy"):
+            job["parent_cascade_policy"] = str(spec["parent_cascade_policy"]).strip()
+        if spec.get("callback_url"):
+            job["callback_url"] = str(spec["callback_url"]).strip()
+        if spec.get("callback_secret"):
+            job["callback_secret"] = str(spec["callback_secret"])
+        if spec.get("clarification_timeout_seconds") is not None:
+            job["clarification_timeout_seconds"] = int(spec["clarification_timeout_seconds"])
+        if spec.get("clarification_timeout_policy"):
+            job["clarification_timeout_policy"] = str(spec["clarification_timeout_policy"]).strip()
+        if spec.get("output_verification_window_seconds") is not None:
+            job["output_verification_window_seconds"] = int(
+                spec["output_verification_window_seconds"]
+            )
+        if isinstance(spec.get("stop_when"), list):
+            job["stop_when"] = spec["stop_when"]
         jobs_body.append(job)
     body: dict[str, Any] = {"jobs": jobs_body}
     intent = str(args.get("intent") or "").strip()
@@ -3724,10 +3948,18 @@ def _compare_agents(
     agent_ids = [
         str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()
     ]
-    if len(agent_ids) < 2 or len(agent_ids) > 3:
+    if len(agent_ids) < 2 or len(agent_ids) > 10:
         return False, {
             "error": "INVALID_INPUT",
-            "message": "Provide 2 or 3 unique agent_ids/slugs to compare.",
+            "message": (
+                "Compare requires 2-10 unique agents in total. The count is "
+                "across BOTH `agent_ids[]` and `slugs[]` combined (slugs are "
+                "resolved to agent_ids client-side, then deduped). You provided "
+                f"{len(agent_ids)}."
+            ),
+            "received_count": len(agent_ids),
+            "min": 2,
+            "max": 10,
         }
     body: dict[str, Any] = {
         "agent_ids": agent_ids,
@@ -3878,6 +4110,65 @@ def _poll_pipeline_run(
         "Pipeline run is still running. Poll it with aztea_pipeline_status or wait longer with wait_seconds.",
     )
     return True, latest
+
+
+def _workspace_list(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
+    """List the caller's workspaces, newest first.
+
+    Bug #6 (2026-05-18): closes the "phantom feature" gap — before this,
+    every workspace_* action on manage_workflow returned "Unknown action".
+    Thin wrapper over ``GET /workspaces?limit=...``.
+    """
+    try:
+        limit_raw = args.get("limit")
+        limit = 100 if limit_raw is None else max(1, min(int(limit_raw), 500))
+    except (TypeError, ValueError):
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "limit must be an integer between 1 and 500.",
+        }
+    ok, result = _get(
+        session, f"{base}/workspaces", hdrs, timeout, params={"limit": limit}
+    )
+    if ok and isinstance(result, dict):
+        workspaces = result.get("workspaces") or []
+        result.setdefault("count", len(workspaces))
+        if not workspaces:
+            result.setdefault(
+                "note",
+                "No workspaces yet. Workspaces are created automatically when "
+                "you run an auto_workspace recipe (e.g. security-audit-sealed) "
+                "or manually via POST /workspaces.",
+            )
+    return ok, result
+
+
+def _workspace_get(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
+    """Fetch one workspace's metadata + artifact listing (no manifest).
+
+    Bug #6 (2026-05-18). Use ``aztea_workspace_inspect`` when you also need
+    the signed manifest — that's heavier because it fetches the manifest
+    body and verifies the seal signature. This action returns the same
+    workspace + artifacts shape without that extra round-trip.
+    """
+    workspace_id = str(args.get("workspace_id") or "").strip()
+    if not workspace_id:
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "workspace_id is required.",
+        }
+    ok, ws = _get(session, f"{base}/workspaces/{workspace_id}", hdrs, timeout)
+    if not ok:
+        return ok, ws
+    ok2, listing = _get(
+        session, f"{base}/workspaces/{workspace_id}/artifacts", hdrs, timeout
+    )
+    artifacts = listing.get("artifacts", []) if ok2 else []
+    return True, {"workspace": ws, "artifacts": artifacts}
 
 
 def _workspace_inspect(

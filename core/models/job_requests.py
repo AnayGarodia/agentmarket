@@ -138,13 +138,18 @@ class JobCreateRequest(BaseModel):
         ge=0,
         le=7 * 24 * 3600,
         description=(
-            "Caller acceptance window between worker completion and settle. "
-            "During this window, settlement is HELD until the caller calls "
-            "POST /jobs/{job_id}/verify_output (accept | reject) or the window "
-            "expires. NOTE: the window CLOSES on settle — once funds release "
-            "to the agent, the verify_output endpoint returns 409 "
-            "`job.already_settled`. After settle the only recourse for a bad "
-            "output is POST /jobs/{job_id}/dispute within `dispute_window_hours`."
+            "Optional caller acceptance window after worker completion. "
+            "During this window, settlement is HELD; the caller can accept/"
+            "reject via manage_job(action='verify_output'). The window closes "
+            "the moment settlement occurs — either because the caller decided, "
+            "OR because the deadline elapsed and the sweeper auto-settled. "
+            "Once `settled_at` is set, verify_output returns 409 'Job is "
+            "already settled' even if `created_at + window_seconds` hasn't "
+            "elapsed yet — settlement is the gate, not wall-clock. Audit "
+            "2026-05-18 bug #4 — keep this docstring honest with the "
+            "implementation in part_009.py::jobs_verify_output_decision. "
+            "After settle the only recourse for a bad output is POST "
+            "/jobs/{job_id}/dispute within `dispute_window_hours`."
         ),
     )
     callback_url: str | None = Field(

@@ -688,6 +688,7 @@ def _execute_run(
     client_id: str | None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
     workspace_id: str | None = None,
+    seal_workspace_on_success: bool = True,
 ) -> None:
     """Side-effect: run a whole pipeline end-to-end; records final state on the run row.
 
@@ -696,8 +697,10 @@ def _execute_run(
     (definition issue) or a RuntimeError (a step's agent rejected).
 
     When ``workspace_id`` is set, the workspace is sealed on successful
-    completion. Seal failures are logged but never fail the run — the
-    run completed cleanly; only the audit trail is partial.
+    completion ONLY if ``seal_workspace_on_success`` is true. Caller-
+    supplied workspaces (bug #10, 2026-05-18) are NOT sealed here — the
+    caller owns the lifecycle and may want to add more runs into the
+    same workspace. Seal failures are logged but never fail the run.
     """
     validated = validate_definition(pipeline.get("definition") or {})
     try:
@@ -713,7 +716,7 @@ def _execute_run(
             raise ValueError(contradiction)
         final_output = _build_final_output(step_results, validated["terminal_nodes"])
         db.complete_run(run_id, final_output)
-        if workspace_id:
+        if workspace_id and seal_workspace_on_success:
             try:
                 from core import workspaces as _workspaces
                 _workspaces.seal_workspace(workspace_id)
@@ -734,6 +737,7 @@ def run_pipeline(
     *,
     client_id: str | None = None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None = None,
+    caller_workspace_id: str | None = None,
 ) -> str:
     """Execute a pipeline step-by-step and return the run_id.
 
@@ -741,6 +745,12 @@ def run_pipeline(
     node's agent in DAG order, passing outputs forward as inputs to dependents.
     Returns the ``run_id`` of the created run record. Raises ``ValueError`` if
     the pipeline is not found or the definition fails validation.
+
+    ``caller_workspace_id`` (bug #10, 2026-05-18): if provided, the run binds
+    its outputs to the caller's pre-existing workspace instead of minting a
+    new one. The caller must own the workspace; ownership is verified before
+    accepting the binding. Caller-supplied workspaces are NOT auto-sealed on
+    completion — the caller drives sealing via POST /workspaces/{id}/seal.
     """
     pipeline = db.get_pipeline(pipeline_id)
     if pipeline is None:
@@ -755,8 +765,35 @@ def run_pipeline(
     # step's output is auto-written to ``outputs/{slug}/{node_id}.json``.
     # The workspace is sealed in _execute_run on successful completion.
     workspace_id: str | None = None
+    seal_workspace_on_success = True
     definition = pipeline.get("definition") or {}
-    if isinstance(definition, dict) and definition.get("auto_workspace"):
+
+    # Bug #10 (2026-05-18): a caller-supplied workspace_id rebinds this run's
+    # outputs to an existing workspace. We accept it even when the recipe
+    # does NOT have auto_workspace=true (bug #8), so non-sealed recipes can
+    # opt into workspace capture by passing a workspace_id.
+    if caller_workspace_id:
+        from core import workspaces as _workspaces
+        try:
+            ws_row = _workspaces.get_workspace(caller_workspace_id)
+        except Exception as exc:  # noqa: BLE001 — caller-facing validation
+            raise ValueError(
+                f"Workspace '{caller_workspace_id}' not found: {exc}"
+            )
+        if str(ws_row.get("owner_user_id") or "") != caller_owner_id:
+            raise ValueError(
+                "Caller does not own the supplied workspace_id."
+            )
+        workspace_id = caller_workspace_id
+        seal_workspace_on_success = False
+        try:
+            db.set_run_workspace(created["run_id"], workspace_id)
+        except Exception as exc:  # noqa: BLE001 — non-fatal
+            _LOG.warning(
+                "pipelines.set_run_workspace_failed run=%s ws=%s err=%s",
+                created["run_id"], workspace_id, exc,
+            )
+    elif isinstance(definition, dict) and definition.get("auto_workspace"):
         try:
             from core import workspaces as _workspaces
             workspace_id = _workspaces.create_workspace(
@@ -782,6 +819,7 @@ def run_pipeline(
             "client_id": client_id,
             "execute_builtin_agent": execute_builtin_agent,
             "workspace_id": workspace_id,
+            "seal_workspace_on_success": seal_workspace_on_success,
         },
         name=f"aztea-pipeline-{created['run_id'][:8]}",
         daemon=True,

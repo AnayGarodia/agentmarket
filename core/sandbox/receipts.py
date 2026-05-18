@@ -111,6 +111,14 @@ def mint_receipt(
         "prev_hash": prev_hash,
         "workspace_id": workspace_id,
         "idempotency_key": idempotency_key,
+        # WHY (2026-05-18 bug #9): consumed_contexts / produced_contexts
+        # are RESERVED for a future context-propagation system that
+        # tracks which workspace artifacts (or other named contexts) a
+        # call read from and wrote to. Empty today across every receipt;
+        # kept in the schema so future-compatible verifiers don't trip
+        # on a "missing key" assertion when the field gets populated.
+        # When removed/implemented, bump the receipt schema version
+        # ``aztea/sandbox-receipt/1`` so verifiers can opt in.
         "consumed_contexts": [],
         "produced_contexts": [],
         "parent_chain_tail_hash": parent_chain_tail_hash,

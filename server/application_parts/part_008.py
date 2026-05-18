@@ -1055,10 +1055,18 @@ def _decorate_with_rendered_output(
     response_payload: dict[str, Any],
     *,
     output_format: str | None,
+    agent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attach `rendered_output` (string or dict) to a response when the caller
     requested a non-JSON output format. The canonical `output` field is left
-    untouched so existing clients keep working."""
+    untouched so existing clients keep working.
+
+    ``agent`` (when provided) flows through to the renderer as ``agent_meta``
+    so per-shape renderers (markdown/Slack) can use the agent's display name
+    in headers — fixes the 2026-05-18 bug #18 where dockerfile_analyzer's
+    PR-comment rendered "## Secret Scanner" because no name was threaded
+    through.
+    """
     if not output_format or output_format == "json":
         return response_payload
     output = response_payload.get("output")
@@ -1066,8 +1074,17 @@ def _decorate_with_rendered_output(
         return response_payload
     from core import output_formats as _output_formats
 
+    agent_meta: dict[str, Any] = {}
+    if isinstance(agent, dict):
+        agent_meta = {
+            "agent_id": agent.get("agent_id"),
+            "name": agent.get("name"),
+            "slug": agent.get("slug"),
+        }
     try:
-        rendered = _output_formats.render(output, format=output_format)
+        rendered = _output_formats.render(
+            output, format=output_format, agent_meta=agent_meta or None
+        )
     except Exception:  # pragma: no cover - renderer must never break a call
         return response_payload
     response_payload["rendered_output"] = rendered
@@ -2009,7 +2026,7 @@ def registry_call(
             cache_response["output"] = shaped_output
             cache_response.update(extra)
             cache_response = _decorate_with_rendered_output(
-                cache_response, output_format=requested_output_format
+                cache_response, output_format=requested_output_format, agent=agent
             )
             return JSONResponse(content=cache_response)
         # Singleflight: collapse concurrent identical-input calls so a fan-out
@@ -2041,7 +2058,9 @@ def registry_call(
                     cache_response["output"] = shaped_output
                     cache_response.update(extra)
                     cache_response = _decorate_with_rendered_output(
-                        cache_response, output_format=requested_output_format
+                        cache_response,
+                        output_format=requested_output_format,
+                        agent=agent,
                     )
                     return JSONResponse(content=cache_response)
                 # Leader timed out / failed without writing — claim leadership
@@ -2443,7 +2462,7 @@ def registry_call(
                 )
                 _cache_singleflight_release(singleflight_key or "")
             response_payload = _decorate_with_rendered_output(
-                response_payload, output_format=requested_output_format
+                response_payload, output_format=requested_output_format, agent=agent
             )
             response_payload = _attach_post_call_actions(
                 response_payload, job=completed
@@ -2878,7 +2897,7 @@ def registry_call(
     response_payload["output"] = shaped_output
     response_payload.update(extra)
     response_payload = _decorate_with_rendered_output(
-        response_payload, output_format=requested_output_format
+        response_payload, output_format=requested_output_format, agent=agent
     )
     response_payload = _attach_post_call_actions(response_payload, job=settled)
     if idempotency_key:

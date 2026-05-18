@@ -206,34 +206,12 @@ _META_TOOL_DISCOVERY: dict[str, tuple[list[str], list[str]]] = {
 # Slugs match the recipe_ids in `core/recipes.py::BUILTIN_RECIPES`.
 # Keep in sync with that file: when a recipe is added there, add it here too.
 _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
-    {
-        "slug": "modernize-python",
-        "aliases": ["modernize-python", "modernize_python"],
-        "kind": "recipe",
-        "recipe_id": "modernize-python",
-        "name": "modernize-python (recipe)",
-        "description": "Lint → type-check → review pipeline for Python code. Run via aztea_run_recipe(recipe_id='modernize-python').",
-        "input_schema": {
-            "type": "object",
-            "properties": {"code": {"type": "string"}},
-            "required": ["code"],
-        },
-        "output_schema": {},
-        "category": "Code",
-        "tags": ["recipe", "pipeline", "python", "lint", "types"],
-        "is_featured": True,
-        "cacheable": True,
-        "runtime_requirements": ["ruff", "mypy"],
-        "tooling_kind": "recipe_pipeline",
-        "stability_tier": "stable",
-        "codex_recommended": True,
-        "short_use_cases": ["lint+type+review on a snippet"],
-        "trust_score": None,
-        "success_rate": None,
-        "avg_latency_ms": None,
-        "price_per_call_usd": None,
-        "verified": True,
-    },
+    # WHY (2026-05-18): the `modernize-python` entry was removed here because
+    # it had no backing recipe definition — `aztea_run_recipe(recipe_id=
+    # 'modernize-python')` returned "Pipeline 'modernize-python' not found."
+    # Surfacing a slug in the search index that doesn't exist as a recipe
+    # is worse than not advertising it at all. Re-add this entry only when
+    # a real Python lint+type+review recipe lands in `core/recipes.py`.
     {
         "slug": "audit-deps",
         "aliases": ["audit-deps", "audit_deps"],

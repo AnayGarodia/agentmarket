@@ -187,3 +187,41 @@ def test_render_never_raises_on_garbage():
     assert isinstance(F.render([1, 2, 3], format="markdown"), str)
     assert isinstance(F.render(None, format="markdown"), str)
     assert isinstance(F.render({}, format="markdown"), str)
+
+
+def test_dockerfile_findings_do_not_get_secret_scanner_header():
+    """Regression for the 2026-05-18 audit bug #18.
+
+    dockerfile_analyzer emits ``findings + total_findings + by_severity``;
+    the pre-fix ``_looks_like_secret_scan`` matched on `total_findings`
+    alone and rendered a "## Secret Scanner" header with empty Rule/Preview
+    cells. After the tightening, this output must NOT match secret_scanner
+    and must fall through to the linter / generic renderer instead.
+    """
+    dockerfile_output = {
+        "findings": [
+            {"severity": "warning", "rule": "DOCK001", "message": "use a pinned base image", "line": 1},
+            {"severity": "error", "rule": "DOCK002", "message": "USER root is risky", "line": 12},
+        ],
+        "total_findings": 2,
+        "by_severity": {"error": 1, "warning": 1},
+        "score": 60,
+        "pinned_base_image": False,
+    }
+    md = F.render(dockerfile_output, format="markdown")
+    assert "Secret Scanner" not in md
+    pr = F.render(dockerfile_output, format="github_pr_comment")
+    assert "Secret Scanner" not in pr
+
+
+def test_render_linter_uses_agent_name_when_supplied():
+    """Bug #18: when agent_meta is provided, header reflects the agent name."""
+    out = F.render(
+        _LINTER_SAMPLE,
+        format="markdown",
+        agent_meta={"name": "Dockerfile Analyzer"},
+    )
+    assert "## Dockerfile Analyzer" in out
+    # Default header stays "## Linter" when no meta passed.
+    out2 = F.render(_LINTER_SAMPLE, format="markdown")
+    assert "## Linter" in out2

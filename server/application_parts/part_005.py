@@ -1291,6 +1291,20 @@ def _settle_failed_job(
 
 def _dispute_view(dispute_row: dict) -> dict:
     payload = dict(dispute_row)
+    # WHY: ``audit_log`` is stored as TEXT (JSON-encoded array) so it
+    # survives across SQLite/Postgres without a typed JSON column. Parse
+    # on the way out so callers get a real array, not the literal string
+    # "[]". A corrupted blob falls back to [] so the field's contract
+    # (always a list) is preserved.
+    raw_audit_log = payload.get("audit_log")
+    if isinstance(raw_audit_log, str):
+        try:
+            parsed_audit = json.loads(raw_audit_log) if raw_audit_log else []
+        except (ValueError, TypeError):
+            parsed_audit = []
+        payload["audit_log"] = parsed_audit if isinstance(parsed_audit, list) else []
+    elif raw_audit_log is None:
+        payload["audit_log"] = []
     judgments = disputes.get_judgments(payload["dispute_id"])
     payload["judgments"] = judgments
     status = str(payload.get("status") or "").strip().lower()
@@ -1306,10 +1320,19 @@ def _dispute_view(dispute_row: dict) -> dict:
         if filed_dt.tzinfo is None:
             filed_dt = filed_dt.replace(tzinfo=timezone.utc)
         if status in {"pending", "judging"}:
+            # WHY: use the real configured sweep interval, not a hardcoded
+            # 60s. The eval-2026-05-18 audit showed disputes took ~30 min
+            # to resolve in practice (judge leader-election lag, queue
+            # depth) yet the response advertised a verdict in 1-2 minutes.
+            # Pulling from the env-tuned _DISPUTE_JUDGE_INTERVAL_SECONDS
+            # keeps the hint honest when operators bump the interval.
+            sweep_interval = max(1, int(_DISPUTE_JUDGE_INTERVAL_SECONDS or 30))
             next_judge_run_by = (
-                datetime.now(timezone.utc) + timedelta(seconds=60)
+                datetime.now(timezone.utc) + timedelta(seconds=sweep_interval)
             ).isoformat()
-            resolution_by = (filed_dt + timedelta(minutes=3)).isoformat()
+            # Two judges must agree for resolution; allow at least 8 sweep
+            # cycles before we'd flag the system as misbehaving.
+            resolution_by = (filed_dt + timedelta(seconds=sweep_interval * 8)).isoformat()
         elif status == "tied":
             resolution_by = (filed_dt + timedelta(hours=48)).isoformat()
         elif status in {"resolved", "final"}:
@@ -1325,13 +1348,24 @@ def _dispute_view(dispute_row: dict) -> dict:
         str(j.get("model") or "unknown") for j in judgments if j.get("model")
     ]
     payload["judge_models_used"] = judge_models_used
+    # WHY: every dispute carries `judge_agent_id` pointing at the internal
+    # quality judge. The id isn't in the public catalog (not callable, not
+    # described) — surface a short role hint so callers don't have to grep
+    # CLAUDE.md or the constants module to know what it is. Bug 14 (2026-05-18).
+    if payload.get("judge_agent_id"):
+        payload["judge_agent_role"] = (
+            "internal_quality_judge — not in the public catalog; "
+            "compensated from the dispute filing-deposit pool, not by direct hire"
+        )
     if status in {"pending", "judging"}:
+        sweep_interval = max(1, int(_DISPUTE_JUDGE_INTERVAL_SECONDS or 30))
         payload["eta_hint"] = (
-            "Dispute judges run on a sweeper loop (default 30s, tunable via "
-            "AZTEA_DISPUTE_JUDGE_INTERVAL_SECONDS). Two matching judgments "
-            "resolve the dispute automatically; if you see judgments_queued > 0 "
-            "for >2 minutes, the leader-elected judge thread may not have been "
-            "re-acquired after a worker restart — check /system/health."
+            f"Dispute judges run on a sweeper loop ({sweep_interval}s, tunable via "
+            "DISPUTE_JUDGE_INTERVAL_SECONDS). Two matching judgments "
+            "resolve the dispute automatically. Observed end-to-end latency "
+            "is typically 5-30 minutes (the elected judge thread may be "
+            "re-acquired across worker restarts) — check /system/health if "
+            "judgments_queued > 0 for >30 minutes."
         )
     elif status == "tied":
         payload["eta_hint"] = (

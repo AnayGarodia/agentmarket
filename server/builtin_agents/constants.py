@@ -13,6 +13,15 @@ def normalize_endpoint_ref(value: str | None) -> str:
 
 CODEREVIEW_AGENT_ID = "8cea848f-a165-5d6c-b1a0-7d14fff77d14"
 CVELOOKUP_AGENT_ID = "a3e239dd-ea92-556b-9c95-0a213a3daf59"
+# WHY: QUALITY_JUDGE_AGENT_ID is the internal-only agent that handles
+# quality-judge sweeps and dispute LLM judging. It is intentionally NOT
+# in CURATED_PUBLIC_BUILTIN_AGENT_IDS — it has no caller-facing input
+# schema, no price (compensated from the judges-pool), and cannot be
+# directly hired. Every job row carries this id in the `judge_agent_id`
+# column so dispute resolution can route to it; that surfaces the id
+# back to callers as "hidden agent" — by design, not an oversight.
+# Bug 14 (2026-05-18 audit): documented here so callers who inspect a
+# job record know what this id refers to.
 QUALITY_JUDGE_AGENT_ID = "9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33"
 VIDEO_STORYBOARD_AGENT_ID = "c12994de-cde9-514a-9c07-a3833b25bb1f"
 PYTHON_EXECUTOR_AGENT_ID = "040dc3f5-afe7-5db7-b253-4936090cc7af"
