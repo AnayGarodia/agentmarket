@@ -30,8 +30,12 @@ Most Aztea built-in agents are pure Python + HTTP and have no system-level depen
 | Type Checker (tsc) *(sunset)* | Node.js ≥ 18 + npx    | `npx tsc --version`                    | `type_checker.tsc_not_available` (mypy path still works) |
 | Shell Executor *(sunset)*     | POSIX shell (`/bin/sh`) | `which sh`                           | Always available on Linux                |
 | Multi-File Executor *(sunset)* | Python 3.10+           | `python --version`                    | —                                        |
-| Semantic Codebase Search *(sunset)* | `git` (for git-clone path) | `git --version`             | `semantic_codebase_search.git_not_available` |
-| HCL / Terraform Analyzer | `checkov` (pip)            | `checkov --version`                    | `hcl_terraform_analyzer.tool_unavailable` |
+| Multi-File Python Executor *(removed)* | n/a                | (catalog lookups return `agent.endpoint_misconfigured` until any lingering registry rows are cleaned up; no module ships) | n/a |
+| Semantic Codebase Search *(removed)* | n/a                | (same — sunset 2026-05-18: never had a worker; sunsetted at the catalog layer) | n/a |
+| HCL / Terraform Analyzer | `checkov` (pip, baked into image) | `checkov --version`             | `hcl_terraform_analyzer.tool_unavailable` |
+| Dockerfile Analyzer      | `hadolint` (binary, baked into image) | `hadolint --version`        | falls back to regex heuristics with `degraded_mode: true` |
+| Coverage Runner          | `pytest` + `coverage` (pip, baked into image) | `coverage --version`  | non-zero exit; coverage.json absent |
+| CI Failure Reproducer    | `pytest`, `jest` (npm), `go` (apt), `git` (apt) | `pytest --version && jest --version && go version` | re-run reports the missing-toolchain artifact instead of the real failure |
 | JWT Validator            | `PyJWT` (pip, optional)    | `python -c 'import jwt; print(jwt.__version__)'` | (validator runs without it; `signature_valid` stays `null`) |
 
 All other agents (CVE Lookup, DNS Inspector, Dependency Auditor, Regex Tester, SBOM Generator, PyPI Metadata, GitHub Releases, etc.) require only standard network access and the Python packages in `requirements.txt`.

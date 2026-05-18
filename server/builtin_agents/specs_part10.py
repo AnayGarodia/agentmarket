@@ -78,13 +78,13 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                 "host: libfaketime (optional, for clock.frozen_at)",
                 "host: rsync (optional, sync_from_local falls back to shutil)",
                 (
-                    "container: the default boot image (ubuntu:22.04) is "
-                    "intentionally minimal — only the binaries from the "
-                    "user's Dockerfile / compose / devcontainer are "
-                    "guaranteed inside. For sandbox_exec you can set "
-                    "boot.base_image to a fatter image (e.g. ubuntu:24.04, "
-                    "node:20, python:3.12, devcontainers/base) when you "
-                    "need curl / python3 / git inside the container."
+                    "container: the default custom_commands boot image is "
+                    "cimg/base:current (ships with git, curl, python3, pip, "
+                    "node — see core/sandbox/boot.py). Override via "
+                    "boot.base_image when you need a different runtime "
+                    "(e.g. node:20, python:3.12, devcontainers/base). Bare "
+                    "ubuntu:22.04 lacks curl/python3/git, so the default was "
+                    "moved away from it."
                 ),
             ],
             "metadata": {

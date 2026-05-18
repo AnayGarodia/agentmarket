@@ -250,6 +250,11 @@ class AgentResponse(BaseModel):
     total_calls: int | None = None
     avg_latency_ms: float | None = None
     success_rate: float | None = None
+    # 2026-05-18: ``False`` for agents that have never been called. Ranker uses
+    # this to discount the default success_rate=1.0 / trust_score=50 that
+    # cold-start agents inherit, so a freshly added jwt_validator doesn't
+    # outrank a battle-tested cve_lookup just because it has no history.
+    has_call_history: bool | None = None
     dispute_rate: float | None = None
     by_client: dict[str, float] | None = None
 
