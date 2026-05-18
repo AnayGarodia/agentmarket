@@ -48,14 +48,14 @@ _DOCKERFILE_CANDIDATES = ("Dockerfile", "dockerfile")
 _DEVCONTAINER_PATHS = (".devcontainer/devcontainer.json", "devcontainer.json")
 _POSTGRES_IMAGE_HINTS = ("postgres", "pgvector", "timescale")
 _POSTGRES_SERVICE_HINTS = ("db", "postgres", "pg")
-# Default base image for ``custom_commands`` boots. ``cimg/base:current`` is
-# CircleCI's developer base image — ships with git, curl, python3, pip,
-# node, and the standard *nix dev toolchain. We picked it over ``ubuntu:22.04``
-# (which has 102 packages and is missing curl/python3/git) so the agent's
-# advertised runtime_requirements actually hold for the default case. About
-# 150MB pulled, which is acceptable given the alternative was every caller
-# baking their own image.
-_DEFAULT_CUSTOM_IMAGE = "cimg/base:current"
+# Default base image for ``custom_commands`` boots. ``cimg/node:current``
+# extends CircleCI's developer base with a current Node.js runtime — ships
+# with git, curl, python3, pip, node, npm and the standard *nix dev
+# toolchain. We picked it over plain ``cimg/base:current`` (2026-05-18
+# B7) because many real workloads "boot the user's repo" with a JS
+# component (package.json install, build step, etc.); cimg/base was
+# silently breaking those flows. ~200MB pulled, ~50MB more than base.
+_DEFAULT_CUSTOM_IMAGE = "cimg/node:current"
 
 
 def detect_strategy(repo_path: str) -> str:
@@ -365,9 +365,9 @@ def _boot_custom(
     if not cmds:
         raise SandboxInvalidInput("custom_commands requires boot.custom_commands list")
     # 2026-05-18: the default sandbox image moved from ``ubuntu:22.04``
-    # (~102 packages, missing curl/python3/git) to ``cimg/base:current``
-    # which bakes in git, curl, python3, pip, node, and the common dev
-    # tools every realistic ``custom_commands`` script ends up needing.
+    # (~102 packages, missing curl/python3/git) to ``cimg/node:current``
+    # which bakes in git, curl, python3, pip, node, npm and the common
+    # dev tools every realistic ``custom_commands`` script ends up needing.
     # The runtime_requirements field on the agent spec lists git as
     # required; before this change that promise was a lie for any caller
     # who didn't override ``base_image``. Override is still honored.

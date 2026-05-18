@@ -112,6 +112,54 @@ _CI_COMMAND_PATTERNS = [
     ),
 ]
 
+# 2026-05-18 (A6): test-runner output patterns. Callers often paste the
+# pytest / jest / go-test SUMMARY without the triggering shell command —
+# the previous extractor matched only commands and bailed with no_commands
+# for the most common case. These patterns let us infer the runner from
+# its output format so a vanilla "FAILED tests/foo.py::bar" log is
+# reproducible.
+_PYTEST_OUTPUT_PATTERN = re.compile(
+    r"^(?:FAILED|PASSED|ERROR)\s+([\w./-]+\.py)(?:::|\s|$)",
+    re.MULTILINE,
+)
+_JEST_OUTPUT_PATTERN = re.compile(
+    r"^(?:FAIL|PASS)\s+([\w./-]+\.(?:test|spec)\.(?:js|jsx|ts|tsx))",
+    re.MULTILINE,
+)
+_GO_TEST_OUTPUT_PATTERN = re.compile(
+    r"^---\s+FAIL:\s+\w+",
+    re.MULTILINE,
+)
+
+
+def _infer_command_from_output(
+    log: str, language: str | None, working_dir_files: list[dict[str, Any]] | None,
+) -> str | None:
+    """Pure: infer a likely test command from pytest/jest/go output patterns.
+
+    Used as a fallback when ``_extract_commands_from_log`` returns empty:
+    the log may contain only test-runner SUMMARY lines (e.g. pytest's
+    "FAILED tests/x.py::t") without the triggering ``$ pytest tests/x.py``.
+    We prefer language-specific runner inference over guessing.
+    """
+    lang = (language or "").strip().lower()
+    if _PYTEST_OUTPUT_PATTERN.search(log) or lang == "python":
+        return "pytest"
+    if _JEST_OUTPUT_PATTERN.search(log) or lang in ("javascript", "typescript", "node"):
+        return "npm test"
+    if _GO_TEST_OUTPUT_PATTERN.search(log) or lang == "go":
+        return "go test ./..."
+    # Last-resort filename inference: a single python test file with no
+    # explicit language hint is almost always pytest.
+    files = working_dir_files or []
+    if any(
+        str(f.get("name", "")).startswith(("test_", "tests/")) and
+        str(f.get("name", "")).endswith(".py")
+        for f in files
+    ):
+        return "pytest"
+    return None
+
 # ── failure classification heuristics ─────────────────────────────────────────
 _DEP_PATTERNS = re.compile(
     r"ModuleNotFoundError|No module named|Cannot find module"
@@ -398,17 +446,6 @@ def _normalize_run_inputs(
         commands = [str(c).strip() for c in raw_commands if str(c).strip()]
     else:
         commands = _extract_commands_from_log(log)
-    if not commands:
-        return _err(
-            "ci_failure_reproducer.no_commands",
-            "Could not extract commands from log and none provided.",
-        )
-    try:
-        per_cmd_timeout = max(
-            1, min(int(payload.get("timeout_seconds") or _DEFAULT_TIMEOUT), _MAX_SINGLE_TIMEOUT)
-        )
-    except (TypeError, ValueError):
-        per_cmd_timeout = _DEFAULT_TIMEOUT
     working_dir_files: list[dict] = payload.get("working_dir_files") or []
     if not isinstance(working_dir_files, list):
         working_dir_files = []
@@ -417,6 +454,28 @@ def _normalize_run_inputs(
             "ci_failure_reproducer.too_many_files",
             f"working_dir_files must not exceed {_MAX_FILES} entries.",
         )
+    if not commands:
+        # 2026-05-18 (A6): fall back to inferring the test runner from
+        # pytest/jest/go output patterns or the language hint. Previously
+        # this path returned no_commands for the most common case — a
+        # caller pasting just the pytest FAILED summary lines.
+        language = payload.get("language")
+        inferred = _infer_command_from_output(log, language, working_dir_files)
+        if inferred is not None:
+            commands = [inferred]
+    if not commands:
+        return _err(
+            "ci_failure_reproducer.no_commands",
+            "Could not extract commands from log and none provided. "
+            "Pass an explicit `commands` array or a `language` hint "
+            "(python|javascript|typescript|go) so the runner can be inferred.",
+        )
+    try:
+        per_cmd_timeout = max(
+            1, min(int(payload.get("timeout_seconds") or _DEFAULT_TIMEOUT), _MAX_SINGLE_TIMEOUT)
+        )
+    except (TypeError, ValueError):
+        per_cmd_timeout = _DEFAULT_TIMEOUT
     return commands, per_cmd_timeout, working_dir_files
 
 

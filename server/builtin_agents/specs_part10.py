@@ -79,12 +79,12 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                 "host: rsync (optional, sync_from_local falls back to shutil)",
                 (
                     "container: the default custom_commands boot image is "
-                    "cimg/base:current (ships with git, curl, python3, pip, "
-                    "node — see core/sandbox/boot.py). Override via "
+                    "cimg/node:current (ships with git, curl, python3, pip, "
+                    "node, npm — see core/sandbox/boot.py). Override via "
                     "boot.base_image when you need a different runtime "
-                    "(e.g. node:20, python:3.12, devcontainers/base). Bare "
-                    "ubuntu:22.04 lacks curl/python3/git, so the default was "
-                    "moved away from it."
+                    "(e.g. python:3.12, devcontainers/base). Bare "
+                    "ubuntu:22.04 lacks curl/python3/git/node, so the default "
+                    "was moved away from it."
                 ),
             ],
             "metadata": {

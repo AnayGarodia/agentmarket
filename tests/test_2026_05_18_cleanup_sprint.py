@@ -165,3 +165,82 @@ def test_a1_a2_warm_agent_success_rate_still_computed():
     out = core_schema._row_to_dict(row)
     assert out["success_rate"] == 0.9
     assert out["has_call_history"] is True
+
+
+# ---------------------------------------------------------------------------
+# A3 / A4 / A5 — worker-image runtime deps are baked in. Verified at the
+# source — Dockerfile is the source of truth for the prod image.
+# ---------------------------------------------------------------------------
+
+
+def test_a3_a4_a5_worker_image_bakes_required_deps():
+    """Dockerfile must include coverage/pytest, checkov, hadolint, node."""
+    src = Path("Dockerfile").read_text()
+    for dep in ("coverage", "pytest", "checkov", "hadolint", "nodejs"):
+        assert dep in src, (
+            f"Dockerfile must bake {dep!r} — agents that shell out to it "
+            "previously returned `tool_unavailable` in prod"
+        )
+
+
+# ---------------------------------------------------------------------------
+# A6 — ci_failure_reproducer can infer the test runner from
+# pytest/jest/go output patterns when no shell command appears in the log.
+# ---------------------------------------------------------------------------
+
+
+def test_a6_pytest_failed_summary_infers_pytest_command():
+    """A bare 'FAILED tests/x.py::t' line should infer the pytest runner."""
+    from agents import ci_failure_reproducer
+
+    log = "FAILED tests/test_x.py::test_one - AssertionError: assert 1 == 2"
+    cmd = ci_failure_reproducer._infer_command_from_output(log, None, [])
+    assert cmd == "pytest"
+
+
+def test_a6_jest_fail_summary_infers_npm_test():
+    """A bare 'FAIL src/foo.test.js' should infer the jest runner."""
+    from agents import ci_failure_reproducer
+
+    log = "FAIL src/foo.test.js\n  ● foo › bar"
+    cmd = ci_failure_reproducer._infer_command_from_output(log, None, [])
+    assert cmd == "npm test"
+
+
+def test_a6_go_test_summary_infers_go_test():
+    """A bare '--- FAIL: TestFoo' should infer the go test runner."""
+    from agents import ci_failure_reproducer
+
+    log = "--- FAIL: TestFoo (0.01s)\n    foo_test.go:10: bad"
+    cmd = ci_failure_reproducer._infer_command_from_output(log, None, [])
+    assert cmd == "go test ./..."
+
+
+def test_a6_language_hint_alone_infers_runner():
+    """If no output signal, the language hint should still pick a runner."""
+    from agents import ci_failure_reproducer
+
+    cmd = ci_failure_reproducer._infer_command_from_output("", "python", [])
+    assert cmd == "pytest"
+
+
+# ---------------------------------------------------------------------------
+# B7 — live_sandbox default boot image includes node + npm.
+# ---------------------------------------------------------------------------
+
+
+def test_b7_default_sandbox_image_includes_node():
+    """The custom_commands default boot image must ship with node + npm."""
+    from core.sandbox import boot
+
+    # cimg/node:current explicitly bundles a Node.js runtime + npm on top
+    # of cimg/base. Any other choice must also bundle node — assert
+    # against the family rather than locking to the exact tag, but reject
+    # the bare cimg/base that B7 found broken.
+    assert "node" in boot._DEFAULT_CUSTOM_IMAGE, (
+        f"_DEFAULT_CUSTOM_IMAGE is {boot._DEFAULT_CUSTOM_IMAGE!r} — must "
+        "ship with a Node.js runtime for the default 'boot the user's repo' use case"
+    )
+    assert boot._DEFAULT_CUSTOM_IMAGE != "cimg/base:current", (
+        "cimg/base is missing node — B7 regression"
+    )
