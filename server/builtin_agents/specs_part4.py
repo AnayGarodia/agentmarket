@@ -61,7 +61,16 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
         {
             "agent_id": _DB_SANDBOX_AGENT_ID,
             "name": "DB Sandbox",
-            "description": "Use when you need to execute SQL against an ephemeral SQLite database. Creates a fresh sandbox per call, supports schema setup plus one or more queries, returns rows and EXPLAIN QUERY PLAN output, and never touches the platform database.",
+            "description": (
+                "Use when you need to execute SQL against an ephemeral SQLite "
+                "database. Creates a fresh sandbox per call, returns rows and "
+                "EXPLAIN QUERY PLAN output, and never touches the platform "
+                "database. Two input shapes: ``sql`` (str) for one statement, "
+                "or ``queries`` (list of {sql, params?}) for several. "
+                "Multi-statement strings in ``sql`` are rejected — split them "
+                "into the ``queries`` array. DDL/seed goes in ``schema_sql``. "
+                "If both ``sql`` and ``queries`` are supplied, ``queries`` wins."
+            ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DB_SANDBOX_AGENT_ID],
             "price_per_call_usd": 0.02,
             "tags": ["sql", "sqlite", "database", "developer-tools", "testing"],
@@ -101,7 +110,13 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "sql": {
                         "type": "string",
                         "title": "Single SQL statement",
-                        "description": "Use this for one query. Mutually compatible with queries; if both are provided queries wins.",
+                        "description": (
+                            "Single SQL statement (no trailing semicolon-"
+                            "separated statements — those are rejected with "
+                            "``db_sandbox.multi_statement_not_allowed``). "
+                            "For multiple statements use the ``queries`` "
+                            "array; if both are provided, ``queries`` wins."
+                        ),
                     },
                     "params": {
                         "type": "array",
@@ -346,8 +361,15 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "wait_ms": {
                         "type": "integer",
                         "title": "Extra wait (ms)",
-                        "description": "Additional wait after page settles (max 10000 ms).",
+                        "description": (
+                            "Additional wait after page settles (max 6000 ms). "
+                            "The Aztea sync gateway has an 8 s wall budget — "
+                            "callers needing longer waits should use the async "
+                            "path (POST /jobs or "
+                            "manage_workflow(action='hire_async'))."
+                        ),
                         "default": 1500,
+                        "maximum": 6000,
                     },
                     "capture_network": {
                         "type": "boolean",
@@ -358,7 +380,14 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "script": {
                         "type": "string",
                         "title": "Post-load script",
-                        "description": "Optional JavaScript to execute after the page loads.",
+                        "description": (
+                            "Optional JavaScript to execute after the page loads. "
+                            "The script's return value is surfaced as "
+                            "``script_result`` in the output (JSON-serialized, "
+                            "truncated to 8000 chars). Previously the return "
+                            "was discarded and callers had to scrape the "
+                            "result out of visible_text."
+                        ),
                     },
                     "viewport": {
                         "type": "object",
@@ -383,7 +412,29 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "action": {"type": "string"},
                     "wait_for": {"type": "string"},
                     "status_code": {"type": ["integer", "null"]},
-                    "screenshot_artifact": {"type": "object"},
+                    "screenshot_artifact": {
+                        "type": "object",
+                        "description": (
+                            "PNG screenshot as a base64 data URI. Now "
+                            "includes ``width`` and ``height`` decoded from "
+                            "the PNG IHDR chunk so callers don't have to "
+                            "parse the header themselves."
+                        ),
+                        "properties": {
+                            "name": {"type": "string"},
+                            "mime": {"type": "string"},
+                            "url_or_base64": {"type": "string"},
+                            "size_bytes": {"type": "integer"},
+                            "width": {"type": ["integer", "null"]},
+                            "height": {"type": ["integer", "null"]},
+                        },
+                    },
+                    "script_result": {
+                        "description": (
+                            "JSON-serializable return value of the optional "
+                            "``script`` parameter (any | null)."
+                        ),
+                    },
                     "pdf_artifact": {"type": "object"},
                     "network_log": {"type": "array", "items": {"type": "object"}},
                     "console_messages": {"type": "array", "items": {"type": "string"}},
@@ -393,7 +444,10 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             ),
             "output_examples": [
                 {
-                    "input": {"url": "https://example.com"},
+                    "input": {
+                        "url": "https://example.com",
+                        "script": "document.title",
+                    },
                     "output": {
                         "url": "https://example.com",
                         "title": "Example Domain",
@@ -404,7 +458,10 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                             "mime": "image/png",
                             "url_or_base64": "data:image/png;base64,...",
                             "size_bytes": 18432,
+                            "width": 1280,
+                            "height": 720,
                         },
+                        "script_result": "Example Domain",
                         "execution_time_ms": 2100,
                     },
                 }

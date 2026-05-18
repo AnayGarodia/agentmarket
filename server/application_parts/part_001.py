@@ -701,7 +701,13 @@ async def lifespan(app: FastAPI):
     else:
         _set_builtin_worker_state(running=False)
 
-    if is_background_worker_leader and _DISPUTE_JUDGE_ENABLED:
+    # 2026-05-18 (D2): the dispute judge no longer requires the boot-once
+    # fcntl election. Every worker starts the loop; the loop body
+    # re-acquires a DB-backed lease (background_worker_leases) each tick.
+    # If we're not the leaseholder we sleep and try again next tick — so
+    # a worker restart on the leader's machine reliably hands off
+    # leadership instead of leaving disputes wedged.
+    if _DISPUTE_JUDGE_ENABLED:
         dispute_judge_stop_event = threading.Event()
         dispute_judge_thread = threading.Thread(
             target=_dispute_judge_loop,

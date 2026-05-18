@@ -36,7 +36,13 @@ _SYSTEM_PROMPT = (
     'with keys: {"verdict": "...", "reasoning": "...", "confidence": 0.0-1.0}. '
     "Valid verdict values are: caller_wins, agent_wins, split, void. The filer "
     "has the burden of proof. If your reasoning says the output was accurate, "
-    "in-scope, or the dispute is frivolous, the verdict must be agent_wins."
+    "in-scope, or the dispute is frivolous, the verdict must be agent_wins. "
+    # 2026-05-18 (D3): operators have a slot to defend their work. When the "
+    "dispute object contains a non-empty ``operator_response_text``, weight "
+    "it alongside the caller's reason/evidence. An operator who provides a "
+    "specific, evidence-grounded defense should not lose the dispute just "
+    "because the filer wrote first. Treat absence of operator_response_text "
+    "as a neutral signal — the response window may simply have expired."
 )
 _QUALITY_SYSTEM_PROMPT = (
     "You are a strict quality judge for agent outputs. "

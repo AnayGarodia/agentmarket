@@ -1023,6 +1023,37 @@ def post_call_payout(
 
         hold_amount_cents = compute_hold_cents(agent_cents, payout_curve)
 
+    # 2026-05-18 (D5): if charge_tx_id is the escrow sentinel, the caller
+    # was never debited at job-creation time — we must run the deferred
+    # debit now so the rest of the payout pipeline has a real charge row
+    # to attach to. settle_escrow_to_charge replaces the sentinel with a
+    # real ledger tx_id atomically with the held_cents decrement.
+    from .caller_escrow import (
+        is_escrow_tx_id,
+        job_id_from_sentinel,
+        settle_escrow_to_charge,
+    )
+    if is_escrow_tx_id(charge_tx_id):
+        escrow_job_id = job_id_from_sentinel(charge_tx_id)
+        with _conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            real_tx_id = settle_escrow_to_charge(
+                conn, job_id=escrow_job_id, agent_id=agent_id,
+            )
+            if real_tx_id is None:
+                # No active escrow (already consumed by an earlier retry)
+                # — fall through to the legacy payout path as a no-op.
+                conn.execute("ROLLBACK")
+                return
+            # Propagate the new tx_id to jobs.charge_tx_id so downstream
+            # readers (reconciliation, the receipt path) see the real row.
+            conn.execute(
+                "UPDATE jobs SET charge_tx_id = %s WHERE job_id = %s",
+                (real_tx_id, escrow_job_id),
+            )
+            conn.commit()
+        charge_tx_id = real_tx_id  # the rest of this function uses the real id
+
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         refund_exists = conn.execute(
@@ -1133,9 +1164,42 @@ def post_call_refund(
     """
     Transaction 2b (failure): refund full price to caller.
     Links to original charge via related_tx_id for audit trail.
+
+    2026-05-18 (D5): if charge_tx_id is the escrow sentinel, no debit
+    ever happened — there is nothing to refund. We just release the
+    escrow reservation and return. Logged separately so the metrics
+    surface escrow-released failures distinct from real-refund failures.
     """
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
+    from .caller_escrow import (
+        is_escrow_tx_id,
+        job_id_from_sentinel,
+        release as _release_escrow,
+    )
+    if is_escrow_tx_id(charge_tx_id):
+        escrow_job_id = job_id_from_sentinel(charge_tx_id)
+        with _conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _release_escrow(
+                    conn, job_id=escrow_job_id, note="post_call_refund",
+                )
+                conn.commit()
+            except ValueError:
+                # Already consumed — nothing to release. Safe no-op.
+                conn.execute("ROLLBACK")
+        logging_utils.log_event(
+            _LOG, logging.INFO, "payment.settlement",
+            {
+                "kind": "refund_via_escrow_release",
+                "charge_tx_id": charge_tx_id,
+                "agent_id": agent_id,
+                "refund_cents": 0,
+                "applied": True,
+            },
+        )
+        return
     applied = False
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")

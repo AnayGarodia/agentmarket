@@ -117,9 +117,21 @@ def build_transcript(job_id: str) -> dict[str, Any]:
     Pure-ish: only side effect is two DB SELECTs. The output dict is
     ready to be canonicalized via ``core.crypto.canonical_json`` and
     signed.
+
+    2026-05-18 (D4): includes a ``verification`` block so the signed
+    bytes attest not only "this transcript happened" but also what
+    *kind* of correctness claim the agent can make. Receipts on
+    deterministic agents carry ``verifier: "self"`` (re-running the
+    same input is byte-identical). Live-data agents carry
+    ``verifier: "external"`` with a source attribution. Heuristic / LLM
+    agents carry ``verifier: "unverified"`` so callers know the output
+    is best-effort. This closes the 2026-05-18 "credibility laundering"
+    finding: the signature no longer dresses unverified output up as
+    authoritative.
     """
     job = _fetch_job_row(job_id)
     messages = _fetch_messages(job_id)
+    verification = _verification_for_agent(job["agent_id"])
     return {
         "schema": _RECEIPT_SCHEMA,
         "job_id": job["job_id"],
@@ -131,6 +143,87 @@ def build_transcript(job_id: str) -> dict[str, Any]:
         "terminal_state": job["terminal_state"],
         "stop_reason": job["stop_reason"],
         "terminal_at": job["terminal_at"],
+        "verification": verification,
+    }
+
+
+# Verification taxonomy for built-in agents. The mapping lives here, not
+# in spec metadata, so a missing entry naturally falls back to
+# ``unverified`` rather than promoting an unaudited agent.
+#
+# ``self``       — re-running the same input gives the same output.
+#                  Receipt readers can replay independently.
+# ``external``   — the output reflects external state at a point in time;
+#                  ``source`` names the upstream system.
+# ``unverified`` — heuristic, LLM, or fuzzy output. The signature attests
+#                  only that the bytes are the bytes; correctness is the
+#                  caller's responsibility.
+_DETERMINISTIC_AGENT_SLUGS = frozenset({
+    "regex_tester",
+    "sbom_generator",
+    "jwt_validator",
+    "unicode_inspector",
+    "archive_inspector",
+    "json_schema_validator",
+    "openapi_validator",
+    "k8s_manifest_validator",
+    "diff_analyzer",
+    "git_diff_analyzer",
+})
+_LIVE_DATA_SOURCES: dict[str, str] = {
+    # Both naming styles (underscore + hyphen) appear in constants.py.
+    "cve_lookup": "NIST NVD + OSV.dev",
+    "cve-lookup": "NIST NVD + OSV.dev",
+    "dns_inspector": "live DNS / SSL handshake",
+    "web_search": "DuckDuckGo HTML endpoint",
+    "github_releases": "GitHub REST API",
+    "pypi_metadata": "PyPI JSON API",
+    "dependency_auditor": "OSV.dev + PyPI/npm registries",
+    "browser_agent": "live HTTP / rendered DOM",
+    "ssl_certificate_decoder": "live TLS handshake",
+    "security_headers_grader": "live HTTP HEAD",
+    "broken_link_crawler": "live HTTP crawl",
+    "stripe_webhook_debugger": "live Stripe API",
+    "load_tester": "live HTTP load",
+}
+
+
+def _verification_for_agent(agent_id: str) -> dict[str, Any]:
+    """Pure-ish: derive the verification block from the agent's slug.
+
+    Falls back to ``unverified`` for any agent we haven't explicitly
+    categorised — this is the safe default: a future agent without
+    metadata should never inherit a "self-verified" stamp by accident.
+    """
+    try:
+        from server.builtin_agents import constants as _consts
+        slug = _consts.agent_id_to_slug(agent_id) or ""
+    except Exception:  # noqa: BLE001 — never block the receipt path
+        slug = ""
+    if slug in _DETERMINISTIC_AGENT_SLUGS:
+        return {
+            "verifier": "self",
+            "note": (
+                "Re-running this agent on the same input is byte-identical. "
+                "Receipt readers can replay independently to verify."
+            ),
+        }
+    if slug in _LIVE_DATA_SOURCES:
+        return {
+            "verifier": "external",
+            "source": _LIVE_DATA_SOURCES[slug],
+            "note": (
+                "Output reflects external state at terminal_at. The source "
+                "is upstream; the signature attests we forwarded that "
+                "snapshot honestly."
+            ),
+        }
+    return {
+        "verifier": "unverified",
+        "note": (
+            "Output is heuristic or model-generated. The signature attests "
+            "the bytes are the bytes; the agent makes no correctness claim."
+        ),
     }
 
 
@@ -212,6 +305,35 @@ def sign_and_store_receipt(job_id: str) -> str:
                 (jws, job_id),
             )
     return jws
+
+
+def build_receipt_envelope(job_id: str) -> dict[str, Any] | None:
+    """Return a lightweight receipt envelope suitable for cache-replay responses.
+
+    Why (2026-05-18 E4): cache hits used to drop the receipt block,
+    silently breaking the "every output is signed" invariant. This
+    helper produces the minimum a verifier needs (jws + kid + verification
+    block) without forcing a transcript rebuild on every replay. Returns
+    None when the job has no stored receipt yet (e.g. cache populated
+    from a copilot streaming run before sign_and_store_receipt ran).
+    """
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT receipt_jws, agent_id FROM jobs WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    jws = _row_get(row, "receipt_jws", 0)
+    if not jws:
+        return None
+    agent_id = _row_get(row, "agent_id", 1)
+    return {
+        "jws": jws,
+        "kid": build_agent_did(agent_id),
+        "agent_id": agent_id,
+        "verification": _verification_for_agent(agent_id),
+    }
 
 
 def read_receipt(job_id: str) -> dict[str, Any] | None:

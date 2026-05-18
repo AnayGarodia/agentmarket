@@ -68,7 +68,9 @@ def test_dispute_policy_default_values_match_constants(
     monkeypatch.delenv("DEFAULT_JOB_DISPUTE_WINDOW_HOURS", raising=False)
     body = client.get("/ops/dispute-policy").json()
     assert body["filing_deposit_bps"] == 500
-    assert body["filing_deposit_min_cents"] == 5
+    # Raised 2026-05-18 from 5¢ to 25¢ to add real friction against
+    # frivolous disputes on sub-25¢ calls.
+    assert body["filing_deposit_min_cents"] == 25
     assert body["default_dispute_window_hours"] == 72
     assert body["judges_required"] == 2
     assert body["judges_total"] == 3

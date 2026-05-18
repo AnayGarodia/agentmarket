@@ -89,6 +89,15 @@ _AGENT_WALL_TIMEOUT_POOL = _cf.ThreadPoolExecutor(
 _AGENT_WALL_BUDGET_DEFAULT_SECONDS = float(
     os.environ.get("AZTEA_AGENT_WALL_BUDGET_DEFAULT_SECONDS", "8.0")
 )
+# 2026-05-18 (E2): max time a submitted call can sit in the pool queue
+# before its execution budget starts. Without this gate, batch jobs got
+# killed for "exceeding the 8 s budget" while they were still waiting in
+# the pool — fast (<1 s) calls failed simply because the batch ahead of
+# them queued them. 60 s is generous enough that legitimate queue
+# pressure doesn't break correctness but bounds a stuck pool.
+_QUEUE_WAIT_SECONDS = float(
+    os.environ.get("AZTEA_AGENT_QUEUE_WAIT_SECONDS", "60.0")
+)
 _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # 2026-05-18 — agents that shell out to real tooling (semgrep, bandit,
     # pip-audit, npm-audit, subprocess test runners). On the previous
@@ -116,6 +125,14 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # ``_execute_builtin_agent``, not in the request handler).
     _LIGHTHOUSE_AUDITOR_AGENT_ID: 90.0,
     _LIVE_SANDBOX_AGENT_ID: 90.0,
+    # 2026-05-18 — cve_lookup was timing out 3/3 times under the 8 s sync
+    # default because NVD round-trips are 8-10 s cold and the agent does
+    # one per CVE id sequentially with a 0.7 s rate-limit delay. Combined
+    # with the new 1 h in-process cache (agents/cve_lookup.py::_cve_cache),
+    # the cold worst-case (single id, no cache hit) fits well under 20 s
+    # and the warm path is sub-millisecond. Async path honours the same
+    # override.
+    _CVELOOKUP_AGENT_ID: 20.0,
 }
 
 
@@ -231,12 +248,22 @@ def _execute_builtin_agent(
     budget = _AGENT_WALL_BUDGET_OVERRIDES.get(
         agent_id, _AGENT_WALL_BUDGET_DEFAULT_SECONDS,
     )
+    # 2026-05-18 (E2): the budget applies to EXECUTION time only, not
+    # queue-wait. Previously fut.result(timeout=budget) included pool-
+    # queue time, so a batch flood could kill cve_lookup calls that
+    # actually ran in <1 s. We now poll for the future to enter
+    # ``running`` state (capped by _QUEUE_WAIT_SECONDS) before starting
+    # the execution timer.
     try:
         fut = _AGENT_WALL_TIMEOUT_POOL.submit(
             _execute_builtin_agent_inner,
             agent_id, payload, _finalize, emit_partial=emit_partial,
         )
         try:
+            # Wait for the future to leave the pool queue. Most calls
+            # start immediately; the polling cost is negligible.
+            _wait_for_future_running(fut, _QUEUE_WAIT_SECONDS)
+            # Now the execution budget starts.
             result = fut.result(timeout=budget)
         except _cf.TimeoutError:
             # Cancel if still PENDING; no-op if already running.
@@ -331,7 +358,38 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
     _UNICODE_INSPECTOR_AGENT_ID: _module_runner(agent_unicode_inspector),
     _TERRAFORM_PLAN_ANALYZER_AGENT_ID: _module_runner(agent_terraform_plan_analyzer),
     _LIVE_SANDBOX_AGENT_ID: _module_runner(agent_live_sandbox),
+    _REGEX_TESTER_AGENT_ID: _module_runner(agent_regex_tester),
+    _JWT_VALIDATOR_AGENT_ID: _module_runner(agent_jwt_validator),
+    _SBOM_GENERATOR_AGENT_ID: _module_runner(agent_sbom_generator),
+    _PYPI_METADATA_AGENT_ID: _module_runner(agent_pypi_metadata),
+    _GITHUB_RELEASES_AGENT_ID: _module_runner(agent_github_releases),
+    _HCL_TERRAFORM_ANALYZER_AGENT_ID: _module_runner(agent_hcl_terraform_analyzer),
 }
+
+
+def _wait_for_future_running(fut: _cf.Future, max_wait: float) -> None:
+    """Side-effect: poll until ``fut.running()`` returns True or fut is done.
+
+    Why (2026-05-18 E2): the wall-clock budget is meant for *execution*,
+    not queue-wait. A batch flood can stall a fast cve_lookup call in
+    the pool queue and the eventual TimeoutError mis-blames the agent.
+    This helper makes the execution timer start when the worker thread
+    actually picks up the future. If the future completes (success or
+    error) during the wait, we return immediately and let the next
+    ``fut.result()`` produce the real outcome.
+    """
+    import time as _time
+    started = _time.monotonic()
+    deadline = started + max(0.0, float(max_wait))
+    while not fut.running() and not fut.done():
+        if _time.monotonic() >= deadline:
+            # Treat queue starvation as a timeout — gateway will refund
+            # the caller via the existing _AgentWallClockTimeout path.
+            raise _cf.TimeoutError(
+                f"pool queue full: future did not enter running state "
+                f"within {max_wait:.1f} s"
+            )
+        _time.sleep(0.01)
 
 
 def _execute_builtin_agent_inner(
@@ -1038,6 +1096,14 @@ def _run_pending_dispute_judgments(
     limit: int = 100, actor_owner_id: str = "system:dispute-judge"
 ) -> dict:
     capped = min(max(1, int(limit)), 500)
+    # 2026-05-18 (D3): before reading the judging queue, advance any
+    # ``awaiting_operator`` disputes whose operator-response deadline has
+    # passed. The operator's silence is an implicit waiver; the LLM
+    # judges then evaluate on the caller's evidence alone.
+    try:
+        disputes.expire_operator_response_windows(limit=capped)
+    except Exception as exc:  # noqa: BLE001 — never block judging on this
+        _LOG.warning("expire_operator_response_windows failed: %s", exc)
     # Pick up both 'pending' (never judged) and 'judging' (started but failed —
     # e.g., LLM exception left status at 'judging' with no recorded judgments).
     # Without this retry, a single transient LLM failure would strand disputes
@@ -1140,25 +1206,62 @@ def _run_pending_dispute_judgments(
 
 
 def _dispute_judge_loop(stop_event: threading.Event) -> None:
+    """Periodically re-acquire the DB lease, then process pending judgments.
+
+    2026-05-18 (D2 — deep tier): replaced the boot-once fcntl election with
+    a DB-backed lease (background_worker_leases). Every tick re-acquires
+    or renews. A worker that dies between ticks loses its lease after
+    ``_lease_seconds``; the next surviving worker picks it up on the
+    following tick. This closes the original failure mode in which a
+    judge thread silently stopped processing disputes after a worker
+    restart because the in-process ``is_background_worker_leader`` flag
+    never re-evaluated.
+
+    Idempotency: the migration that creates this lease also adds a
+    UNIQUE INDEX on dispute_judgments(dispute_id, judge_kind). If a brief
+    two-leader overlap writes the same vote twice, the second insert
+    raises IntegrityError and is silently swallowed at the call site —
+    the surviving judgment row stays clean.
+    """
+    from core import background_leases as _leases
+    holder_id = _leases.default_holder_id()
+    lease_seconds = max(60, _DISPUTE_JUDGE_INTERVAL_SECONDS * 4)
     _set_dispute_judge_state(running=True, started_at=_utc_now_iso())
-    while not stop_event.wait(_DISPUTE_JUDGE_INTERVAL_SECONDS):
-        started = _utc_now_iso()
+    try:
+        while not stop_event.wait(_DISPUTE_JUDGE_INTERVAL_SECONDS):
+            started = _utc_now_iso()
+            try:
+                if not _leases.acquire_or_renew(
+                    "dispute_judge", holder_id, lease_seconds=lease_seconds,
+                ):
+                    _set_dispute_judge_state(
+                        last_run_at=started,
+                        last_summary={"skipped": "not_leader"},
+                        last_error=None,
+                    )
+                    continue
+                summary = _run_pending_dispute_judgments(
+                    actor_owner_id="system:dispute-judge"
+                )
+                _set_dispute_judge_state(
+                    last_run_at=started,
+                    last_summary=summary,
+                    last_error=None,
+                )
+            except Exception as exc:
+                _LOG.exception("Dispute judge loop failed.")
+                _set_dispute_judge_state(
+                    last_run_at=started,
+                    last_error=str(exc),
+                )
+    finally:
+        # On graceful shutdown release the lease so the next worker can
+        # take it immediately rather than waiting for the timeout.
         try:
-            summary = _run_pending_dispute_judgments(
-                actor_owner_id="system:dispute-judge"
-            )
-            _set_dispute_judge_state(
-                last_run_at=started,
-                last_summary=summary,
-                last_error=None,
-            )
-        except Exception as exc:
-            _LOG.exception("Dispute judge loop failed.")
-            _set_dispute_judge_state(
-                last_run_at=started,
-                last_error=str(exc),
-            )
-    _set_dispute_judge_state(running=False)
+            _leases.release("dispute_judge", holder_id)
+        except Exception:  # noqa: BLE001 — best-effort release
+            pass
+        _set_dispute_judge_state(running=False)
 
 
 def _run_agent_health_checks() -> dict:

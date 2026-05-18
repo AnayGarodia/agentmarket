@@ -15,7 +15,10 @@ Output:
     "page_count": int,
     "pages_returned": int,
     "metadata": {
-      "title": str | null,
+      "title": str | null,                # populated from PDF metadata
+                                          # or, if empty, from a page-1
+                                          # largest-font heuristic
+      "title_source": "embedded" | "page1_heuristic" | null,
       "author": str | null,
       "subject": str | null,
       "creator": str | null,
@@ -58,6 +61,14 @@ _MAX_PDF_BYTES = 25 * 1024 * 1024  # 25 MB hard cap
 _TABLE_PREVIEW_ROWS = 10
 _TABLE_PREVIEW_COLS = 8
 _USER_AGENT = "Aztea-PDF-Parser/1.0"
+
+# Title-fallback heuristic constants. Titles tend to sit in the top third of
+# page 1 and use a notably larger font than body text. We bound length so a
+# whole abstract glued together by a layout quirk doesn't get returned as a
+# "title."
+_TITLE_PAGE1_TOP_FRACTION = 0.30
+_TITLE_MIN_CHARS = 4
+_TITLE_MAX_CHARS = 200
 
 
 
@@ -173,15 +184,132 @@ def _normalize_run_inputs(
 
 
 def _shape_pdf_metadata(meta_raw: dict[str, Any]) -> dict[str, str | None]:
-    """Pure: shape pymupdf's metadata blob into the agent's stable shape."""
+    """Pure: shape pymupdf's metadata blob into the agent's stable shape.
+
+    ``title_source`` is filled in later by ``_attach_title_source`` once we
+    know whether the embedded title was usable or we fell back to a page-1
+    heuristic.
+    """
     return {
         "title": _stringify_meta(meta_raw.get("title")),
+        "title_source": None,
         "author": _stringify_meta(meta_raw.get("author")),
         "subject": _stringify_meta(meta_raw.get("subject")),
         "creator": _stringify_meta(meta_raw.get("creator")),
         "producer": _stringify_meta(meta_raw.get("producer")),
         "creation_date": _stringify_meta(meta_raw.get("creationDate")),
     }
+
+
+def _is_plausible_title(text: str) -> bool:
+    """Pure: bound-check title candidates so we don't return body paragraphs."""
+    if not text:
+        return False
+    stripped = text.strip()
+    return _TITLE_MIN_CHARS <= len(stripped) <= _TITLE_MAX_CHARS
+
+
+def _largest_span_in_top_region(page: Any) -> str | None:
+    """Side-effect: find the largest-font span in the top region of page 1.
+
+    Why: when ``doc.metadata["title"]`` is empty (true for most uploaded
+    PDFs), the title is right there on page 1 — typically the line with
+    the biggest font. We use pymupdf's "dict" output to walk spans with
+    their font sizes and y-coordinates. Returns None if no good candidate.
+    """
+    try:
+        layout = page.get_text("dict")
+    except Exception:  # noqa: BLE001 — heuristic, never raises
+        _LOG.debug("pymupdf dict layout failed", exc_info=True)
+        return None
+    rect = getattr(page, "rect", None)
+    page_height = float(getattr(rect, "height", 0)) if rect else 0.0
+    if page_height <= 0:
+        return None
+    cutoff_y = page_height * _TITLE_PAGE1_TOP_FRACTION
+    best_size = 0.0
+    best_text: str | None = None
+    for block in layout.get("blocks", []) or []:
+        if not isinstance(block, dict):
+            continue
+        for line in block.get("lines", []) or []:
+            spans = line.get("spans") or []
+            line_text_parts: list[str] = []
+            line_max_size = 0.0
+            line_top_y = float("inf")
+            for span in spans:
+                if not isinstance(span, dict):
+                    continue
+                bbox = span.get("bbox") or [0, 0, 0, 0]
+                if len(bbox) >= 2:
+                    line_top_y = min(line_top_y, float(bbox[1]))
+                size = float(span.get("size") or 0)
+                if size > line_max_size:
+                    line_max_size = size
+                text = str(span.get("text") or "").strip()
+                if text:
+                    line_text_parts.append(text)
+            if line_top_y > cutoff_y:
+                continue
+            joined = " ".join(line_text_parts).strip()
+            if not _is_plausible_title(joined):
+                continue
+            if line_max_size > best_size:
+                best_size = line_max_size
+                best_text = joined
+    return best_text
+
+
+def _first_nonempty_line(text: str) -> str | None:
+    """Pure: return the first non-empty stripped line of ``text`` within length bounds."""
+    if not text:
+        return None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if _is_plausible_title(line):
+            return line
+    return None
+
+
+def _extract_title_from_page1(doc: Any) -> str | None:
+    """Side-effect: fall-back title extraction from PDF page 1.
+
+    Tries the layout-aware (largest-font) heuristic first, falls back to
+    "first non-empty line of plain-text page 1." Returns None when nothing
+    plausible is on the page. Heuristic — never raises.
+    """
+    try:
+        if doc.page_count < 1:
+            return None
+        page = doc.load_page(0)
+    except Exception:  # noqa: BLE001 — heuristic, never raises
+        _LOG.debug("page-1 title heuristic failed to load page", exc_info=True)
+        return None
+    candidate = _largest_span_in_top_region(page)
+    if candidate:
+        return candidate
+    try:
+        raw_text = page.get_text("text") or ""
+    except Exception:  # noqa: BLE001
+        return None
+    return _first_nonempty_line(raw_text)
+
+
+def _attach_title_source(metadata: dict[str, str | None], doc: Any) -> None:
+    """Side-effect: fill metadata['title'] from page 1 if embedded title is empty.
+
+    Sets metadata['title_source'] to 'embedded' / 'page1_heuristic' / None
+    so callers know how trustworthy the title is.
+    """
+    if metadata.get("title"):
+        metadata["title_source"] = "embedded"
+        return
+    fallback = _extract_title_from_page1(doc)
+    if fallback:
+        metadata["title"] = fallback
+        metadata["title_source"] = "page1_heuristic"
+    else:
+        metadata["title_source"] = None
 
 
 def _read_pages(
@@ -254,6 +382,7 @@ def run(payload: dict) -> dict:
     try:
         page_count = doc.page_count
         metadata = _shape_pdf_metadata(doc.metadata or {})
+        _attach_title_source(metadata, doc)
         pages_to_read = min(page_count, max_pages)
         pages_out, full_text = _read_pages(doc, pages_to_read, max_text_chars)
     finally:

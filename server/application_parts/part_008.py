@@ -327,6 +327,8 @@ def registry_search(
         import concurrent.futures as _cf
         _SEARCH_BUDGET_S = 18.0
 
+        search_diagnostic: dict[str, Any] = {}
+
         def _do_full_search() -> list[dict]:
             _caller_trust = None
             if body.respect_caller_trust_min and caller["type"] != "master":
@@ -345,6 +347,7 @@ def registry_search(
                 outputs_not_stored=body.outputs_not_stored,
                 audit_logged=body.audit_logged,
                 region_locked=body.region_locked,
+                diagnostic_out=search_diagnostic,
             )
 
         with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
@@ -404,12 +407,47 @@ def registry_search(
     # of a silent zero-results UX.
     payload: dict[str, Any] = {"results": results, "count": len(results)}
     if not results:
+        # Diagnostic envelope: callers used to get a bare `off_catalog: true`
+        # with no explanation of *why*. Now we expose ``match_quality`` and a
+        # specific reason — pattern match (off-catalog category), every
+        # candidate below the relevance floor, or no candidates at all —
+        # plus a preview of below-floor candidates so an advanced caller
+        # can override the floor (or ask for a recipe).
+        below_preview = search_diagnostic.get("below_floor_preview") or []
+        if search_diagnostic.get("off_catalog_pattern_matched"):
+            match_quality = "off_catalog_pattern"
+            explanation = (
+                "Query unambiguously asks for a capability not in the "
+                "curated catalog (e.g. video synthesis, voice cloning). "
+                "Try a different phrasing or browse with "
+                "manage_workflow(action='list_agents')."
+            )
+        elif search_diagnostic.get("below_floor"):
+            top = search_diagnostic.get("top_score")
+            floor = search_diagnostic.get("floor")
+            match_quality = "poor"
+            explanation = (
+                f"Top match scored {top} which is below the relevance floor "
+                f"{floor}. Closest candidates listed under "
+                f"``match_quality_preview`` — none is a strong fit. Rephrase "
+                "the query in terms of the capability you need, or browse "
+                "with manage_workflow(action='list_agents')."
+            )
+        else:
+            match_quality = "no_candidates"
+            explanation = (
+                "No agent in the current catalog matched the search "
+                "filters at all. Try aztea_workflow(action='list_agents') "
+                "to browse."
+            )
         payload["off_catalog"] = True
-        payload["note"] = (
-            "No agent in the current catalog matches this query. "
-            "Try aztea_workflow(action='list_agents') to browse, or "
-            "rephrase the query to describe the capability you need."
-        )
+        payload["match_quality"] = match_quality
+        payload["explanation"] = explanation
+        if below_preview:
+            payload["match_quality_preview"] = below_preview
+        # Legacy note key kept for callers that scrape it; new ones should
+        # prefer match_quality + explanation.
+        payload["note"] = explanation
     return JSONResponse(content=payload)
 
 
@@ -1111,7 +1149,7 @@ def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
         else {"result": cached_output}
     )
     original_job_id = inner.pop("_cached_job_id", None)
-    return {
+    response: dict[str, Any] = {
         "job_id": original_job_id,
         "original_job_id": original_job_id,
         "status": "complete",
@@ -1119,6 +1157,28 @@ def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
         "latency_ms": 0,
         "cached": True,
     }
+    # 2026-05-18 (E4): cache hits used to drop the Ed25519 receipt block
+    # entirely, breaking the "every output is cryptographically signed"
+    # invariant. Now we fetch the receipt from the original job and
+    # attach it under both ``receipt`` and ``signed_receipt`` (matching
+    # the live-call shape from A7). The receipt is honestly tagged with
+    # ``via: "cache_replay"`` so consumers know the bytes came from a
+    # cached run, not a fresh execution.
+    if original_job_id:
+        try:
+            from core.receipts import build_receipt_envelope
+            envelope = build_receipt_envelope(str(original_job_id))
+            if envelope is not None:
+                envelope = dict(envelope)
+                envelope["via"] = "cache_replay"
+                response["signed_receipt"] = envelope
+                response["receipt"] = envelope
+                response["receipt_summary"] = "verified_via_cache"
+        except Exception:  # noqa: BLE001 — never break the cache path
+            response["receipt_summary"] = "absent_cache_lookup_failed"
+    else:
+        response["receipt_summary"] = "absent_no_origin_job"
+    return response
 
 
 # In-process singleflight for cache-eligible identical-input calls. Without
@@ -1269,8 +1329,20 @@ def _sync_success_response_payload(
     }
     if pricing_units:
         payload["pricing_units"] = pricing_units
+    # Receipt UX: the per-call receipt was previously top-level and visually
+    # outweighed the output for most callers (test 5 reported "I never
+    # inspected them"). Nest it under ``signed_receipt`` and surface a
+    # cheap-to-scan ``receipt_summary`` so the session-level audit stays
+    # discoverable without burying real output under JWS noise.
     if receipt:
+        payload["signed_receipt"] = receipt
+        payload["receipt_summary"] = "verified"
+        # Backwards compatibility: keep `receipt` populated for now so
+        # frontend renderers and existing SDK consumers don't break. The
+        # `signed_receipt` key is the forward-looking shape.
         payload["receipt"] = receipt
+    else:
+        payload["receipt_summary"] = "absent"
     return payload
 
 
@@ -3055,12 +3127,31 @@ def jobs_create(
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
-    charge_tx_id = _pre_call_charge_or_402(
-        caller=caller,
-        caller_wallet_id=caller_wallet["wallet_id"],
-        charge_cents=caller_charge_cents,
-        agent_id=agent["agent_id"],
-    )
+    # 2026-05-18 (D5): when AZTEA_CALLER_ESCROW_ENABLED is on, the async
+    # job path uses true deferred-debit semantics: balance is reserved
+    # via held_cents but no charge tx fires until settlement. On success,
+    # post_call_payout (sentinel-aware) runs the real debit + payout in
+    # one atomic block. On failure, post_call_refund just releases the
+    # escrow with no ledger movement. Flag stays off in prod until the
+    # full integration is observed in staging.
+    from core.payments import caller_escrow as _caller_escrow
+    _escrow_active = _caller_escrow.caller_escrow_enabled()
+
+    # Phase 1: produce a charge_tx_id. Either the legacy pre-debit
+    # (real charge tx) or the new escrow sentinel.
+    if _escrow_active:
+        # Defer balance validation to reserve_for_async_job which checks
+        # balance - held_cents >= amount before inserting the escrow row.
+        # Use a stable temporary placeholder until create_job returns the
+        # real job_id, then we swap it for the real sentinel.
+        charge_tx_id = "escrow:pending"
+    else:
+        charge_tx_id = _pre_call_charge_or_402(
+            caller=caller,
+            caller_wallet_id=caller_wallet["wallet_id"],
+            charge_cents=caller_charge_cents,
+            agent_id=agent["agent_id"],
+        )
 
     try:
         job = jobs.create_job(
@@ -3093,12 +3184,13 @@ def jobs_create(
             origin=_origin_context.current_origin() or "direct",
         )
     except Exception as exc:
-        payments.post_call_refund(
-            caller_wallet["wallet_id"],
-            charge_tx_id,
-            caller_charge_cents,
-            agent["agent_id"],
-        )
+        if not _escrow_active:
+            payments.post_call_refund(
+                caller_wallet["wallet_id"],
+                charge_tx_id,
+                caller_charge_cents,
+                agent["agent_id"],
+            )
         _LOG.exception("Failed to create job for agent %s.", agent["agent_id"])
         raise HTTPException(
             status_code=500,
@@ -3113,6 +3205,46 @@ def jobs_create(
                 },
             ),
         )
+
+    # Phase 2 (escrow path only): now that the job row exists, reserve
+    # the escrow against the caller's wallet and swap the placeholder
+    # charge_tx_id for the proper "escrow:<job_id>" sentinel.
+    if _escrow_active:
+        try:
+            charge_tx_id = _caller_escrow.reserve_for_async_job(
+                job_id=job["job_id"],
+                caller_wallet_id=caller_wallet["wallet_id"],
+                amount_cents=caller_charge_cents,
+            )
+        except ValueError as exc:
+            # Balance check failed at reserve time — caller actually
+            # cannot afford the call. Delete the empty job and surface 402.
+            try:
+                jobs.update_job_status(
+                    job["job_id"], "failed",
+                    error_message=f"escrow_reserve_failed: {exc}",
+                    completed=True,
+                )
+            except Exception:  # noqa: BLE001 — defensive: clean-up best-effort
+                pass
+            raise HTTPException(
+                status_code=402,
+                detail=error_codes.make_error(
+                    error_codes.INSUFFICIENT_FUNDS,
+                    "Insufficient available balance to reserve job.",
+                    {"agent_id": agent["agent_id"], "detail": str(exc)},
+                ),
+            )
+        # Persist the real sentinel onto the job row so settlement-time
+        # readers (post_call_payout, reconciliation) see the right id.
+        from core import db as _db
+        with _db.get_raw_connection(_db.DB_PATH) as _conn:
+            _conn.execute(
+                "UPDATE jobs SET charge_tx_id = %s WHERE job_id = %s",
+                (charge_tx_id, job["job_id"]),
+            )
+            _conn.commit()
+        job["charge_tx_id"] = charge_tx_id
 
     # Co-pilot mode: persist stop_when + billing_unit on the freshly created
     # job row. Done as a separate UPDATE rather than threading new kwargs

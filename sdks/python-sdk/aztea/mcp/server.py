@@ -426,6 +426,37 @@ _LAZY_SEARCH_TOOL: dict[str, Any] = {
     },
 }
 
+_FEATURED_MIN_SUCCESS_RATE = 0.50
+_FEATURED_MIN_EVIDENCE = 5
+
+
+def _featured_with_quality_gate(meta: dict[str, Any]) -> bool:
+    """Pure: featured flag with a runtime quality gate.
+
+    Returns the spec's ``is_featured`` value, but only when the agent
+    has enough evidence to merit the prominence. An agent whose
+    measured success rate is below ``_FEATURED_MIN_SUCCESS_RATE``
+    after at least ``_FEATURED_MIN_EVIDENCE`` calls is forcibly
+    un-featured at read time. This protects against the 2026-05-18
+    case where lighthouse_auditor (4.55% success) and coverage_runner
+    (0% success across 2 calls) still surfaced as featured agents.
+    """
+    base = bool(meta.get("is_featured", False))
+    if not base:
+        return False
+    try:
+        success_rate = float(meta.get("success_rate") or 1.0)
+    except (TypeError, ValueError):
+        success_rate = 1.0
+    try:
+        total_calls = int(meta.get("total_calls") or 0)
+    except (TypeError, ValueError):
+        total_calls = 0
+    if total_calls >= _FEATURED_MIN_EVIDENCE and success_rate < _FEATURED_MIN_SUCCESS_RATE:
+        return False
+    return True
+
+
 _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
     "name": "describe_specialist",
     "description": (
@@ -1483,7 +1514,17 @@ class RegistryBridge:
                     "agent_id": entry.get("agent_id"),
                     "category": meta.get("category"),
                     "tags": list(meta.get("tags") or []),
-                    "is_featured": bool(meta.get("is_featured", False)),
+                    # 2026-05-18 (E10): runtime de-feature agents whose
+                    # observed success rate undermines their featured
+                    # status. The 2026-05-18 test report saw
+                    # lighthouse_auditor (4.55%), coverage_runner (0%),
+                    # accessibility_auditor (25%) all flagged ``featured``
+                    # — first-impression money was burned on agents that
+                    # fail more often than they succeed. Threshold:
+                    # < 50% success AND ≥ 5 calls of evidence. Below 5
+                    # calls we keep the spec's featured flag (no
+                    # statistical basis to override).
+                    "is_featured": _featured_with_quality_gate(meta),
                     "cacheable": bool(meta.get("cacheable", False)),
                     "runtime_requirements": list(
                         meta.get("runtime_requirements") or []
@@ -2229,17 +2270,45 @@ class RegistryBridge:
                 " Try a different phrasing, or manage_workflow(action='list_agents') to browse."
             )
         hints = _workflow_hints(query)
+        # 2026-05-18 (E3): callers reported routing money decisions through
+        # the stale fallback without noticing. The fix is two-layered:
+        # (a) an env-flag to fail-closed instead of falling back, and
+        # (b) front-loading the stale signal so any JSON-summarising model
+        # encounters it before the results array. The fields keep their
+        # legacy names for back-compat; ``source`` is now FIRST so a
+        # response shape inspection trips on it immediately.
+        if os.environ.get("AZTEA_DISCOVERY_FAIL_CLOSED_ON_STALE", "0").lower() in {
+            "1", "true", "yes", "on",
+        }:
+            return {
+                "error": "DISCOVERY_UNAVAILABLE",
+                "source": "fail_closed",
+                "warning": (
+                    "search_specialists is unavailable and "
+                    "AZTEA_DISCOVERY_FAIL_CLOSED_ON_STALE is set. Retry "
+                    "shortly; do not route money decisions to a stale "
+                    "catalog snapshot."
+                ),
+                "query": query,
+            }
         payload = {
+            # Source FIRST so a model summarising the response shape
+            # encounters the stale signal before it picks a winner.
+            "source": "local_emergency_fallback",
+            "match_quality": "stale_catalog",
+            "warning": (
+                "⚠️ STALE CATALOG: Server-side search at /registry/search was "
+                "unreachable. Rankings below were computed locally against a "
+                "cached catalog snapshot and may not reflect agents that "
+                "were added, repriced, or sunsetted since the last sync. "
+                "Verify against aztea_workflow(action='list_agents') before "
+                "spending. Retry this call after connectivity returns."
+            ),
             "query": query,
             "count": len(result_items),
             "results": result_items,
-            "next_step": next_step,
-            "source": "local_emergency_fallback",
-            "warning": (
-                "Server-side search at /registry/search was unreachable; this "
-                "response was ranked locally over a stale catalog snapshot. "
-                "Verify against aztea_workflow(action='list_agents') and retry "
-                "once connectivity returns."
+            "next_step": (
+                "⚠️ STALE CATALOG — verify before spending. " + next_step
             ),
         }
         if hints:

@@ -31,8 +31,10 @@ Most Aztea built-in agents are pure Python + HTTP and have no system-level depen
 | Shell Executor *(sunset)*     | POSIX shell (`/bin/sh`) | `which sh`                           | Always available on Linux                |
 | Multi-File Executor *(sunset)* | Python 3.10+           | `python --version`                    | —                                        |
 | Semantic Codebase Search *(sunset)* | `git` (for git-clone path) | `git --version`             | `semantic_codebase_search.git_not_available` |
+| HCL / Terraform Analyzer | `checkov` (pip)            | `checkov --version`                    | `hcl_terraform_analyzer.tool_unavailable` |
+| JWT Validator            | `PyJWT` (pip, optional)    | `python -c 'import jwt; print(jwt.__version__)'` | (validator runs without it; `signature_valid` stays `null`) |
 
-All other agents (CVE Lookup, DNS Inspector, Dependency Auditor, etc.) require only standard network access and the Python packages in `requirements.txt`.
+All other agents (CVE Lookup, DNS Inspector, Dependency Auditor, Regex Tester, SBOM Generator, PyPI Metadata, GitHub Releases, etc.) require only standard network access and the Python packages in `requirements.txt`.
 
 ### Lighthouse + Brave Search setup
 

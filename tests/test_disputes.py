@@ -183,13 +183,15 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
         json={"reason": "Output is incomplete", "evidence": "section 7 omitted"},
     )
     assert filed.status_code == 201, filed.text
-    assert filed.json()["filing_deposit_cents"] == 5
+    # Floor raised 2026-05-18 from 5¢ to 25¢ for friction on cheap calls.
+    assert filed.json()["filing_deposit_cents"] == 25
     dispute_id = filed.json()["dispute_id"]
 
     # After filing, clawback moves agent/platform payout to dispute escrow.
     assert _wallet_balance(f"agent:{agent_id}") == 0
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
-    assert _wallet_balance(caller_owner) == 184
+    # 189 - 25 deposit = 164.
+    assert _wallet_balance(caller_owner) == 164
 
     def _consensus(dispute_id_arg: str) -> dict:
         disputes.record_judgment(
@@ -290,7 +292,8 @@ def test_dispute_tie_then_admin_split_settlement(client, monkeypatch):
         json={"reason": "Caller changed requirements mid-stream"},
     )
     assert filed.status_code == 201, filed.text
-    assert filed.json()["filing_deposit_cents"] == 5
+    # Floor raised 2026-05-18 from 5¢ to 25¢.
+    assert filed.json()["filing_deposit_cents"] == 25
     dispute_id = filed.json()["dispute_id"]
 
     def _tie(dispute_id_arg: str) -> dict:

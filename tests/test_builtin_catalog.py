@@ -73,6 +73,26 @@ def test_jsonschema_shape_validator_rejects_obvious_breakage():
         assert expect_in_msg in str(exc_info.value), str(exc_info.value)
 
 
+def test_python_executor_schema_documents_runtime_limits():
+    """The python_executor input_schema must mirror the runtime constants.
+
+    If a tester sets timeout=60 or relies on subprocess, they should be able
+    to find out from the description string alone — historically these limits
+    were only surfaced in the rejection error, not the documented schema.
+    """
+    specs = {s["agent_id"]: s for s in builtin_agent_specs()}
+    from server.builtin_agents.constants import PYTHON_EXECUTOR_AGENT_ID
+    spec = specs[PYTHON_EXECUTOR_AGENT_ID]
+    description = (spec.get("description") or "").lower()
+    for marker in ("128", "30", "no pip", "8 s"):
+        assert marker in description, (
+            f"python_executor description must mention {marker!r}; "
+            f"current: {description[:200]}"
+        )
+    code_field = spec["input_schema"]["properties"]["code"]
+    assert "no pip install" in code_field.get("description", "").lower()
+
+
 def test_builtin_dispatch_table_covers_every_internal_endpoint():
     """The 35-branch if-chain in part_004 was replaced with a dispatch dict.
     Every agent that registers an ``internal://`` endpoint MUST have a

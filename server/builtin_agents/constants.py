@@ -47,6 +47,15 @@ ARCHIVE_INSPECTOR_AGENT_ID = "9713a29a-1817-5548-b439-0cd4f4efdcb1"
 UNICODE_INSPECTOR_AGENT_ID = "65fbf6ec-ff53-5f72-95e0-88ae2070c3d9"
 TERRAFORM_PLAN_ANALYZER_AGENT_ID = "989f2964-fadd-5ce0-9afc-2183c08fb9f9"
 LIVE_SANDBOX_AGENT_ID = "3354f7c4-bb9d-55e2-8e8c-df67a64f57a2"
+# 2026-05-18 — six new agents addressing catalog gaps surfaced in the
+# 2026-05-18 test report (regex_tester, jwt_validator, sbom_generator,
+# pypi_metadata, github_releases, hcl_terraform_analyzer).
+REGEX_TESTER_AGENT_ID = "36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee"
+JWT_VALIDATOR_AGENT_ID = "96c86f16-16e6-51bb-9332-eae0cfef33ba"
+SBOM_GENERATOR_AGENT_ID = "f14ab9fe-cb29-5a86-a7a2-f42de85ff99a"
+PYPI_METADATA_AGENT_ID = "9dd0e946-974c-5f0b-a59d-db15cc503ec6"
+GITHUB_RELEASES_AGENT_ID = "c199ff57-599b-5e90-b908-994a98b57571"
+HCL_TERRAFORM_ANALYZER_AGENT_ID = "9ad19220-a46b-54b0-9190-dded9399b45c"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -80,6 +89,12 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     UNICODE_INSPECTOR_AGENT_ID: "internal://unicode_inspector",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "internal://terraform_plan_analyzer",
     LIVE_SANDBOX_AGENT_ID: "internal://live_sandbox",
+    REGEX_TESTER_AGENT_ID: "internal://regex_tester",
+    JWT_VALIDATOR_AGENT_ID: "internal://jwt_validator",
+    SBOM_GENERATOR_AGENT_ID: "internal://sbom_generator",
+    PYPI_METADATA_AGENT_ID: "internal://pypi_metadata",
+    GITHUB_RELEASES_AGENT_ID: "internal://github_releases",
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: "internal://hcl_terraform_analyzer",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -148,6 +163,12 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         UNICODE_INSPECTOR_AGENT_ID,
         TERRAFORM_PLAN_ANALYZER_AGENT_ID,
         LIVE_SANDBOX_AGENT_ID,
+        REGEX_TESTER_AGENT_ID,
+        JWT_VALIDATOR_AGENT_ID,
+        SBOM_GENERATOR_AGENT_ID,
+        PYPI_METADATA_AGENT_ID,
+        GITHUB_RELEASES_AGENT_ID,
+        HCL_TERRAFORM_ANALYZER_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.

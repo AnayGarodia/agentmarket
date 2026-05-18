@@ -521,6 +521,7 @@ def wallet_spend_summary(
         agent_id = row["agent_id"]
         agent_name = agent_id
         agent_review_status = ""
+        agent_status = "missing"
         if agent_id:
             try:
                 ag = registry.get_agent(agent_id, include_unapproved=True)
@@ -529,18 +530,40 @@ def wallet_spend_summary(
                     agent_review_status = (
                         str(ag.get("review_status") or "").strip().lower()
                     )
+                    agent_status = (
+                        str(ag.get("status") or "").strip().lower()
+                    )
+                else:
+                    agent_status = "missing"
             except Exception:
                 _LOG.warning("Failed to resolve agent name for %s in spending report", agent_id, exc_info=True)
+                agent_status = ""
         is_sunset = (
             agent_id in sunset_ids or agent_review_status == "sunset"
         )
+        # 2026-05-18 (E1): callers reported being charged across "live"
+        # agents that returned "Unknown tool" on introspection. Root cause
+        # was that ``catalog_visibility`` was sunset-only — suspended and
+        # banned (or missing entirely) agents showed up as live. Now the
+        # spending breakdown surfaces the actual operational state so a
+        # caller can see WHY each agent appears on their bill.
+        if is_sunset:
+            visibility = "sunset"
+        elif agent_status == "suspended":
+            visibility = "suspended"
+        elif agent_status in {"banned"}:
+            visibility = "banned"
+        elif agent_status == "missing":
+            visibility = "deleted"
+        else:
+            visibility = "live"
         item = {
             "agent_id": agent_id,
             "agent_name": agent_name,
             "total_cents": int(row["total_cents"] or 0),
             "job_count": int(row["job_count"] or 0),
             "is_sunset": is_sunset,
-            "catalog_visibility": "sunset" if is_sunset else "live",
+            "catalog_visibility": visibility,
         }
         if is_sunset:
             sunset_by_agent.append(item)
@@ -601,6 +624,7 @@ def wallet_audit(
     until: str | None = None,
     limit: int = 100,
     verify_all: bool = False,
+    include_receipts: bool = True,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     """Single-call audit surface: spend rollup + signed receipts + aggregate
@@ -823,13 +847,19 @@ def wallet_audit(
         "latest_settled_at": receipts[0].get("settled_at") if receipts else None,
     }
 
+    # 2026-05-18 (E9): callers reported the 55 KB JSON response was past
+    # MCP context limits. Default still includes receipts (back-compat),
+    # but ``include_receipts=false`` returns just the digest + aggregates
+    # — typically a 1-2 KB response. Verification + paginated walk over
+    # individual receipts is done via /jobs/{id}/signature on demand.
     response: dict[str, Any] = {
         "period": period_normalized,
         "since": since_dt.isoformat() if since_dt else None,
         "until": until_dt.isoformat() if until_dt else None,
         "limit": job_limit,
         "spend": spend,
-        "recent_signed_receipts": receipts,
+        "recent_signed_receipts": receipts if include_receipts else [],
+        "receipts_omitted": (not include_receipts),
         "receipts_aggregate": aggregates,
         "receipts_digest": receipts_digest,
         "receipts_digest_method": (
@@ -846,6 +876,12 @@ def wallet_audit(
             "verify_all": (
                 "true to Ed25519-verify every signed receipt in the window in-process; "
                 "returns aggregate verified/failed counts plus first-failure detail"
+            ),
+            "include_receipts": (
+                "true (default) to include the recent_signed_receipts array. "
+                "Pass false for a small summary-only response (digest + "
+                "aggregates) — useful when the per-receipt payload exceeds "
+                "the MCP / SDK context window."
             ),
         },
     }

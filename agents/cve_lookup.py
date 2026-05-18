@@ -55,6 +55,16 @@ _NVD_TIMEOUT = 10
 _NVD_RATE_DELAY = 0.7
 _CVE_ID_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 
+# In-process TTL cache for CVE-id lookups. CVE records change infrequently
+# (NVD aggregates upstream), so caching for 1h converts a cold 10 s NVD
+# round-trip into a sub-millisecond replay — critical for staying inside
+# the 8 s sync gateway budget. Keys are uppercase CVE ids; values are
+# ``(expires_epoch, record)``. Capped so a pathological caller can't
+# OOM the worker by listing thousands of distinct CVEs.
+_CVE_CACHE_TTL_S = 3600
+_CVE_CACHE_MAX_ENTRIES = 1024
+_cve_cache: dict[str, tuple[float, dict]] = {}
+
 # Hard caps surfaced as 4xx errors from `run`. Documented for callers.
 _MAX_IDS_PER_CALL = 10
 _MAX_PACKAGES_PER_CALL = 10
@@ -476,12 +486,51 @@ def _nvd_data_to_record(cve_id: str, data: dict) -> dict:
     }
 
 
+def _cache_get(cve_id: str) -> dict | None:
+    """Pure-ish: return a cached CVE record if still fresh, else None.
+
+    Why: NVD round-trips routinely cost 8-10 s for a single id — well past
+    the 8 s sync budget. Serving repeat lookups from in-process cache
+    converts those into sub-millisecond replays and was the primary cause
+    of the cve_lookup ``timed out`` reports in the 2026-05-18 test.
+    """
+    entry = _cve_cache.get(cve_id.upper())
+    if not entry:
+        return None
+    expires_at, record = entry
+    if time.time() >= expires_at:
+        _cve_cache.pop(cve_id.upper(), None)
+        return None
+    return record
+
+
+def _cache_put(cve_id: str, record: dict) -> None:
+    """Side-effect: cache a successful lookup; never caches error envelopes."""
+    if record.get("error"):
+        return
+    if len(_cve_cache) >= _CVE_CACHE_MAX_ENTRIES:
+        # Drop the oldest entry. Simple FIFO is enough — LRU would be over-
+        # engineered for a 1024-entry bound.
+        oldest = next(iter(_cve_cache))
+        _cve_cache.pop(oldest, None)
+    _cve_cache[cve_id.upper()] = (time.time() + _CVE_CACHE_TTL_S, record)
+
+
 def _fetch_cve(cve_id: str) -> dict:
-    """Side-effect: fetch one CVE by id from NVD; returns the agent's CVE schema or ``{cve_id, error}``."""
+    """Side-effect: fetch one CVE by id from NVD; returns the agent's CVE schema or ``{cve_id, error}``.
+
+    Memoized for ``_CVE_CACHE_TTL_S`` seconds so repeated queries within
+    the same worker process don't pay the NVD round-trip twice.
+    """
+    cached = _cache_get(cve_id)
+    if cached is not None:
+        return cached
     data, err = _nvd_request_cve(cve_id)
     if err is not None:
         return err
-    return _nvd_data_to_record(cve_id, data or {})
+    record = _nvd_data_to_record(cve_id, data or {})
+    _cache_put(cve_id, record)
+    return record
 
 
 def _fetch_cve_from_osv(cve_id: str) -> dict:
