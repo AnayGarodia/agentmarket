@@ -1,4 +1,4 @@
--- 0050_workspaces_content_purged_at.sql
+-- 0055_workspaces_content_purged_at.sql
 -- v0.1: auto-content-deletion for expired and old-sealed workspaces.
 --
 -- The v0 sweeper only marked workspaces 'expired' but left their BLOB
