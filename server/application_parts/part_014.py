@@ -1157,6 +1157,43 @@ def pipelines_run(
     )
 
 
+def _workspace_seal_block_for_run(run: dict) -> dict | None:
+    """Build a ``workspace_seal`` response block for a completed pipeline run.
+
+    Bug #7 (2026-05-18): the ``security-audit-sealed`` recipe advertised
+    "sealed under a signed Ed25519 manifest" yet the run response had no
+    manifest field anywhere — callers had to know to chase the workspace_id
+    with a separate GET. Return a single object that points at the signed
+    manifest endpoint + carries the seal metadata so the "sealed manifest"
+    claim in the recipe description is honored on the response itself.
+
+    Returns ``None`` when there is no sealed workspace to surface (the run
+    doesn't have a workspace, the workspace exists but isn't sealed yet,
+    or fetching the workspace failed).
+    """
+    workspace_id = str(run.get("workspace_id") or "").strip()
+    if not workspace_id:
+        return None
+    try:
+        from core import workspaces as _workspaces
+        ws_row = _workspaces.get_workspace(workspace_id)
+    except Exception:  # noqa: BLE001 — best-effort block; never break run-get
+        return None
+    sealed_at = ws_row.get("sealed_at")
+    status = str(ws_row.get("status") or "")
+    if not sealed_at and status != "sealed":
+        return None
+    return {
+        "workspace_id": workspace_id,
+        "sealed_at": sealed_at,
+        "status": status,
+        "manifest_url": f"/workspaces/{workspace_id}/manifest",
+        "verify_url": f"/workspaces/{workspace_id}/verify",
+        "signer_did_url": "/workspaces/sealer/did.json",
+        "scheme": "aztea/workspace-seal/1 (Ed25519)",
+    }
+
+
 @app.get(
     "/pipelines/runs/{run_id}",
     response_model=core_models.DynamicObjectResponse,
@@ -1206,6 +1243,9 @@ def pipelines_run_get_by_id(
             # Workspaces v0 (PR 4): surface the auto_workspace link so the
             # caller can fetch the sealed manifest without a second query.
             "workspace_id": run.get("workspace_id"),
+            # Bug #7 (2026-05-18): when the run's workspace is sealed,
+            # surface the real signed manifest pointer + verify URL inline.
+            "workspace_seal": _workspace_seal_block_for_run(run),
         }
     )
 
@@ -1269,6 +1309,8 @@ def pipelines_run_get(
             # Workspaces v0 (PR 4): surface the auto_workspace link so the
             # caller can fetch the sealed manifest without a second query.
             "workspace_id": run.get("workspace_id"),
+            # Bug #7 (2026-05-18): same sealed-manifest pointer as above.
+            "workspace_seal": _workspace_seal_block_for_run(run),
         }
     )
 
@@ -1383,28 +1425,48 @@ def recipes_run(
     input_payload = body.get("input_payload") or {}
     if not isinstance(input_payload, dict):
         raise HTTPException(status_code=422, detail="input_payload must be an object.")
+
+    # Bug #8+#10 (2026-05-18): accept caller-supplied `workspace_id` at the
+    # top of input_payload. Pre-fix this was silently dropped — callers had
+    # no way to bind multiple recipe runs to one workspace, and the field
+    # never round-tripped into the response. Pop it before forwarding to the
+    # pipeline executor so it isn't mistaken for a step input variable.
+    caller_input = dict(input_payload)
+    caller_workspace_id = caller_input.pop("workspace_id", None)
+    if caller_workspace_id is not None and not isinstance(caller_workspace_id, str):
+        raise HTTPException(
+            status_code=422,
+            detail="input_payload.workspace_id must be a string when provided.",
+        )
+
     caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
     try:
         with _origin_context.use_origin("recipe"):
             run_id = pipelines.run_pipeline(
                 recipe_id,
-                input_payload,
+                caller_input,
                 caller["owner_id"],
                 caller_wallet["wallet_id"],
                 client_id=_request_client_id(request, body.get("client_id")),
                 execute_builtin_agent=_execute_builtin_agent,
+                caller_workspace_id=caller_workspace_id,
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     run = pipelines.get_run(run_id)
-    return JSONResponse(
-        content={
-            "run_id": run_id,
-            "pipeline_id": recipe_id,
-            "recipe_id": recipe_id,
-            "status": (run or {}).get("status", "running"),
-        }
-    )
+    response: dict[str, Any] = {
+        "run_id": run_id,
+        "pipeline_id": recipe_id,
+        "recipe_id": recipe_id,
+        "status": (run or {}).get("status", "running"),
+    }
+    # Bug #8 (2026-05-18): always echo workspace_id back in the response.
+    # Either the caller-supplied id or the auto-created one if the recipe
+    # opted into auto_workspace. ``run.workspace_id`` is populated by
+    # db.set_run_workspace inside run_pipeline.
+    if run is not None and run.get("workspace_id"):
+        response["workspace_id"] = run.get("workspace_id")
+    return JSONResponse(content=response)
 
 
 @app.get("/", include_in_schema=False)

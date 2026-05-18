@@ -5,6 +5,14 @@
 
 _COMPARE_SELECTION_WINDOW_SECONDS = 7 * 24 * 3600
 
+# WHY: caller-facing cap for /jobs/compare. 2 is the minimum that makes
+# the comparison meaningful; 10 is the practical ceiling for paid bake-
+# offs (more than that costs too much per run and the side-by-side UI
+# stops being scannable). Counted across slugs[] + agent_ids[] after
+# client-side resolution.
+_COMPARE_MIN_AGENTS = 2
+_COMPARE_MAX_AGENTS = 10
+
 
 def _batch_fee_split(job: dict) -> dict:
     price_cents = int(job.get("price_cents") or 0)
@@ -330,7 +338,7 @@ def _compare_response(compare_row: dict, caller: core_models.CallerContext) -> d
     response_model=core_models.DynamicObjectResponse,
     responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500),
     tags=["Jobs"],
-    summary="Create a compare session across 2-3 agents with one shared input payload "
+    summary="Create a compare session across 2-10 agents with one shared input payload "
     "(field 'input_payload', or aliases 'task' / 'input').",
 )
 @limiter.limit(_JOBS_CREATE_RATE_LIMIT)
@@ -346,9 +354,14 @@ def jobs_compare_create(
     agent_ids = [
         str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()
     ]
-    if len(agent_ids) < 2 or len(agent_ids) > 3:
+    if len(agent_ids) < _COMPARE_MIN_AGENTS or len(agent_ids) > _COMPARE_MAX_AGENTS:
         raise HTTPException(
-            status_code=400, detail="agent_ids must contain 2 or 3 agent IDs."
+            status_code=400,
+            detail=(
+                f"agent_ids must contain {_COMPARE_MIN_AGENTS}-{_COMPARE_MAX_AGENTS} "
+                "agent IDs total (slugs[] and agent_ids[] are resolved client-side "
+                "and counted together — total must fall in this range)."
+            ),
         )
     if len(set(agent_ids)) != len(agent_ids):
         raise HTTPException(status_code=400, detail="agent_ids must be unique.")

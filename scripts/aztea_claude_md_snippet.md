@@ -90,9 +90,10 @@ Prefer search and describe over memorizing slugs.
 
 Current built-in recipes:
 
-- `modernize-python`
 - `audit-deps`
-- `review-and-lint`
+- `secret-scan-and-audit`
+- `security-audit-sealed`
+- `domain-health`
 
 If you do not know the recipe ID, search for recipe or workflow first, or call `aztea_list_recipes`.
 

@@ -97,21 +97,28 @@ def _looks_like_secret_scan(output: dict[str, Any]) -> bool:
     """Pure: True when ``output`` matches the secret_scanner agent's shape.
 
     Why: detect this BEFORE the generic linter shape so secret-scan output
-    isn't mislabeled as "## Linter".
+    isn't mislabeled as "## Linter". 2026-05-18 audit (bug #18): the prior
+    check matched any output with ``total_findings`` OR ``rule_id`` in a
+    finding — both are common across many findings-style agents
+    (dockerfile_analyzer, sast_scanner, k8s_manifest_validator), so calling
+    `output_format=github_pr_comment` on dockerfile_analyzer rendered a
+    "## Secret Scanner" header and an empty-cell findings table. Tighten
+    the detection to require fields that are *uniquely* secret-scanner:
+    ``findings_by_severity`` (secret_scanner's exact severity bucket key)
+    or at least one finding with ``redacted_preview`` / ``entropy``.
     """
     findings = output.get("findings")
     if not isinstance(findings, list):
         return False
-    if "findings_by_severity" in output or "total_findings" in output:
+    if "findings_by_severity" in output:
         return True
     return any(
-        isinstance(f, dict)
-        and ("redacted_preview" in f or "rule_id" in f or "entropy" in f)
+        isinstance(f, dict) and ("redacted_preview" in f or "entropy" in f)
         for f in findings
     )
 
 
-def _collect_known_sections(output: dict[str, Any]) -> list[str]:
+def _collect_known_sections(output: dict[str, Any], meta: dict[str, Any]) -> list[str]:
     """Pure: build the per-shape markdown sections in render order."""
     sections: list[str] = []
     if "issues" in output and ("severity_counts" in output or "summary" in output):
@@ -119,7 +126,7 @@ def _collect_known_sections(output: dict[str, Any]) -> list[str]:
     if _looks_like_secret_scan(output):
         sections.append(_md_secret_scan(output))
     elif isinstance(output.get("findings"), list):
-        sections.append(_md_linter(output))
+        sections.append(_md_linter(output, meta))
     if isinstance(output.get("diagnostics"), list) or (
         isinstance(output.get("errors"), list) and "passed" in output
     ):
@@ -140,7 +147,7 @@ def _render_markdown(output: Any, meta: dict[str, Any]) -> str:
     """Pure: dispatch to per-shape markdown renderers; falls back to generic JSON dump."""
     if not isinstance(output, dict):
         return _generic_md(output)
-    sections = _collect_known_sections(output)
+    sections = _collect_known_sections(output, meta or {})
     if not sections:
         return _generic_md(output)
     return "\n\n".join(s for s in sections if s.strip())
@@ -261,13 +268,27 @@ def _md_secret_scan(output: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _md_linter(output: dict[str, Any]) -> str:
+def _md_linter(output: dict[str, Any], meta: dict[str, Any] | None = None) -> str:
+    """Render a `findings`-shaped output as markdown.
+
+    2026-05-18 audit (bug #18): use the agent's display name in the header
+    when available so dockerfile_analyzer / sast / k8s findings don't all
+    surface under the wrong "## Linter" or (worse) "## Secret Scanner"
+    label. Mirrors the Slack renderer behavior added in 1.7.0.
+    """
     findings = output.get("findings") or []
     total = (
         output.get("total") if isinstance(output.get("total"), int) else len(findings)
     )
     summary = str(output.get("summary") or "").strip()
-    lines: list[str] = ["## Linter"]
+    agent_name = ""
+    if isinstance(meta, dict):
+        agent_name = str(meta.get("name") or meta.get("agent_name") or "").strip()
+    # Preserve back-compat default ("## Linter") for callers that don't
+    # pass agent meta — the existing test_render_linter_shape asserts
+    # this string. Agent name takes precedence when available.
+    header_label = agent_name or "Linter"
+    lines: list[str] = [f"## {header_label}"]
     if summary:
         lines.append(summary)
     elif total == 0:
