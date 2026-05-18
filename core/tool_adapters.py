@@ -110,6 +110,10 @@ def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
             metadata["price_per_call_usd"] = float(agent.get("price_per_call_usd") or 0)
             metadata["trust_score"] = agent.get("trust_score")
             metadata["success_rate"] = agent.get("success_rate")
+            # 2026-05-18: forwarding has_call_history so downstream tool-format
+            # consumers can de-emphasize cold-start agents whose success_rate
+            # defaults to 1.0. The ranker (session D) reads this flag.
+            metadata["has_call_history"] = bool(agent.get("has_call_history", False))
             metadata["trust_score_by_client"] = agent.get("by_client") or {}
             metadata["privacy"] = {
                 "pii_safe": bool(agent.get("pii_safe")),

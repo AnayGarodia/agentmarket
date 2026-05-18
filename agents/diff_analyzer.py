@@ -49,8 +49,13 @@ _DEP_PATTERN = re.compile(r"requirements.*\.txt$", re.IGNORECASE)
 _SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("aws_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("private_key_header", re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----")),
+    # 1.7.4: widened to (a) include the hyphen in the captured charset so
+    # `sk-abc123` matches and (b) lowered the minimum length from 16 → 6.
+    # A 6-char literal in an `API_KEY = "..."` assignment is overwhelmingly
+    # a leaked credential, not noise; an empty array `[]` and other short
+    # placeholders are excluded by the surrounding `"…"` requirement.
     ("generic_secret", re.compile(
-        r"(?i)(api_key|secret|password|token|passwd)\s*[=:]\s*['\"][A-Za-z0-9+/]{16,}['\"]"
+        r"(?i)(api_key|secret|password|token|passwd)\s*[=:]\s*['\"][A-Za-z0-9+/_\-]{6,}['\"]"
     )),
     # 1.7.0: lowered Stripe key min length from 24 to 12. Real Stripe keys
     # are 24+ chars but the `sk_(live|test)_` prefix alone is a strong
@@ -64,8 +69,13 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
     # which only fires when prefixed with `api_key=`/`token=`/etc. A bare
     # leaked PAT in a diff slipped through.
     ("github_token", re.compile(r"\bgh[psoru]_[A-Za-z0-9]{36,}\b")),
-    # OpenAI/Anthropic API keys (sk-…). Same reasoning as above.
-    ("llm_api_key", re.compile(r"\bsk-(?!live|test)[A-Za-z0-9_-]{20,}\b")),
+    # OpenAI/Anthropic-style API keys (`sk-…`). 1.7.4: dropped the minimum
+    # body length from 20 → 6 chars. The 2026-05-18 test report observed
+    # the classifier missing a literal `sk-abc123` because the pre-1.7.4
+    # regex required 20 trailing chars — a short test fixture or stub key
+    # IS still an obvious leak. False positives are cheap (the buyer sees
+    # `secret_pattern` on a code-review summary); misses are not.
+    ("llm_api_key", re.compile(r"\bsk-(?!live|test)[A-Za-z0-9_-]{6,}\b")),
 ]
 
 
@@ -138,8 +148,19 @@ def _strip_path_prefix(raw: str) -> str:
     return raw
 
 
+_DIFF_GIT_HEADER_RE = re.compile(r"^diff --git\s+a/(\S+)\s+b/(\S+)")
+
+
 def _parse_diff_lines(lines: list[str]) -> list[dict]:
-    """Parse unified diff lines into per-file records with addition/deletion counts."""
+    """Parse unified diff lines into per-file records with addition/deletion counts.
+
+    Truncated diffs (a ``diff --git`` header followed directly by +/- lines
+    with no ``---``/``+++`` block) are handled by seeding ``current`` from
+    the header itself. Without that fallback the 2026-05-18 test report
+    showed ``secret_patterns_found = []`` on a hand-crafted diff that only
+    had the git header — the +/- lines were silently dropped before the
+    secret-scanner ever saw them.
+    """
     files: list[dict] = []
     current: Optional[dict] = None
     old_raw: Optional[str] = None
@@ -152,6 +173,18 @@ def _parse_diff_lines(lines: list[str]) -> list[dict]:
             old_raw = None
             new_raw = None
             current = None
+            header_match = _DIFF_GIT_HEADER_RE.match(line)
+            if header_match:
+                old_raw = header_match.group(1)
+                new_raw = header_match.group(2)
+                current = {
+                    "path": new_raw,
+                    "old_path": old_raw if old_raw != new_raw else None,
+                    "additions": 0,
+                    "deletions": 0,
+                    "added_lines": [],
+                    "binary": False,
+                }
             continue
 
         if line.startswith("rename from "):

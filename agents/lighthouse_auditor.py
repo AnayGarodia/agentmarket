@@ -67,9 +67,20 @@ _DEFAULT_CATEGORIES = ("performance", "accessibility", "best-practices", "seo")
 _VALID_CATEGORIES = frozenset({"performance", "accessibility", "best-practices", "seo", "pwa"})
 _VALID_STRATEGIES = frozenset({"mobile", "desktop"})
 _DEFAULT_STRATEGY = "mobile"
-_DEFAULT_TIMEOUT = 90
-_MIN_TIMEOUT = 20
-_MAX_TIMEOUT = 180
+# 2026-05-18: bumped from 90 → 150s. Lighthouse cold-start + chromium
+# warmup + the full audit pass routinely takes 75–110s on the prod host;
+# the previous 90s default tripped `lighthouse_auditor.timeout` on roughly
+# every real-world commercial page in the test report. The hard ceiling
+# stays at 240s to bound wall-clock per call.
+_DEFAULT_TIMEOUT = 150
+_MIN_TIMEOUT = 30
+_MAX_TIMEOUT = 240
+# Lighthouse's own ``--max-wait-for-load`` ceiling. Bumped from 45s → 60s
+# alongside the outer timeout — slow CDN cold-cache pages exceed 45s for
+# the first paint on a fresh chromium launch even though they finish within
+# 60s. Keeping it strictly below ``_DEFAULT_TIMEOUT`` so lighthouse fails
+# its own gate before subprocess.run kills it.
+_LIGHTHOUSE_MAX_WAIT_MS = 60_000
 _MAX_OPPORTUNITIES = 8
 _MAX_FAILED_AUDITS = 15
 _STDERR_TAIL_CHARS = 600
@@ -148,7 +159,22 @@ def _resolve_chrome_path() -> str | None:
 def _build_cmd(
     url: str, categories: list[str], strategy: str, output_path: str
 ) -> list[str]:
-    chrome_flags = "--headless --no-sandbox --disable-gpu --disable-dev-shm-usage"
+    # 2026-05-18: extra chrome flags reduce hang-on-cold-start on the prod
+    # host. ``--ignore-certificate-errors`` lets us audit sites with stale or
+    # self-signed certs (which previously surfaced as RUNTIME_ERROR mid-run);
+    # ``--disable-extensions`` and ``--disable-default-apps`` shave a few
+    # seconds of chromium warmup; ``--disable-background-networking`` keeps
+    # chromium from racing the audit with metrics uploads.
+    chrome_flags = (
+        "--headless "
+        "--no-sandbox "
+        "--disable-gpu "
+        "--disable-dev-shm-usage "
+        "--ignore-certificate-errors "
+        "--disable-extensions "
+        "--disable-default-apps "
+        "--disable-background-networking"
+    )
     return [
         _resolve_lighthouse_bin() or "lighthouse",
         url,
@@ -160,7 +186,7 @@ def _build_cmd(
         "--throttling-method=simulate" if strategy == "mobile" else "--throttling-method=provided",
         f"--chrome-flags={chrome_flags}",
         # JSON only; we don't need the HTML report.
-        "--max-wait-for-load=45000",
+        f"--max-wait-for-load={_LIGHTHOUSE_MAX_WAIT_MS}",
     ]
 
 
@@ -268,6 +294,20 @@ def _normalize_run_inputs(
     return url, categories, strategy, max(_MIN_TIMEOUT, min(timeout_s, _MAX_TIMEOUT))
 
 
+def _report_has_content(out_path: str) -> bool:
+    """Pure: ``True`` when ``out_path`` exists with non-zero size.
+
+    Defensive against test harnesses that patch ``os.path.exists`` but not
+    ``os.path.getsize`` — falls back to "exists" if getsize raises.
+    """
+    if not os.path.exists(out_path):
+        return False
+    try:
+        return os.path.getsize(out_path) > 0
+    except OSError:
+        return True
+
+
 def _execute_lighthouse(
     url: str, categories: list[str], strategy: str, timeout_s: int, out_path: str,
 ) -> dict | None:
@@ -289,7 +329,13 @@ def _execute_lighthouse(
             "lighthouse_auditor.timeout",
             f"Lighthouse exceeded {timeout_s}s; site may be unreachable or too slow.",
         )
-    if proc.returncode != 0 and not os.path.exists(out_path):
+    # 2026-05-18: lighthouse can exit non-zero AND still write a partial
+    # report containing a ``runtimeError`` describing the failure (e.g.
+    # NO_FCP, FAILED_DOCUMENT_REQUEST). Only treat returncode!=0 AND no
+    # output file as a hard infra failure; everything else falls through to
+    # the JSON parser + runtimeError surfacing so callers see the real
+    # cause rather than a generic timeout.
+    if proc.returncode != 0 and not _report_has_content(out_path):
         stderr_tail = (proc.stderr or "")[-_STDERR_TAIL_CHARS:]
         chrome_hint = (
             ""
@@ -302,7 +348,7 @@ def _execute_lighthouse(
         )
         return _err(
             "lighthouse_auditor.run_failed",
-            f"Lighthouse exited {proc.returncode}: "
+            f"Lighthouse exited {proc.returncode} with no JSON output: "
             f"{stderr_tail.strip() or 'no stderr'}.{chrome_hint}",
         )
     return None
@@ -395,4 +441,17 @@ def run(payload: dict) -> dict:
     report = _run_lighthouse_cli(url, categories, strategy, timeout_s)
     if "error" in report:
         return report  # error envelope
+    # 2026-05-18: lighthouse can return a JSON report whose top-level
+    # ``runtimeError`` describes why the audit failed (NO_FCP, PROTOCOL_TIMEOUT,
+    # FAILED_DOCUMENT_REQUEST). Surface that explicitly instead of returning
+    # a structurally-valid report with all-null metrics, which the test report
+    # flagged as a misleading "successful" call.
+    runtime_error = report.get("runtimeError") if isinstance(report, dict) else None
+    if isinstance(runtime_error, dict) and runtime_error.get("code"):
+        return _err(
+            "lighthouse_auditor.runtime_error",
+            f"Lighthouse reported runtimeError {runtime_error.get('code')}: "
+            f"{runtime_error.get('message') or 'no message'}",
+            {"runtime_error": runtime_error, "url": url, "strategy": strategy},
+        )
     return _shape_lighthouse_report(url=url, strategy=strategy, report=report)

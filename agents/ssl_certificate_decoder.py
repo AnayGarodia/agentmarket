@@ -263,6 +263,27 @@ def _decode_cert(cert: Any) -> dict[str, Any]:
 # Input routing helpers
 # ---------------------------------------------------------------------------
 
+def _safe_decode_cert(cert: Any) -> dict[str, Any]:
+    """Wrap ``_decode_cert`` so a single unexpected extension shape can't
+    turn a real cert into a 500.
+
+    Why: the 2026-05-18 test report showed the agent at 14% success — many
+    failures were certificates with quirky extensions (e.g. SAN with raw
+    OtherName entries, BasicConstraints with non-integer path_length,
+    KeyUsage on EdDSA keys). Per-field extraction is defensive, but the
+    aggregate ``_decode_cert`` path still raised; this wrapper turns those
+    into a structured error envelope instead of an HTTP 500.
+    """
+    try:
+        return _decode_cert(cert)
+    except Exception as exc:  # noqa: BLE001 — boundary
+        _LOG.warning("ssl_certificate_decoder: _decode_cert raised", exc_info=True)
+        return _err(
+            "ssl_certificate_decoder.decode_failed",
+            f"Certificate parsed but field extraction failed: {type(exc).__name__}: {exc}",
+        )
+
+
 def _handle_single_pem(pem_raw: str) -> dict[str, Any]:
     """Decode a single PEM input; handle chains by returning first cert."""
     blocks = _pem_blocks_from_string(pem_raw)
@@ -272,7 +293,7 @@ def _handle_single_pem(pem_raw: str) -> dict[str, Any]:
         cert = _load_cert_from_pem(blocks[0])
     except Exception as exc:
         return _err("ssl_certificate_decoder.decode_failed", f"PEM decode failed: {exc}")
-    return _decode_cert(cert)
+    return _safe_decode_cert(cert)
 
 
 def _handle_der_base64(der_b64: str) -> dict[str, Any]:
@@ -281,11 +302,19 @@ def _handle_der_base64(der_b64: str) -> dict[str, Any]:
         cert = _load_cert_from_der_base64(der_b64)
     except Exception as exc:
         return _err("ssl_certificate_decoder.decode_failed", f"DER decode failed: {exc}")
-    return _decode_cert(cert)
+    return _safe_decode_cert(cert)
 
 
 def _handle_batch_pems(pem_list: list[str]) -> dict[str, Any]:
-    """Decode a batch of PEM certificates and validate chain order."""
+    """Decode a batch of PEM certificates and validate chain order.
+
+    Per-cert failures no longer abort the batch — they land as inline
+    error envelopes alongside successful decodes. The 2026-05-18 test
+    report flagged callers passing intermediate-CA PEMs where one cert had
+    a malformed extension; pre-fix, the whole batch returned a single
+    error envelope with no detail on which cert was bad and which were
+    valid. Inline errors keep partial results actionable.
+    """
     if len(pem_list) > MAX_BATCH:
         return _err(
             "ssl_certificate_decoder.too_many_certs",
@@ -297,25 +326,34 @@ def _handle_batch_pems(pem_list: list[str]) -> dict[str, Any]:
     for idx, pem_raw in enumerate(pem_list):
         blocks = _pem_blocks_from_string(pem_raw)
         if not blocks:
-            return _err(
+            decoded.append(_err(
                 "ssl_certificate_decoder.decode_failed",
                 f"Certificate at index {idx} contains no valid PEM block",
-            )
+            ))
+            certs.append(None)
+            continue
         try:
             cert = _load_cert_from_pem(blocks[0])
         except Exception as exc:
-            return _err(
+            decoded.append(_err(
                 "ssl_certificate_decoder.decode_failed",
                 f"Certificate at index {idx} failed to decode: {exc}",
-            )
+            ))
+            certs.append(None)
+            continue
         certs.append(cert)
-        decoded.append(_decode_cert(cert))
+        decoded.append(_safe_decode_cert(cert))
 
-    # chain_valid_order: cert[i].issuer == cert[i+1].subject for a well-ordered chain
-    chain_valid = all(
-        certs[i].issuer == certs[i + 1].subject
-        for i in range(len(certs) - 1)
-    )
+    # chain_valid_order: cert[i].issuer == cert[i+1].subject for a well-ordered chain.
+    # Any decode failure in the chain makes order verification meaningless; report
+    # ``None`` in that case rather than a misleading boolean.
+    if any(c is None for c in certs) or len(certs) < 2:
+        chain_valid: bool | None = None if any(c is None for c in certs) else True
+    else:
+        chain_valid = all(
+            certs[i].issuer == certs[i + 1].subject
+            for i in range(len(certs) - 1)
+        )
     return {"certificates": decoded, "chain_valid_order": chain_valid}
 
 

@@ -73,7 +73,6 @@ These are discovered through `search_specialists` and then invoked with `call_sp
 When the task matches these categories, call `search_specialists` first and then pick the best returned slug:
 
 - `python_code_executor` for real Python execution
-- `multi_file_python_executor` for multi-file Python projects
 - `linter_agent` for Python / JS / TS linting
 - `type_checker` for mypy / tsc style checking
 - `dependency_auditor` for dependency vulnerability and license audit

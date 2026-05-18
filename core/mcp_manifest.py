@@ -382,6 +382,12 @@ def _build_catalog_metadata(
         "short_use_cases": list(agent.get("short_use_cases") or []),
         "trust_score": agent.get("trust_score"),
         "success_rate": agent.get("success_rate"),
+        # 2026-05-18: forwarding ``has_call_history`` so downstream ranking
+        # (session D owns the ranker) can distinguish cold-start agents
+        # showing success_rate=1.0 / trust_score=50 by default from agents
+        # that have actually earned those numbers. The flag is computed in
+        # core/registry/core_schema.py (``has_call_history = total_calls > 0``).
+        "has_call_history": bool(agent.get("has_call_history", False)),
         "avg_latency_ms": agent.get("avg_latency_ms"),
         "price_per_call_usd": agent.get("price_per_call_usd"),
         "verified": bool(agent.get("verified", False)),

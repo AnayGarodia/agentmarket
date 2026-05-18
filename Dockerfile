@@ -19,6 +19,27 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
+# Worker-side tool runtimes baked in so agents that shell out to specific
+# binaries don't fail with `tool_unavailable` in prod. Each block notes which
+# agent it serves so future image trims don't accidentally regress a path.
+#
+# pytest + coverage + pytest-asyncio: coverage_runner shells out to
+# `coverage run --branch -m pytest`; ci_failure_reproducer re-runs failing
+# pytest commands. Both returned 0%/low success because these were dev-only.
+# checkov: hcl_terraform_analyzer invokes `checkov -d ... --output json`.
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    coverage \
+    checkov
+
+# hadolint: dockerfile_analyzer shells out to `hadolint --format json`. When
+# absent, the agent falls back to regex heuristics and flags `degraded_mode`.
+# Pin to a recent stable release; static binary, no apt dependency.
+RUN curl -fsSL -o /usr/local/bin/hadolint \
+        https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 \
+    && chmod +x /usr/local/bin/hadolint
+
 # browser_agent + visual_regression + accessibility_auditor + lighthouse_auditor
 # all need a real Chromium. `playwright install-deps` pulls in the (long) list
 # of shared-libs Chromium needs on slim Debian, then `playwright install
@@ -31,8 +52,18 @@ RUN python -m playwright install-deps chromium \
 
 # lighthouse_auditor shells out to the Node-native lighthouse CLI. Installed
 # globally so it's on PATH for the appuser. ~80MB.
-RUN npm install -g lighthouse@11 \
+# jest (and the npm CLI) is installed globally so ci_failure_reproducer can
+# reproduce JS test failures the same way pytest covers Python ones.
+RUN npm install -g lighthouse@11 jest@29 \
     && npm cache clean --force
+
+# golang: ci_failure_reproducer also picks up `go test ...` commands from
+# CI logs. Without a Go toolchain those re-runs reported "go: command not
+# found" instead of the real failure. ~150MB but worth it for the agent to
+# diagnose real Go failures rather than a missing-toolchain artifact.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends golang-go git \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 

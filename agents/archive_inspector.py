@@ -19,7 +19,11 @@ Runtime requirements: none beyond Python 3.9+.
 # DECISIONS: in-memory inspection only — avoids disk I/O and path traversal during analysis
 
 import base64
+import binascii
+import gzip
 import io
+import lzma
+import struct
 import tarfile
 import zipfile
 from datetime import datetime, timezone
@@ -27,8 +31,15 @@ from pathlib import PurePosixPath
 
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_ENTRIES = 500
+# 2026-05-18: the bomb detector previously required uncompressed > 100MB
+# AND ratio > 100. A 50MB-cap archive with ratio 1000:1 unpacks to 50GB
+# but only crosses the 100MB threshold — so we lowered the absolute floor
+# to 10MB to flag obvious bombs while still excluding ordinary compressed
+# bundles. The ratio gate remains the dominant signal; the size floor just
+# rules out a trivially compressible single small file (e.g. an empty
+# 1KB log that compresses to 50 bytes).
 BOMB_RATIO_THRESHOLD = 100
-BOMB_SIZE_THRESHOLD = 100_000_000
+BOMB_SIZE_THRESHOLD = 10_000_000
 MAX_DEPTH = 10
 TOP_LARGEST_COUNT = 5
 SUSPICIOUS_EXTENSIONS = frozenset(
@@ -141,7 +152,7 @@ def _security_flags(entries: list[dict], total_uncomp: int, total_comp: int) -> 
     bomb_risk = (
         total_comp > 0
         and (total_uncomp / total_comp) > BOMB_RATIO_THRESHOLD
-        and total_uncomp > BOMB_SIZE_THRESHOLD
+        and total_uncomp >= BOMB_SIZE_THRESHOLD
     )
 
     return {
@@ -244,13 +255,20 @@ def _top_largest(entries: list[dict]) -> list[str]:
 
 
 def _decode_content(payload: dict) -> bytes | dict:
-    """Decode base64 content from payload; return error dict on failure."""
+    """Decode base64 content from payload; return error dict on failure.
+
+    Uses ``validate=True`` so non-base64 garbage surfaces as a clear
+    ``decode_failed`` instead of producing truncated bytes that later die
+    inside the archive parser with an opaque ``unsupported_format`` error.
+    """
     raw_b64 = payload.get("content_base64")
     if not raw_b64:
         return _error("archive_inspector.missing_content", "content_base64 is required")
+    if not isinstance(raw_b64, str):
+        return _error("archive_inspector.decode_failed", "content_base64 must be a string")
     try:
-        return base64.b64decode(raw_b64)
-    except Exception:
+        return base64.b64decode(raw_b64, validate=True)
+    except (ValueError, binascii.Error):
         return _error("archive_inspector.decode_failed", "content_base64 could not be decoded")
 
 
@@ -281,11 +299,26 @@ def run(payload: dict) -> dict:
             "Could not detect archive format from magic bytes or filename extension",
         )
 
+    # 2026-05-18: previously only ``zipfile.BadZipFile`` and ``tarfile.TarError``
+    # were caught — but a malformed gzip surfaces as ``gzip.BadGzipFile`` (or
+    # ``EOFError``/``struct.error`` for truncated streams), and lzma raises
+    # ``lzma.LZMAError``. Those bubbled up as 500s, which the 2026-05-18 test
+    # report counted as agent failures. Catch the full superset and report
+    # them as ``unsupported_format`` so callers get a refund + actionable
+    # error envelope instead of an opaque server error.
     try:
         if fmt == "zip":
             return _inspect_zip(raw, max_entries)
         return _inspect_tar(raw, fmt, max_entries)
-    except (zipfile.BadZipFile, tarfile.TarError) as exc:
+    except (
+        zipfile.BadZipFile,
+        tarfile.TarError,
+        gzip.BadGzipFile,
+        lzma.LZMAError,
+        EOFError,
+        struct.error,
+        ValueError,
+    ) as exc:
         return _error(
             "archive_inspector.unsupported_format",
             f"Archive could not be opened: {exc}",
