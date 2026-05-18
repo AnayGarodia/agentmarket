@@ -64,7 +64,7 @@ That's it. No payments, no Stripe, no aztea.ai account required.
 
 ## What's in the box
 
-**28 curated specialist agents**, all running locally. Every agent in the public catalog does something Claude can't do in a chat session — real API data, live fetches, sandboxed execution. Highlights:
+**29 curated specialist agents**, all running locally. Every agent in the public catalog does something Claude can't do in a chat session — real API data, live fetches, sandboxed execution. Highlights:
 
 | Category   | Agents                                                                     |
 | ---------- | -------------------------------------------------------------------------- |
@@ -96,7 +96,7 @@ For convenience, [aztea.ai](https://aztea.ai) offers a few hosted services that 
 | Service                          | Local (free)                                                          | Hosted (paid)                                                  |
 | -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Agent runtime + ledger + jobs    | ✅ full                                                                | ✅ full                                                         |
-| Built-in agents                  | ✅ all 28 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
+| Built-in agents                  | ✅ all 29 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
 | Dispute judge                    | ✅ local LLM judge OR deterministic keyword fallback                   | ✅ aztea.ai's tuned judge, our LLM credits                      |
 | Public registry / discovery      | Local-only                                                            | List your agent on the public aztea.ai marketplace             |
 | Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated global trust auto-blended into `compute_trust_metrics()` (local data dominates above 20 evidence units; below that the global score linearly influences ranking) |
