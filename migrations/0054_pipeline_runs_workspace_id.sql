@@ -1,4 +1,4 @@
--- 0049_pipeline_runs_workspace_id.sql
+-- 0054_pipeline_runs_workspace_id.sql
 -- Link pipeline runs to their auto-created workspace.
 --
 -- When a recipe definition opts in via ``auto_workspace: true``, the

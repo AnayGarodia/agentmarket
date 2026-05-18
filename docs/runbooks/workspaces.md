@@ -10,9 +10,9 @@
 
 | Asset | Location | Notes |
 |---|---|---|
-| `workspaces` table | DB | Schema in `migrations/0048_workspaces.sql`. |
+| `workspaces` table | DB | Schema in `migrations/0053_workspaces.sql`. |
 | `workspace_artifacts` table | DB | Content stored inline as `BLOB`/`bytea`. |
-| `pipeline_runs.workspace_id` | DB | Column from `migrations/0049_pipeline_runs_workspace_id.sql`. Nullable. |
+| `pipeline_runs.workspace_id` | DB | Column from `migrations/0054_pipeline_runs_workspace_id.sql`. Nullable. |
 | Workspace seal signing key | `data/workspace_signing_key.pem` (mode `0o600`) | Generated on first `seal_workspace()` call. Override path with `AZTEA_WORKSPACE_SIGNING_KEY_PATH`. Format: private PEM + `\n---PUBLIC---\n` + public PEM. **Secret.** |
 | Sealer DID | `https://<host>/workspaces/sealer/did.json` | Public. Resolves to the JWK form of the public key. |
 | Module | `core/workspaces.py` | All lifecycle / CRUD / seal logic. Sibling exceptions in `core/workspaces_errors.py`. |
