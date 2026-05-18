@@ -640,7 +640,8 @@ def test_outbound_url_validation_blocks_private_targets_by_default(client):
         json={"target_url": "http://127.0.0.1:9999/hook"},
     )
     assert hook_resp.status_code == 422
-    assert "private/loopback" in hook_resp.json()["message"]
+    # PR 76 bug 10: SSRF error message no longer leaks the env-var name
+    assert "blocked by network policy" in hook_resp.json()["message"]
 
     manifest_resp = client.post(
         "/onboarding/validate",
