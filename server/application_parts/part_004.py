@@ -90,11 +90,20 @@ _AGENT_WALL_BUDGET_DEFAULT_SECONDS = float(
     os.environ.get("AZTEA_AGENT_WALL_BUDGET_DEFAULT_SECONDS", "8.0")
 )
 _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
-    # SAST / dep-auditor / diff-analyzer invoke real subprocess tools
-    # (semgrep, npm-audit) and can legitimately take 20s+ on a 1k-LOC
-    # fixture. We keep the SYNC budget at the default 8s and surface a
-    # 504 envelope that tells the caller to switch to async POST /jobs
-    # for big inputs (no Caddy gateway-timeout race on the queue path).
+    # 2026-05-18 — agents that shell out to real tooling (semgrep, bandit,
+    # pip-audit, npm-audit, subprocess test runners). On the previous
+    # t3.micro these often exceeded 25s and Caddy 502'd, so 1.7.4 kept
+    # the sync budget at 8s and asked callers to switch to async. After
+    # the m7i-flex.large resize (8 GB RAM, 2 vCPU) typical sync runs land
+    # in 4-15s; the 8s default was misfiring on small inputs that the
+    # async path handled in <5s. 25s safely covers the median sync run
+    # without re-opening the Caddy race (Caddyfile has no explicit
+    # upstream timeout; defaults are generous). Caller-facing redirect
+    # to async still fires on budget overflow via the 504 envelope.
+    _SAST_SCANNER_AGENT_ID: 25.0,
+    _DEPENDENCY_AUDITOR_AGENT_ID: 25.0,
+    _DIFF_ANALYZER_AGENT_ID: 25.0,
+    _CI_FAILURE_REPRODUCER_AGENT_ID: 25.0,
 }
 
 

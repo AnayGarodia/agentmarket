@@ -314,6 +314,140 @@ def test_batch_start_cartesian_product():
     assert all("NODE" in c["axis_values"] and "PG" in c["axis_values"] for c in cells)
 
 
+def test_registry_persists_state_to_disk_across_workers(tmp_path, monkeypatch):
+    """register/get round-trip survives a simulated worker swap.
+
+    Regression: prod uvicorn runs with --workers 2 so the in-memory
+    ``_REGISTRY`` dict is per-process. Pre-fix a sandbox created on
+    worker A returned ``sandbox not active`` from any operation that
+    landed on worker B — the 2026-05-18 exec/status disagreement. The
+    fix writes each ``SandboxState`` to ``{state_root}/_registry/``
+    on register/touch so the disk is the cross-worker SSOT. Simulating
+    a swap = clearing the in-memory cache only; ``get`` should
+    transparently rehydrate from disk.
+    """
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        _REGISTRY, generate_sandbox_id, get, register,
+    )
+
+    sandbox_id = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=sandbox_id, status="ready", created_at=42, expires_at=999,
+        last_activity_at=42, last_snapshot_at=0, workspace_id="ws_abc",
+        owner_hint=None, region="auto", size={"cpu": "1", "memory_gb": 1},
+        lifetime=LifetimePolicy(max_minutes=10),
+        network=NetworkPolicyState(egress="isolated"),
+        boot=BootInfo(strategy="docker_compose", project_name="sbx-test"),
+        filesystem_root="/tmp/test/sbx/repo",
+    ))
+    # Simulate the receiving worker: brand new process, empty cache,
+    # but the on-disk state was written by the registering worker.
+    _REGISTRY.clear()
+
+    recovered = get(sandbox_id)
+    assert recovered is not None
+    assert recovered.sandbox_id == sandbox_id
+    assert recovered.status == "ready"
+    assert recovered.workspace_id == "ws_abc"
+    assert recovered.boot.strategy == "docker_compose"
+    assert recovered.boot.project_name == "sbx-test"
+    assert recovered.lifetime.max_minutes == 10
+    assert recovered.network.egress == "isolated"
+
+
+def test_touch_flushes_activity_timestamp_for_sibling_workers(tmp_path, monkeypatch):
+    """state.touch() must persist last_activity_at so the idle sweeper sees fresh activity.
+
+    Regression: pre-fix touch() updated only the in-memory copy. The
+    sweeper running on worker B would read the original (stale)
+    timestamp from the in-memory state worker A registered, and
+    idle-kill a sandbox that was actively serving exec calls on A.
+    """
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        _REGISTRY, generate_sandbox_id, get, register,
+    )
+
+    sandbox_id = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=sandbox_id, status="ready", created_at=100, expires_at=999,
+        last_activity_at=100, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(), boot=BootInfo(strategy="raw", project_name="p"),
+        filesystem_root="/tmp",
+    ))
+    state = _REGISTRY[sandbox_id]
+    state.touch()
+    fresh_activity = state.last_activity_at
+    _REGISTRY.clear()
+
+    sibling_view = get(sandbox_id)
+    assert sibling_view is not None
+    assert sibling_view.last_activity_at == fresh_activity
+    assert sibling_view.last_activity_at >= 100
+
+
+def test_remove_deletes_disk_state(tmp_path, monkeypatch):
+    """remove() must wipe the on-disk file so a recreated sandbox_id stays clean."""
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from pathlib import Path
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        _REGISTRY, generate_sandbox_id, register, remove, _state_file,
+    )
+
+    sandbox_id = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=sandbox_id, status="ready", created_at=0, expires_at=0,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(), boot=BootInfo(strategy="raw", project_name="p"),
+        filesystem_root="/tmp",
+    ))
+    on_disk: Path = _state_file(sandbox_id)
+    assert on_disk.exists(), "register should have persisted the state file"
+
+    remove(sandbox_id)
+    assert not on_disk.exists(), "remove should have unlinked the state file"
+    assert sandbox_id not in _REGISTRY
+
+
+def test_list_all_includes_sibling_worker_sandboxes(tmp_path, monkeypatch):
+    """list_all() merges in-memory + disk so each worker sees a complete picture."""
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        _REGISTRY, generate_sandbox_id, list_all, register,
+    )
+
+    sandbox_a = generate_sandbox_id()
+    sandbox_b = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=sandbox_a, status="ready", created_at=0, expires_at=0,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(), boot=BootInfo(strategy="raw", project_name="a"),
+        filesystem_root="/tmp/a",
+    ))
+    register(SandboxState(
+        sandbox_id=sandbox_b, status="ready", created_at=0, expires_at=0,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(), boot=BootInfo(strategy="raw", project_name="b"),
+        filesystem_root="/tmp/b",
+    ))
+    # Simulate a worker that only registered sandbox_b in its in-memory cache
+    # (sandbox_a was registered by a sibling worker).
+    _REGISTRY.pop(sandbox_a)
+
+    ids = {s.sandbox_id for s in list_all()}
+    assert sandbox_a in ids, "list_all must surface sandboxes registered by sibling workers"
+    assert sandbox_b in ids
+
+
 def test_raw_files_writes_text_content(tmp_path, monkeypatch):
     """``content`` (UTF-8 text) round-trips into the workspace as written.
 

@@ -49,6 +49,7 @@ Runtime:
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
@@ -98,6 +99,50 @@ def _resolve_lighthouse_bin() -> str | None:
     if override:
         return override if os.path.isfile(override) else None
     return shutil.which("lighthouse")
+
+
+# Playwright caches chromium under a version-suffixed directory
+# (e.g. ``chromium-1208``) which rolls forward when Playwright is upgraded.
+# We resolve at call time rather than baking a path so an upgrade doesn't
+# silently re-break the agent.
+_PLAYWRIGHT_CACHE_DIRS = (
+    "/home/aztea/.cache/ms-playwright",
+    os.path.expanduser("~/.cache/ms-playwright"),
+)
+
+
+def _resolve_chrome_path() -> str | None:
+    """Pure-ish: locate a Chrome/Chromium binary lighthouse can launch.
+
+    Why: lighthouse uses chrome-launcher, which only searches a fixed list
+    of well-known install paths (``/usr/bin/google-chrome`` etc.). The
+    Aztea production host runs Playwright's bundled chromium under
+    ``~/.cache/ms-playwright/chromium-<version>/``, which chrome-launcher
+    never discovers — so every lighthouse call dies with
+    ``ChromePathNotSetError`` and an empty output file (2026-05-18 test
+    report). Resolve a usable binary here and we pass it through CHROME_PATH
+    in the subprocess env; lighthouse honours that without further config.
+    """
+    override = os.environ.get("CHROME_PATH", "").strip()
+    if override and os.path.isfile(override):
+        return override
+    for system_path in ("google-chrome", "chromium-browser", "chromium", "chrome"):
+        which = shutil.which(system_path)
+        if which:
+            return which
+    for cache_dir in _PLAYWRIGHT_CACHE_DIRS:
+        # Glob covers both the full chromium build and the headless shell;
+        # prefer the full build because some lighthouse audits need DevTools.
+        for pattern in (
+            f"{cache_dir}/chromium-*/chrome-linux64/chrome",
+            f"{cache_dir}/chromium-*/chrome-linux/chrome",
+            f"{cache_dir}/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+        ):
+            matches = sorted(glob.glob(pattern))
+            if matches:
+                # Newest version sorts last alphanumerically (chromium-1208 < chromium-1210).
+                return matches[-1]
+    return None
 
 
 def _build_cmd(
@@ -228,9 +273,16 @@ def _execute_lighthouse(
 ) -> dict | None:
     """Side-effect: subprocess invoke; returns error envelope on failure or ``None`` on success."""
     cmd = _build_cmd(url, categories, strategy, out_path)
+    env = os.environ.copy()
+    chrome_path = _resolve_chrome_path()
+    if chrome_path:
+        # See ``_resolve_chrome_path`` docstring for why this is essential
+        # on hosts that ship chromium under Playwright's cache.
+        env["CHROME_PATH"] = chrome_path
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout_s, check=False,
+            cmd, capture_output=True, text=True, timeout=timeout_s,
+            check=False, env=env,
         )
     except subprocess.TimeoutExpired:
         return _err(
@@ -239,9 +291,19 @@ def _execute_lighthouse(
         )
     if proc.returncode != 0 and not os.path.exists(out_path):
         stderr_tail = (proc.stderr or "")[-_STDERR_TAIL_CHARS:]
+        chrome_hint = (
+            ""
+            if chrome_path
+            else (
+                " Hint: no Chrome/Chromium binary was discoverable "
+                "(set CHROME_PATH, install google-chrome, or run "
+                "`playwright install chromium`)."
+            )
+        )
         return _err(
             "lighthouse_auditor.run_failed",
-            f"Lighthouse exited {proc.returncode}: {stderr_tail.strip() or 'no stderr'}",
+            f"Lighthouse exited {proc.returncode}: "
+            f"{stderr_tail.strip() or 'no stderr'}.{chrome_hint}",
         )
     return None
 
