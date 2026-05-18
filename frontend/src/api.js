@@ -1009,3 +1009,42 @@ export async function runRecipe(key, recipeId, inputPayload) {
   })
   return body
 }
+
+// Workspaces (v0/v0.1). The server's GET /workspaces returns the caller's
+// own workspaces ordered newest-first. The detail view fetches a single
+// workspace + its artifacts + (when sealed) its public manifest.
+export async function fetchWorkspaceList(key, limit = 100) {
+  const { body } = await request(`/workspaces?limit=${limit}`, { key })
+  return body
+}
+
+export async function fetchWorkspace(key, workspaceId) {
+  const { body } = await request(`/workspaces/${encodeURIComponent(workspaceId)}`, { key })
+  return body
+}
+
+export async function fetchWorkspaceArtifacts(key, workspaceId) {
+  const { body } = await request(`/workspaces/${encodeURIComponent(workspaceId)}/artifacts`, { key })
+  return body
+}
+
+// Public — no key needed. Returns { manifest, signature, public_key_did }.
+export async function fetchWorkspaceManifest(workspaceId) {
+  const { body } = await request(`/workspaces/${encodeURIComponent(workspaceId)}/manifest`, {})
+  return body
+}
+
+// Public — no key needed. Returns { valid, signer_did, sealed_at }.
+export async function verifyWorkspaceSeal(workspaceId) {
+  const { body } = await request(`/workspaces/${encodeURIComponent(workspaceId)}/verify`, {
+    method: 'POST',
+  })
+  return body
+}
+
+export async function deleteWorkspace(key, workspaceId) {
+  await request(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+    key,
+    method: 'DELETE',
+  })
+}

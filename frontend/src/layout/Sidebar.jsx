@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Wrench, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, FilePlus, Workflow
+  LayoutDashboard, Wrench, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, FilePlus, Workflow, FolderArchive
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Avatar from '../ui/Avatar'
@@ -12,6 +12,7 @@ const HIRER_NAV = [
   { to: '/overview',     icon: LayoutDashboard, label: 'Overview' },
   { to: '/agents',       icon: Wrench,          label: 'Hire Agents' },
   { to: '/workflows',    icon: Workflow,        label: 'Workflows' },
+  { to: '/workspaces',   icon: FolderArchive,   label: 'Workspaces' },
   { to: '/list-skill',   icon: FilePlus,        label: 'List an Agent' },
   { to: '/jobs',         icon: Briefcase,       label: 'Jobs' },
   { to: '/wallet',       icon: Wallet,          label: 'Wallet' },
@@ -34,6 +35,7 @@ const BOTH_NAV = [
   { to: '/overview',       icon: LayoutDashboard, label: 'Overview' },
   { to: '/agents',         icon: Wrench,          label: 'Hire Agents' },
   { to: '/workflows',      icon: Workflow,        label: 'Workflows' },
+  { to: '/workspaces',     icon: FolderArchive,   label: 'Workspaces' },
   { to: '/list-skill',     icon: FilePlus,        label: 'List an Agent' },
   { to: '/jobs',           icon: Briefcase,       label: 'Jobs' },
   { to: '/my-agents',      icon: ListChecks,      label: 'My Agents' },

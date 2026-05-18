@@ -517,6 +517,23 @@ def workspaces_create(
 
 
 @app.get(
+    "/workspaces",
+    tags=["workspaces"],
+    summary="List the caller's workspaces, newest first.",
+    responses=_error_responses(401, 403, 429),
+)
+@limiter.limit("60/minute")
+def workspaces_list(
+    request: Request,
+    limit: int = 100,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "caller")
+    rows = _workspaces.list_workspaces(caller["owner_id"], limit=limit)
+    return {"workspaces": rows}
+
+
+@app.get(
     "/workspaces/{workspace_id}",
     tags=["workspaces"],
     summary="Read workspace metadata.",

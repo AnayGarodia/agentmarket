@@ -32,8 +32,6 @@
 #   the sandbox per-host key pattern at core/sandbox/receipts.py.
 #
 # KNOWN DEBT:
-# - No auto-GC of 'expired' content yet; sweeper only marks status. Add
-#   a second pass that nulls content + frees disk in v0.1.
 # - No rotation tooling for the workspace signing key. Manual rotation
 #   only — delete data/workspace_signing_key.pem and the next call to
 #   _load_or_create_signing_keypair regenerates.
@@ -97,6 +95,16 @@ _DEFAULT_TTL_SECONDS = 86_400  # 24 hours
 _MAX_TTL_SECONDS = 7 * 86_400  # 7 days
 _DEFAULT_QUOTA_BYTES = 64 * 1024 * 1024  # 64 MiB
 _MAX_ARTIFACT_BYTES = 8 * 1024 * 1024  # matches sandbox write cap
+
+# v0.1 retention windows. Past these thresholds the second sweeper pass
+# nulls workspace_artifacts.content (metadata + manifest are kept).
+# Env-tunable so operators can dial them up/down without a code change.
+_EXPIRED_CONTENT_RETENTION_SECONDS = int(
+    os.environ.get("AZTEA_WORKSPACE_EXPIRED_RETENTION_SECONDS", str(7 * 86_400))
+)
+_SEALED_CONTENT_RETENTION_SECONDS = int(
+    os.environ.get("AZTEA_WORKSPACE_SEALED_RETENTION_SECONDS", str(90 * 86_400))
+)
 
 # Name regex: alphanumerics, dot, underscore, dash, slash. 1..256 bytes.
 _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-/]{1,256}$")
@@ -222,6 +230,33 @@ def get_workspace(workspace_id: str) -> dict[str, Any]:
     if row is None:
         raise wse.WorkspaceNotFound(workspace_id)
     return row
+
+
+def list_workspaces(owner_user_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    """Return the caller's workspaces ordered newest-first.
+
+    Caps the result set at ``limit`` (default 100) so a giant catalog
+    never DOS's the frontend on first paint. Pagination beyond that is
+    a v0.2 concern; v0.1 just shows recent.
+
+    Returns the same shape as ``get_workspace`` per row, minus the
+    large ``seal_manifest`` payload (the page renders one summary row;
+    the detail view fetches the manifest separately).
+    """
+    safe_limit = max(1, min(int(limit), 500))
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT workspace_id, owner_user_id, run_id, status, backing_type,"
+        " backing_id, total_bytes, artifact_count, quota_bytes,"
+        " seal_public_key_did, created_at, sealed_at, expires_at,"
+        " content_purged_at"
+        "  FROM workspaces"
+        " WHERE owner_user_id = %s"
+        " ORDER BY created_at DESC"
+        " LIMIT %s",
+        (owner_user_id, safe_limit),
+    ).fetchall()
+    return rows
 
 
 def cleanup_workspace(workspace_id: str) -> None:
@@ -706,15 +741,41 @@ def _load_artifact_ref(
 # ---------------------------------------------------------------------------
 
 
-def run_sweeper(*, now_iso: str | None = None) -> int:
-    """Mark active workspaces past expires_at as 'expired'. Returns the
-    number of rows updated.
+def run_sweeper(*, now_iso: str | None = None) -> dict[str, int]:
+    """Run all sweeper passes. Returns a counts dict.
 
-    Sealed workspaces are intentionally left alone: their content is
-    retained for the audit/dispute window. A v0.1 sweep can null content
-    for sealed-and-past-retention rows separately.
+    Two passes:
+      1. ``expired_marked`` — ``active`` rows past ``expires_at`` become
+         ``expired``. Metadata + content + manifest all preserved (the
+         caller may still want to download the content during the brief
+         pre-purge window). Same behavior as v0.
+      2. ``content_purged`` — content (the BYTEA blobs in
+         ``workspace_artifacts``) is nulled for rows whose retention
+         window has closed. Two sub-policies:
+            * ``expired`` workspaces past
+              ``AZTEA_WORKSPACE_EXPIRED_RETENTION_SECONDS`` (default 7d)
+              after ``expires_at``.
+            * ``sealed`` workspaces past
+              ``AZTEA_WORKSPACE_SEALED_RETENTION_SECONDS`` (default 90d)
+              after ``sealed_at``.
+         The seal manifest + per-artifact metadata (name, sha256,
+         size_bytes, content_type, created_at) are NEVER purged so a
+         third party can still verify the manifest existed and contained
+         a given hash — they just can't fetch the bytes anymore.
+         ``workspaces.content_purged_at`` is stamped so the next sweep
+         pass skips already-purged rows.
     """
     cutoff = now_iso or _utcnow_iso()
+    expired_marked = _sweep_mark_expired(cutoff)
+    content_purged = _sweep_purge_content(cutoff)
+    return {
+        "expired_marked": expired_marked,
+        "content_purged": content_purged,
+    }
+
+
+def _sweep_mark_expired(cutoff: str) -> int:
+    """Pass 1: active workspaces past TTL become expired."""
     with _connect() as conn:
         cursor = conn.execute(
             "UPDATE workspaces SET status = 'expired' "
@@ -722,3 +783,63 @@ def run_sweeper(*, now_iso: str | None = None) -> int:
             (cutoff,),
         )
         return cursor.rowcount or 0
+
+
+def _sweep_purge_content(cutoff: str) -> int:
+    """Pass 2: null content for rows past their retention window.
+
+    Returns the number of WORKSPACES whose content was purged on this
+    pass (not the number of artifact rows). Caller-facing logs care
+    about workspace count, not artifact count.
+
+    Idempotent: ``content_purged_at IS NULL`` guard skips rows already
+    handled by a previous pass. Safe to run on the same tick as the
+    ``expired`` marking pass — newly-expired rows won't qualify yet
+    because their ``expires_at`` is at most ``cutoff`` (zero seconds
+    past) which is less than the retention window.
+    """
+    expired_threshold = _iso_seconds_before(cutoff, _EXPIRED_CONTENT_RETENTION_SECONDS)
+    sealed_threshold = _iso_seconds_before(cutoff, _SEALED_CONTENT_RETENTION_SECONDS)
+    purged = 0
+    with _connect() as conn:
+        eligible = conn.execute(
+            "SELECT workspace_id FROM workspaces "
+            " WHERE content_purged_at IS NULL"
+            "   AND ("
+            "        (status = 'expired' AND expires_at < %s)"
+            "     OR (status = 'sealed'  AND sealed_at < %s)"
+            "   )",
+            (expired_threshold, sealed_threshold),
+        ).fetchall()
+        if not eligible:
+            return 0
+        for row in eligible:
+            ws_id = row["workspace_id"]
+            # Two-statement transaction: null the bytes, then stamp the
+            # workspace. Order matters so a crash between them just
+            # means a future sweep retries (idempotent).
+            conn.execute(
+                "UPDATE workspace_artifacts SET content = NULL "
+                " WHERE workspace_id = %s",
+                (ws_id,),
+            )
+            conn.execute(
+                "UPDATE workspaces SET content_purged_at = %s "
+                " WHERE workspace_id = %s",
+                (cutoff, ws_id),
+            )
+            purged += 1
+    return purged
+
+
+def _iso_seconds_before(cutoff_iso: str, seconds: int) -> str:
+    """Return an ISO timestamp ``seconds`` before the given cutoff.
+
+    Used by the content-purge pass to compute retention thresholds in
+    the same string format the DB stores. Tolerates the trailing 'Z'
+    form as well as ``+00:00`` for safety against test fixtures that
+    construct timestamps manually.
+    """
+    text = cutoff_iso.replace("Z", "+00:00") if cutoff_iso.endswith("Z") else cutoff_iso
+    dt = datetime.fromisoformat(text)
+    return (dt - timedelta(seconds=seconds)).isoformat()

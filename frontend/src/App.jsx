@@ -22,6 +22,7 @@ const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage'))
 const JobsPage = lazy(() => import('./pages/JobsPage'))
 const JobDetailPage = lazy(() => import('./pages/JobDetailPage'))
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'))
+const WorkspacesPage = lazy(() => import('./pages/WorkspacesPage'))
 const WorkerPage = lazy(() => import('./pages/WorkerPage'))
 const WalletPage = lazy(() => import('./pages/WalletPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
@@ -94,6 +95,7 @@ function AuthedApp() {
               <Route path="/jobs"     element={<JobsPage />} />
               <Route path="/jobs/:id" element={<JobDetailPage />} />
               <Route path="/workflows" element={<WorkflowsPage />} />
+              <Route path="/workspaces" element={<WorkspacesPage />} />
               <Route path="/worker"   element={<WorkerPage />} />
               <Route path="/wallet"   element={<WalletPage />} />
               <Route path="/settings" element={<SettingsPage />} />
