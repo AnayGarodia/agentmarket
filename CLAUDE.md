@@ -371,6 +371,19 @@ Source: `server/routes/admin_usage.py` (factory `create_router(...)` wired at th
 
 **MCP error code capture.** `mcp_invocation_log.error_code` (migration 0048) is populated when an MCP dispatch raises an `HTTPException` whose `detail` carries a structured `error.code`. Helper: `_extract_mcp_error_code` in `part_000.py`. Required for the `failures` view to be useful.
 
+### Workspaces
+
+- **Workspaces** are server-side shared state for one multi-agent workflow: a named collection of artifacts (named blobs) plus an optional Ed25519-signed seal manifest covering every artifact hash. Module owner is `core/workspaces.py`; tables are `workspaces` + `workspace_artifacts` (migrations 0053-0054). Buyer-facing docs at `docs/workspaces.md`. Operational runbook at `docs/runbooks/workspaces.md`.
+- The new module re-exports `_local = _db._local` so `tests/integration/helpers._close_module_conn` works on it.
+- **Reserved keys on `POST /registry/agents/{id}/call`:** `_workspace_id` (envelope, stripped before agent dispatch; triggers auto-write of the response under `outputs/{agent_slug}/{job_id}.json`) and `_artifact_ref: "ws_id/name"` (recursively substituted with artifact bytes/JSON/text/b64 per content-type before the agent sees the payload). Naming: underscore prefix marks them as dispatch-layer infrastructure so they never collide with an agent's own input schema fields.
+- **Auth model:** owner can read/write/seal/delete. Workers with an active job lease on `workspace.run_id` can read/write but not seal or delete. `GET /workspaces/{id}/manifest`, `POST /workspaces/{id}/verify`, and `GET /workspaces/sealer/did.json` are PUBLIC. ID is 22-char base62 (~131 bits, unguessable).
+- **Pipelines opt in** by setting `auto_workspace: true` on the recipe definition. `core/pipelines/executor.py:run_pipeline` creates a workspace per run, threads `_workspace_id` through every step's payload, writes step outputs under `outputs/{agent_slug}/{node_id}.json`, and seals on successful completion. `pipeline_runs.workspace_id` is surfaced by both run-status GET endpoints.
+- **Signing key:** per-server Ed25519 at `data/workspace_signing_key.pem` (mode 0o600, .gitignored). Override path with `AZTEA_WORKSPACE_SIGNING_KEY_PATH`. DID: `did:web:<host>:workspaces:sealer`. Schema name: `aztea/workspace-seal/1`. Pattern mirrors the sandbox per-host signing key.
+- **Body-size middleware** in `part_001.py` allows 8 MiB for `/workspaces/*/artifacts/*` paths (default cap stays 512 KB everywhere else). Per-artifact cap matches `core/sandbox/filesystem.py:_MAX_WRITE_BYTES`.
+- **Sandbox backing:** `backing_type='sandbox'` + `backing_id` routes reads/writes through `core/sandbox/filesystem.py`. On `SandboxNotFound`, the workspace transitions to terminal `sandbox_evicted` state; the seal manifest can still be built from metadata rows.
+- **What v0 doesn't have** (deferred to v0.1): auto-content-deletion for expired workspaces (sweeper marks status only), versioning, S3 backing, cross-user sharing, streaming I/O, per-workspace billing budget, frontend UI.
+- **Test fixture change** in `tests/integration/conftest.py`: `isolated_db` now calls `apply_migrations(db_path)` so integration tests see the full schema — without this, `init_db()`'s `CREATE TABLE IF NOT EXISTS` path silently skipped columns added by later migrations.
+
 ---
 
 ## Core flows (quick reference)
