@@ -56,6 +56,22 @@ def build_agent_did(agent_id: str, server_base_url: str | None = None) -> str:
     return f"did:web:{host}:agents:{agent_id}"
 
 
+def build_workspace_did(suffix: str = "sealer", server_base_url: str | None = None) -> str:
+    """Return the workspace-sealer ``did:web`` identifier.
+
+    Mirrors :func:`build_agent_did` but uses the ``workspaces:`` namespace
+    so the per-server workspace signing key doesn't masquerade as an agent.
+    Default suffix ``"sealer"`` produces ``did:web:<host>:workspaces:sealer``.
+    """
+    base = (
+        server_base_url
+        if server_base_url is not None
+        else os.environ.get("SERVER_BASE_URL")
+    )
+    host = _did_host_from_base_url(base)
+    return f"did:web:{host}:workspaces:{suffix}"
+
+
 def did_document_url(agent_id: str, server_base_url: str | None = None) -> str:
     """Return the public URL that resolves the agent's DID document.
 
