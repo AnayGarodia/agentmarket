@@ -32,8 +32,9 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                 "expert explanation. Runtime constraints (enforced; calls "
                 "that exceed them are rejected, not silently truncated): "
                 "128 MB memory cap with a 32 MB pre-spawn static-allocation "
-                "guard; 30 s hard timeout (and the Aztea sync gateway has "
-                "an 8 s wall budget — use the async path for longer jobs); "
+                "guard; 30 s hard timeout (the sync /call gateway has an "
+                "8 s wall budget — use manage_workflow(hire_async) for "
+                "longer jobs, which gets a 10-minute async budget); "
                 "no pip install; no subprocess spawning or shell execution; "
                 "no arbitrary file writes outside the sandbox tempdir; no "
                 "network sockets except via the agent contract. Stdlib is "
@@ -100,10 +101,11 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                         "maximum": 30,
                         "description": (
                             "Execution timeout in seconds. Hard cap is 30; "
-                            "anything above is rejected. The Aztea sync "
+                            "anything above is rejected. The sync /call "
                             "gateway adds a separate 8 s wall budget — "
-                            "callers needing more than 8 s should use the "
-                            "async path."
+                            "callers needing more than 8 s should use "
+                            "manage_workflow(hire_async), which honors a "
+                            "10-minute async wall budget."
                         ),
                     },
                     "explain": {

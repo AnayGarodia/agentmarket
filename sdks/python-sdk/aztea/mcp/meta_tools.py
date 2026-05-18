@@ -361,12 +361,14 @@ _TOOLS: list[dict[str, Any]] = [
             "The agent works in the background; poll with manage_job(action='status') to get progress and results. "
             "Use this by default for long-running tasks, for work that may need clarification, or whenever you want to manage several agents without blocking on each call."
             "\n\n"
-            "WALL-CLOCK CAP: each agent has its own per-call wall-clock budget (typically 20-60 seconds for "
-            "sync-style agents, up to several minutes for long-running ones). Async submission does NOT bypass "
-            "that per-agent cap — exceeding it returns a structured failure 'Agent exceeded its X.Xs wall-clock "
-            "budget. Refunded.' and the job is auto-refunded. Inspect the agent's documented budget via "
-            "describe_specialist before submitting work known to be slower than the budget. If you need a "
-            "longer ceiling, prefer agents whose spec advertises one (e.g. live_sandbox), or split the task."
+            "WALL-CLOCK CAP (async tier): each async job has a per-agent wall-clock budget measured in "
+            "minutes, distinct from the sync /call path's seconds-grade budget. Defaults to 600 seconds "
+            "(10 minutes); chromium-based audits (lighthouse_auditor, live_sandbox) get 1800 seconds "
+            "(30 minutes); SAST / dependency / coverage / diff agents get 1200 seconds (20 minutes). "
+            "Exceeding the budget returns a structured failure 'Agent exceeded its X.Xs wall-clock budget. "
+            "Refunded.' and the job is auto-refunded. Async retries are disabled on timeout — the same "
+            "input would produce the same timeout. For work that needs a higher ceiling, split the task "
+            "into smaller jobs or contact the agent owner."
         ),
         "input_schema": {
             "type": "object",

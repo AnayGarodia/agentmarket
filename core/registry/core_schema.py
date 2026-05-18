@@ -955,11 +955,15 @@ def _row_to_dict(row: dict) -> dict:
     d["region_locked"] = str(d.get("region_locked") or "").strip().lower() or None
     total = d["total_calls"]
     successful = d.pop("successful_calls")
-    d["success_rate"] = round(successful / total, 4) if total > 0 else 1.0
-    # Distinguish "no call history" from "100% success" in renderers. Without
-    # this flag the frontend shows 0% (or 100%, depending on which surface
-    # consumed the field) for agents that simply haven't been called yet,
-    # which misleads buyers comparing trust signals.
+    # 2026-05-18 (A1/A2): cold-start agents with zero traffic previously
+    # received success_rate=1.0, which masqueraded broken endpoints
+    # (multi_file_python_executor / semantic_codebase_search both returned
+    # 502 endpoint_misconfigured but listed at success_rate=1.0). None
+    # signals "no signal yet" — consumers must explicitly distinguish that
+    # from "100% success". Frontend renderers already null-coalesce; MCP
+    # manifest's `if success is not None:` already gates on it.
+    d["success_rate"] = round(successful / total, 4) if total > 0 else None
+    # Distinguish "no call history" from "100% success" in renderers.
     d["has_call_history"] = total > 0
     return d
 

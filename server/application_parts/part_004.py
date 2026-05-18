@@ -78,14 +78,18 @@ _AGENT_WALL_TIMEOUT_POOL = _cf.ThreadPoolExecutor(
     thread_name_prefix="agent-walltimeout",
 )
 
-# 1.7.4 — per-agent wall-clock budget. The 1.7.3 eval found that the
-# 1.7.3 25s budget was LARGER than Caddy's true upstream timeout
-# (observed 13-30s for SAST, 5-7s for regex), so Caddy 502'd with
-# empty body BEFORE the budget fired and the refund path never ran.
-# 1.7.4 lowers the default to 8s so the timeout always pre-empts
-# Caddy. Agents that legitimately need more time (SAST on large
-# fixtures) should be invoked via async POST /jobs; the sync /call
-# 504 envelope below points the caller there.
+# 1.7.4 — per-agent wall-clock budget for the SYNC path. The 1.7.3 eval
+# found that the 25s budget was LARGER than Caddy's true upstream timeout
+# (observed 13-30s for SAST, 5-7s for regex), so Caddy 502'd with empty
+# body BEFORE the budget fired and the refund path never ran. 1.7.4
+# lowers the sync default to 8s so the timeout always pre-empts Caddy.
+# Agents that legitimately need more time (SAST on large fixtures) should
+# be invoked via async POST /jobs / manage_workflow(hire_async); the sync
+# /call 504 envelope below points the caller there.
+#
+# CRITICAL: these constants are for the SYNC path only. The async path
+# uses ``_AGENT_WALL_BUDGET_ASYNC_*`` below — confusing the two regresses
+# hire_async to 8s and defeats the purpose of async (C3, 2026-05-18).
 _AGENT_WALL_BUDGET_DEFAULT_SECONDS = float(
     os.environ.get("AZTEA_AGENT_WALL_BUDGET_DEFAULT_SECONDS", "8.0")
 )
@@ -120,9 +124,8 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # a per-call budget that covers a single verb — most are <1s, but
     # ``sandbox_stop`` with snapshot_on_stop runs ``docker commit`` on the
     # running container which is 5-30s depending on image size. The budget
-    # gates the worst-case verb; cheap verbs don't pay extra. Async path
-    # honours the same override (the budget is enforced in
-    # ``_execute_builtin_agent``, not in the request handler).
+    # gates the worst-case verb; cheap verbs don't pay extra. The async
+    # path uses its own larger budget (see _AGENT_WALL_BUDGET_ASYNC_*).
     _LIGHTHOUSE_AUDITOR_AGENT_ID: 90.0,
     _LIVE_SANDBOX_AGENT_ID: 90.0,
     # 2026-05-18 — cve_lookup was timing out 3/3 times under the 8 s sync
@@ -130,9 +133,44 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # one per CVE id sequentially with a 0.7 s rate-limit delay. Combined
     # with the new 1 h in-process cache (agents/cve_lookup.py::_cve_cache),
     # the cold worst-case (single id, no cache hit) fits well under 20 s
-    # and the warm path is sub-millisecond. Async path honours the same
-    # override.
+    # and the warm path is sub-millisecond.
     _CVELOOKUP_AGENT_ID: 20.0,
+}
+
+# 2026-05-18 (C3) — ASYNC path budget. Distinct from the sync table above.
+#
+# Why: the sync path's 8s default exists to pre-empt Caddy's upstream
+# timeout. The async path has no Caddy in the loop — the worker poll
+# loop drains pending jobs and the budget should reflect the actual
+# expected runtime ceiling, not the HTTP-edge timeout. The previous
+# sprint regressed this by routing the async worker through the same
+# `_AGENT_WALL_BUDGET_*` constants, so hire_async inherited the 8s
+# sync budget. A 25-second sleep job was being refunded with "Agent
+# exceeded its 8.0s wall-clock budget", defeating the purpose of async.
+#
+# The async tier is measured in minutes. 600s (10 min) is the default;
+# heavy agents that legitimately need longer get their own override.
+_AGENT_WALL_BUDGET_ASYNC_DEFAULT_SECONDS = float(
+    os.environ.get("AZTEA_AGENT_WALL_BUDGET_ASYNC_DEFAULT_SECONDS", "600.0")
+)
+_AGENT_WALL_BUDGET_ASYNC_OVERRIDES: dict[str, float] = {
+    # Heavy specialist runtimes: chromium-based audits, sandboxed
+    # subprocess execution, deep static-analysis. These can legitimately
+    # run for many minutes on real-world inputs in the async path.
+    _LIGHTHOUSE_AUDITOR_AGENT_ID: 1800.0,
+    _LIVE_SANDBOX_AGENT_ID: 1800.0,
+    _BROWSER_AGENT_ID: 1200.0,
+    _VISUAL_REGRESSION_AGENT_ID: 1200.0,
+    _BROKEN_LINK_CRAWLER_AGENT_ID: 1200.0,
+    _ACCESSIBILITY_AUDITOR_AGENT_ID: 1200.0,
+    # Static-analysis and dependency-audit agents — large repos can take
+    # several minutes; async submissions should not bump against the
+    # default 10-minute ceiling.
+    _SAST_SCANNER_AGENT_ID: 1200.0,
+    _DEPENDENCY_AUDITOR_AGENT_ID: 1200.0,
+    _DIFF_ANALYZER_AGENT_ID: 1200.0,
+    _CI_FAILURE_REPRODUCER_AGENT_ID: 1200.0,
+    _COVERAGE_RUNNER_AGENT_ID: 1200.0,
 }
 
 
@@ -183,15 +221,50 @@ def _agent_semaphore(agent_id: str) -> threading.BoundedSemaphore:
         return sem
 
 
+def _resolve_wall_budget(agent_id: str, execution_mode: str) -> float:
+    """Look up the per-agent wall-clock budget for ``agent_id`` under
+    ``execution_mode`` ∈ {"sync", "async"}.
+
+    Sync = 8s default / up to 90s per agent (Caddy-protection tier).
+    Async = 600s default / up to 1800s per agent (no Caddy in the loop).
+
+    The two tables are intentionally separate. Conflating them regresses
+    hire_async to 8s and defeats the purpose of async (C3, 2026-05-18).
+    """
+    if execution_mode == "async":
+        return _AGENT_WALL_BUDGET_ASYNC_OVERRIDES.get(
+            agent_id, _AGENT_WALL_BUDGET_ASYNC_DEFAULT_SECONDS,
+        )
+    return _AGENT_WALL_BUDGET_OVERRIDES.get(
+        agent_id, _AGENT_WALL_BUDGET_DEFAULT_SECONDS,
+    )
+
+
 def _execute_builtin_agent(
     agent_id: str,
     input_payload: dict[str, Any],
     *,
     emit_partial=None,
+    execution_mode: str = "sync",
 ) -> dict:
     """Dispatch a built-in agent. ``emit_partial`` is forwarded to agents
     whose ``run`` signature accepts it (co-pilot streaming). Callers without
     a job_id pass ``None`` (the default) and behaviour matches pre-1.6.2.
+
+    ``execution_mode`` selects the wall-clock budget table:
+
+    - ``"sync"`` (default): the sync `/registry/agents/{id}/call` path —
+      budget capped at 8s (or up to 90s for heavy agents) so the timeout
+      pre-empts Caddy's upstream timeout. Sync callers exceeding the
+      budget get redirected to the async path.
+    - ``"async"``: the async worker path (jobs submitted via
+      ``manage_workflow(hire_async)`` or ``POST /jobs``) — budget defaults
+      to 600s (10 min) and goes up to 1800s for chromium-based audits.
+      No Caddy in the loop, so the budget reflects actual runtime ceilings.
+
+    The previous sprint regressed this by routing the async worker
+    through the sync budget table, capping every async job at 8s
+    regardless of how long the agent actually needs (C3, 2026-05-18).
     """
     def _finalize(output: Any) -> dict:
         if isinstance(output, dict) and isinstance(output.get("error"), dict):
@@ -245,9 +318,7 @@ def _execute_builtin_agent(
     # the background until the agent finishes (which it will — even a
     # regex ReDoS eventually returns), then quietly releases its pool
     # slot. The worker thread is free to handle the next job.
-    budget = _AGENT_WALL_BUDGET_OVERRIDES.get(
-        agent_id, _AGENT_WALL_BUDGET_DEFAULT_SECONDS,
-    )
+    budget = _resolve_wall_budget(agent_id, execution_mode)
     # 2026-05-18 (E2): the budget applies to EXECUTION time only, not
     # queue-wait. Previously fut.result(timeout=budget) included pool-
     # queue time, so a batch flood could kill cve_lookup calls that
@@ -574,6 +645,7 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 _agent_id,
                 claimed.get("input_payload") or {},
                 emit_partial=_emit_partial,
+                execution_mode="async",
             )
         if _is_unchargeable_degraded_output(str(claimed["agent_id"]), output):
             output = _degraded_unchargeable_error(str(claimed["agent_id"]))

@@ -363,10 +363,11 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                         "title": "Extra wait (ms)",
                         "description": (
                             "Additional wait after page settles (max 6000 ms). "
-                            "The Aztea sync gateway has an 8 s wall budget — "
-                            "callers needing longer waits should use the async "
-                            "path (POST /jobs or "
-                            "manage_workflow(action='hire_async'))."
+                            "The sync /call gateway has an 8 s wall budget — "
+                            "callers needing longer waits should use "
+                            "manage_workflow(action='hire_async') or POST /jobs, "
+                            "which honor a 20-minute async wall budget for "
+                            "browser_agent."
                         ),
                         "default": 1500,
                         "maximum": 6000,
