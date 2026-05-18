@@ -270,3 +270,29 @@ def test_did_document_route_returns_jwk(client, isolated_db):
     body = r.json()
     assert body["id"].startswith("did:web:")
     assert body["verificationMethod"][0]["publicKeyJwk"]["crv"] == "Ed25519"
+
+
+def test_list_workspaces_returns_callers_workspaces_newest_first(client, isolated_db):
+    """GET /workspaces (v0.1) returns the caller's workspaces, newest first."""
+    from core.migrate import apply_migrations
+    apply_migrations(str(isolated_db))
+    # Create three workspaces in order.
+    ids = []
+    for _ in range(3):
+        r = client.post("/workspaces", json={}, headers=_h())
+        ids.append(r.json()["workspace_id"])
+
+    r = client.get("/workspaces", headers=_h())
+    assert r.status_code == 200, r.text
+    listing = r.json()["workspaces"]
+    # All three present, newest first (so reversed creation order).
+    listing_ids = [w["workspace_id"] for w in listing]
+    assert ids[2] in listing_ids
+    assert ids[1] in listing_ids
+    assert ids[0] in listing_ids
+    # Each row carries the columns the frontend needs.
+    for w in listing:
+        assert "status" in w
+        assert "total_bytes" in w
+        assert "artifact_count" in w
+        assert "expires_at" in w

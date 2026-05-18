@@ -336,6 +336,7 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
             )
             _emit_pending_starvation_signal()
             _maybe_run_decision_retention()
+            _run_workspaces_sweeper_pass(summary)
             _set_sweeper_state(
                 last_run_at=started,
                 last_summary=summary,
@@ -353,6 +354,28 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
                 last_error=str(exc),
             )
     _set_sweeper_state(running=False)
+
+
+def _run_workspaces_sweeper_pass(summary: dict[str, Any]) -> None:
+    """Piggyback the workspaces sweeper on the jobs sweeper tick.
+
+    Workspaces are not jobs, but they share the "background pass every
+    N seconds" cadence and a separate thread would double the
+    background-thread count for negligible benefit. Failures are logged
+    but never propagate — the jobs sweeper must keep running even if a
+    schema-mismatch leaves workspaces unsweepable on this tick.
+
+    The counts land under ``summary["workspaces_*"]`` so
+    ``sweeper.pass_completed`` logs them when non-zero.
+    """
+    try:
+        from core import workspaces as _workspaces
+        counts = _workspaces.run_sweeper()
+        summary["workspaces_expired_marked"] = counts.get("expired_marked", 0)
+        summary["workspaces_content_purged"] = counts.get("content_purged", 0)
+    except Exception as exc:  # noqa: BLE001 — never break the jobs loop
+        _LOG.warning("workspaces sweeper failed: %s", exc, exc_info=True)
+        summary["workspaces_sweeper_error"] = str(exc)
 
 
 def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
