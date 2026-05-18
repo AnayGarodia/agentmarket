@@ -107,6 +107,12 @@ from agents import archive_inspector as agent_archive_inspector
 from agents import unicode_inspector as agent_unicode_inspector
 from agents import terraform_plan_analyzer as agent_terraform_plan_analyzer
 from agents import live_sandbox as agent_live_sandbox
+from agents import regex_tester as agent_regex_tester
+from agents import jwt_validator as agent_jwt_validator
+from agents import sbom_generator as agent_sbom_generator
+from agents import pypi_metadata as agent_pypi_metadata
+from agents import github_releases as agent_github_releases
+from agents import hcl_terraform_analyzer as agent_hcl_terraform_analyzer
 from core import agent_generator as _agent_generator
 from core import auth as _auth
 from core import cache as _cache
@@ -331,6 +337,12 @@ _ARCHIVE_INSPECTOR_AGENT_ID = _builtin_constants.ARCHIVE_INSPECTOR_AGENT_ID
 _UNICODE_INSPECTOR_AGENT_ID = _builtin_constants.UNICODE_INSPECTOR_AGENT_ID
 _TERRAFORM_PLAN_ANALYZER_AGENT_ID = _builtin_constants.TERRAFORM_PLAN_ANALYZER_AGENT_ID
 _LIVE_SANDBOX_AGENT_ID = _builtin_constants.LIVE_SANDBOX_AGENT_ID
+_REGEX_TESTER_AGENT_ID = _builtin_constants.REGEX_TESTER_AGENT_ID
+_JWT_VALIDATOR_AGENT_ID = _builtin_constants.JWT_VALIDATOR_AGENT_ID
+_SBOM_GENERATOR_AGENT_ID = _builtin_constants.SBOM_GENERATOR_AGENT_ID
+_PYPI_METADATA_AGENT_ID = _builtin_constants.PYPI_METADATA_AGENT_ID
+_GITHUB_RELEASES_AGENT_ID = _builtin_constants.GITHUB_RELEASES_AGENT_ID
+_HCL_TERRAFORM_ANALYZER_AGENT_ID = _builtin_constants.HCL_TERRAFORM_ANALYZER_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS
@@ -361,7 +373,15 @@ _DEFAULT_HOOK_DELIVERY_CLAIM_LEASE_SECONDS = 30
 _DEFAULT_DISPUTE_FILE_WINDOW_SECONDS = 7 * 24 * 3600
 _DEFAULT_DISPUTE_WINDOW_HOURS = 72
 _DEFAULT_DISPUTE_FILING_DEPOSIT_BPS = 500
-_DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS = 5
+# Raised 2026-05-18 from 5¢ to 25¢. The 5% BPS rate alone gave a 1¢ call a 0¢
+# computed deposit (clamped to 5¢, so 500% of call cost — that *was* friction
+# but inverted: cheap calls were OVER-friction while a free call needed only
+# a 5¢ deposit to dispute. We want enough floor that frivolous disputes
+# against sub-25¢ calls aren't a cheap weapon, while keeping the rate scale
+# meaningful for higher-priced calls (e.g. $1 call → 5¢ rate, dwarfed by
+# this floor — confirms the asymmetry trade-off). Higher-priced calls scale
+# via BPS as before.
+_DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS = 25
 _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 30  # 1.7.0: tightened from 60s
 # Eval saw 155s+ on a 2-judge dispute even though hint said "~1 minute"; the
 # leader-elected judge thread isn't always re-acquired immediately after a
@@ -412,6 +432,13 @@ _CLIENT_ID_HEADER = "X-Aztea-Client"
 _DEFAULT_JUDGE_FEE_CENTS = 0
 _REPUTATION_DECAY_GRACE_DAYS = 30
 _REPUTATION_DECAY_DAILY_RATE = 0.005
+# Surgical band-aid for stale latency averages (see migration 0053).
+# Grace is shorter than reputation decay (7 d vs 30 d) because a stale slow
+# latency actively misrepresents a healthy agent in the catalog UI; the
+# rolling-window proper fix is tracked separately.
+_LATENCY_DECAY_GRACE_DAYS = 7
+_LATENCY_DECAY_DAILY_MULTIPLIER = 0.9
+_LATENCY_DECAY_FLOOR_MS = 1
 AUTO_SUSPEND_FAILURE_RATE_THRESHOLD = 0.6
 AUTO_SUSPEND_MIN_CALLS = 10
 _DEFAULT_RATE_LIMIT = "60/minute"
@@ -963,8 +990,16 @@ def _inflight_requests_count() -> int:
 
 
 def _compute_dispute_filing_deposit_cents(price_cents: int) -> int:
+    """Pure: deposit = max(floor, 5% of call price).
+
+    2026-05-18: the floor applies even for free calls. The pre-2026-05-18
+    behaviour was "0¢ call → 0¢ deposit", which gave attackers a free
+    dispute weapon against gateway-subsidized free-tier agents — every
+    such call could be disputed risk-free. The fix is to charge the floor
+    even on free calls (still refunded if the dispute succeeds).
+    """
     normalized_price = max(0, int(price_cents))
-    if normalized_price <= 0 or _DISPUTE_FILING_DEPOSIT_BPS <= 0:
+    if _DISPUTE_FILING_DEPOSIT_MIN_CENTS <= 0:
         return 0
     computed = (normalized_price * _DISPUTE_FILING_DEPOSIT_BPS) // 10_000
     return max(_DISPUTE_FILING_DEPOSIT_MIN_CENTS, computed)

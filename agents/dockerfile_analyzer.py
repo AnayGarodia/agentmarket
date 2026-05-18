@@ -363,6 +363,20 @@ def run(payload: dict) -> dict:
             f"Dockerfile exceeds the maximum allowed size of {_MAX_DOCKERFILE_BYTES} bytes",
         )
 
+    # 2026-05-18 (E6): reject garbage input. A Dockerfile MUST have a
+    # FROM instruction or there is nothing useful to lint — the agent
+    # used to happily report ``pinned_base_image: false`` on a free-form
+    # sentence, which looks like a clean scan to anyone scanning the
+    # output. Fail closed instead.
+    if not any(_FROM_RE.match(line) for line in dockerfile.splitlines()):
+        return _err(
+            "dockerfile_analyzer.no_from_instruction",
+            "Input does not look like a Dockerfile: no FROM instruction "
+            "found. Provide a real Dockerfile (must start with FROM "
+            "<image>) or use ``shell_executor`` for arbitrary text.",
+            details={"first_120_chars": dockerfile[:120]},
+        )
+
     t_start = time.monotonic()
 
     structural = _structural_checks(dockerfile)
@@ -370,6 +384,7 @@ def run(payload: dict) -> dict:
 
     findings: list[dict[str, Any]]
     tool_used: str
+    degraded_mode = False
 
     if hadolint_available:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -382,16 +397,22 @@ def run(payload: dict) -> dict:
             _LOG.warning("hadolint invocation failed; falling back to regex checks")
             findings = _run_regex(dockerfile)
             tool_used = "regex"
+            degraded_mode = True
         else:
             tool_used = "hadolint"
     else:
+        # 2026-05-18 (E6): hadolint missing → regex fallback. Mark this
+        # as degraded so the receipt / billing layer can surface "the
+        # agent did less than its description promises" instead of
+        # silently passing the unverified output off as hadolint output.
         findings = _run_regex(dockerfile)
         tool_used = "regex"
+        degraded_mode = True
 
     by_severity = _tally(findings)
     scan_time_ms = int((time.monotonic() - t_start) * 1000)
 
-    return {
+    result: dict[str, Any] = {
         "findings": findings,
         "total_findings": len(findings),
         "by_severity": by_severity,
@@ -401,4 +422,13 @@ def run(payload: dict) -> dict:
         "has_secrets_in_env": structural["has_secrets_in_env"],
         "tool_used": tool_used,
         "scan_time_ms": scan_time_ms,
+        "degraded_mode": degraded_mode,
     }
+    if degraded_mode:
+        result["degraded_reason"] = (
+            "hadolint binary not present on this executor; output produced "
+            "by built-in regex heuristics. Findings are best-effort and may "
+            "miss rules that hadolint catches. Install hadolint on the "
+            "worker to upgrade to full coverage."
+        )
+    return result

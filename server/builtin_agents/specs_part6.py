@@ -536,7 +536,29 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
                 "properties": {
                     "page_count": {"type": "integer"},
                     "pages_returned": {"type": "integer"},
-                    "metadata": {"type": "object"},
+                    "metadata": {
+                        "type": "object",
+                        "description": (
+                            "Standard PDF metadata. ``title_source`` is one "
+                            "of ``embedded`` (read from the PDF metadata "
+                            "dict), ``page1_heuristic`` (extracted from the "
+                            "largest-font line in the top 30%% of page 1 "
+                            "when embedded title was empty), or ``null`` "
+                            "(no plausible title found)."
+                        ),
+                        "properties": {
+                            "title": {"type": ["string", "null"]},
+                            "title_source": {
+                                "type": ["string", "null"],
+                                "enum": ["embedded", "page1_heuristic", None],
+                            },
+                            "author": {"type": ["string", "null"]},
+                            "subject": {"type": ["string", "null"]},
+                            "creator": {"type": ["string", "null"]},
+                            "producer": {"type": ["string", "null"]},
+                            "creation_date": {"type": ["string", "null"]},
+                        },
+                    },
                     "text": {"type": "string"},
                     "pages": {"type": "array"},
                     "tables": {"type": "array"},
@@ -565,6 +587,7 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
                         "pages_returned": 15,
                         "metadata": {
                             "title": "Attention Is All You Need",
+                            "title_source": "embedded",
                             "author": "Vaswani et al.",
                             "subject": None,
                             "creator": "LaTeX",

@@ -70,7 +70,18 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
         {
             "agent_id": _CVELOOKUP_AGENT_ID,
             "name": "CVE Lookup Agent",
-            "description": "Free — platform-subsidized gateway agent. Use when the user wants live CVE data for a package or specific CVE ID. Queries OSV.dev for ecosystem-aware package lookups (npm, PyPI) and NIST NVD for direct CVE-ID lookups — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE.",
+            "description": (
+                "Free — platform-subsidized gateway agent. Use when the "
+                "user wants live CVE data for a package or specific CVE "
+                "ID. Queries OSV.dev for ecosystem-aware package lookups "
+                "(npm, PyPI) and NIST NVD for direct CVE-ID lookups — not "
+                "LLM memory. Returns CVSS score, exploit availability, "
+                "affected version range, and recommended fix for each "
+                "CVE. Cold NVD round-trips run 8-12 s; the agent has a "
+                "20 s sync wall budget and a 1 h in-process cache, so "
+                "warm replays are sub-millisecond. For batches of more "
+                "than ~3 cold ids prefer the async path."
+            ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
             "price_per_call_usd": 0.0,
             "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],

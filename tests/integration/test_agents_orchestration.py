@@ -226,7 +226,8 @@ def test_output_verification_reject_auto_opens_dispute(client):
     assert dispute.status_code == 200, dispute.text
     assert dispute.json()["job_id"] == job_id
     assert dispute.json()["side"] == "caller"
-    assert dispute.json()["filing_deposit_cents"] == 5
+    # Floor raised 2026-05-18 from 5¢ to 25¢ for friction on cheap calls.
+    assert dispute.json()["filing_deposit_cents"] == 25
     assert disputes.has_dispute_for_job(job_id)
 
 

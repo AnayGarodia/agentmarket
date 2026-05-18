@@ -33,21 +33,28 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Callable
 
+from core import db as _db
 from core import feature_flags
 
 logger = logging.getLogger(__name__)
 
 # Probation gates — applied to agents whose review_status is 'probation'
 # (set automatically by /registry/register and /onboarding/ingest for non-
-# master callers). The penalty is large enough to drop a probation agent
-# below any approved peer with even a weak signal, but small enough that an
-# explicit slug match in the intent (+50 baseline) still wins.
-_PROBATION_RANK_PENALTY = 30.0
+# master callers). 2026-05-18: dropped from 30 → 12 because the previous
+# value was punitive enough that approved-but-niche agents (sast_scanner,
+# accessibility_auditor) never won — they only need a small head-start
+# over a probation peer, not a 30-point demolition. -12 still drops a
+# probation agent behind any approved peer with a weak signal (+12 single
+# keyword match equates), but doesn't make sast_scanner invisible against
+# a near-tied dependency_auditor.
+_PROBATION_RANK_PENALTY = 12.0
 _PROBATION_PRICE_CAP_USD = 1.00
 
 # ── Public types ───────────────────────────────────────────────────────────
@@ -409,18 +416,21 @@ _TRUST_BONUS_DIVISOR = 20.0
 _CODEX_RECOMMENDED_BONUS = 5
 _INTENT_INTERLOCK_BONUS = 45
 _DEPENDENCY_AUDIT_BONUS = 70
-_KEYWORD_MATCH_PER = 20
-_KEYWORD_MATCH_CAP = 60
+_KEYWORD_MATCH_PER = 12
+_KEYWORD_MATCH_CAP = 36
 _BLOCK_KEYWORD_PER = 30
 _BLOCK_KEYWORD_CAP = 60
 _SCHEMA_SHAPE_FULL_BONUS = 35
 _SCHEMA_SHAPE_PARTIAL_BONUS = 15
 _KEYWORD_PREVIEW_LIMIT = 3
-# Embedding-based semantic similarity caps. Sized to match a strong
-# tag-overlap cluster (~18 pts) so a clean synonym match can compete with
-# an exact lexical match but never starve curated keyword overrides
-# (which top out at +60).
-_SEMANTIC_BONUS_MAX = 24
+# Embedding-based semantic similarity caps. Sized 2026-05-18 to outweigh
+# a single curated keyword match (+12) by 4x and the keyword cap (+36) by
+# a comfortable margin, so plain-English queries don't lose to jargon
+# that happens to hit a match_keyword. The 2026-05-18 test report showed
+# the picker preferring secret_scanner over sast_scanner for "find bugs"
+# purely on a keyword hit on the word "bug" — that pattern is fixed by
+# raising semantic above keyword.
+_SEMANTIC_BONUS_MAX = 48
 _SEMANTIC_THRESHOLD = 0.20
 
 _AUDIT_TOKEN_SET = frozenset({
@@ -455,6 +465,21 @@ _CODE_EXECUTOR_AGENT_HINTS = (
     "multi_language_executor",
     "multi language executor",
 )
+
+# Anti-catchall penalty — agents that win top-1 in >25 % of recent
+# auto-hire decisions are likely matching on a too-broad keyword (the
+# 2026-05-18 test report saw dockerfile_analyzer in 12 of 28 top-5
+# results). The penalty is small enough that a genuinely-popular agent
+# stays competitive but big enough to surface narrower specialists when
+# they exist. Refreshed every _CATCHALL_REFRESH_S seconds from
+# auto_hire_decisions; failures fall back to "no penalty" so a missing
+# table never blocks scoring.
+_CATCHALL_PENALTY = 15.0
+_CATCHALL_RATE_THRESHOLD = 0.25
+_CATCHALL_WINDOW_DAYS = 14
+_CATCHALL_REFRESH_S = 3600
+_catchall_rate_cache: dict[str, float] = {}
+_catchall_refreshed_at: float = 0.0
 
 
 def _score_string_signals(c: CandidateAgent, intent_lower: str, tokens: set[str]) -> tuple[float, list[str]]:
@@ -745,6 +770,69 @@ def _score_semantic_similarity(
     return sim * _SEMANTIC_BONUS_MAX, [f"semantic match: {sim:.2f}"]
 
 
+def _refresh_catchall_cache() -> None:
+    """Side-effect: reload per-agent top-1 win rate from auto_hire_decisions.
+
+    Called on demand from ``_score_anti_catchall``; rate-limited by the
+    ``_CATCHALL_REFRESH_S`` interval. Never raises — falls back to the
+    previous snapshot (or empty dict) on any DB error so an issue here
+    can't block ranking.
+    """
+    global _catchall_refreshed_at
+    now_mono = time.monotonic()
+    if now_mono - _catchall_refreshed_at < _CATCHALL_REFRESH_S and _catchall_refreshed_at > 0:
+        return
+    _catchall_refreshed_at = now_mono
+    try:
+        from datetime import datetime, timedelta, timezone
+        since = (
+            datetime.now(timezone.utc) - timedelta(days=_CATCHALL_WINDOW_DAYS)
+        ).isoformat()
+        with _db.get_raw_connection(_db.DB_PATH) as conn:
+            total_row = conn.execute(
+                "SELECT COUNT(*) AS total FROM auto_hire_decisions "
+                "WHERE created_at >= %s AND chosen_agent_id IS NOT NULL",
+                (since,),
+            ).fetchone()
+            total = int(total_row["total"] or 0) if total_row else 0
+            if total < 20:
+                _catchall_rate_cache.clear()
+                return
+            rows = conn.execute(
+                "SELECT chosen_agent_id, COUNT(*) AS hits "
+                "FROM auto_hire_decisions "
+                "WHERE created_at >= %s AND chosen_agent_id IS NOT NULL "
+                "GROUP BY chosen_agent_id",
+                (since,),
+            ).fetchall()
+        _catchall_rate_cache.clear()
+        for row in rows or []:
+            agent_id = str(row["chosen_agent_id"] or "").strip()
+            hits = int(row["hits"] or 0)
+            if not agent_id or hits == 0:
+                continue
+            _catchall_rate_cache[agent_id] = hits / total
+    except Exception:  # noqa: BLE001 — never crash scoring
+        return
+
+
+def _score_anti_catchall(c: CandidateAgent) -> tuple[float, list[str]]:
+    """Pure-ish: penalty for agents that win top-1 too often (catchall).
+
+    Why: dockerfile_analyzer landed in 12 of 28 top-5 results in the
+    2026-05-18 test — broad ``match_keywords`` make a single agent absorb
+    too many queries. Demoting catchall agents lets narrower specialists
+    surface for the queries they're actually right for.
+    """
+    _refresh_catchall_cache()
+    rate = _catchall_rate_cache.get(c.agent_id, 0.0)
+    if rate <= _CATCHALL_RATE_THRESHOLD:
+        return 0.0, []
+    return -_CATCHALL_PENALTY, [
+        f"catchall demotion: chosen in {rate:.0%} of recent decisions"
+    ]
+
+
 def _score_candidate(
     c: CandidateAgent,
     intent: str,
@@ -753,8 +841,9 @@ def _score_candidate(
     """Pure: lean confidence-oriented scorer; sums independent signal helpers.
 
     Why: each helper covers one signal class (string overlap, quality,
-    intent interlocks, curated keywords, schema-shape, probation) so the
-    score can be tuned per-class without touching the orchestrator.
+    intent interlocks, curated keywords, schema-shape, probation,
+    anti-catchall) so the score can be tuned per-class without touching
+    the orchestrator.
     """
     intent_lower = intent.lower()
     tokens = set(_tokenize(intent_lower))
@@ -772,6 +861,7 @@ def _score_candidate(
         _score_schema_shape(c, explicit_input),
         _score_semantic_similarity(c, intent),
         _apply_probation_penalty(c),
+        _score_anti_catchall(c),
     ):
         score += delta
         reasons.extend(why)
@@ -844,6 +934,94 @@ def _resolve_explicit_input(
     return explicit_input, []
 
 
+# LLM-extractor fallback. Default on so do_specialist_task can salvage
+# intents whose values aren't matchable by a regex (e.g. "audit this
+# package: https://github.com/foo/bar" where a regex `_extract_url` returns
+# the right thing but "look up vulnerabilities in this thing I just found:
+# elasticsearch 7.0" needs an LLM to extract ``elasticsearch`` and
+# ``7.0`` into a structured form). Env-disable: AZTEA_AUTO_HIRE_LLM_EXTRACT=0.
+_AUTO_HIRE_LLM_EXTRACT_ENABLED = (
+    os.environ.get("AZTEA_AUTO_HIRE_LLM_EXTRACT", "1").lower() != "0"
+)
+_LLM_EXTRACT_MIN_INTENT_CHARS = 8
+_LLM_EXTRACT_MAX_TOKENS = 200
+_LLM_EXTRACT_TEMPERATURE = 0.1
+
+
+def _llm_extract_field(
+    intent: str, field_name: str, field_spec: dict,
+) -> str | None:
+    """Side-effect: ask the LLM chain to pull a structured value out of free-form intent.
+
+    Why: regex extractors only catch a handful of well-known shapes (URL,
+    CVE id, cron expression, regex literal). For everything else the
+    picker used to refuse with ``missing_fields`` and burn a refund round-
+    trip. The LLM extractor is gated to fields that are NOT code-like and
+    is hard-capped at 200 tokens / 1 call so a failure mode can't blow
+    the latency budget. Returns None on any failure — the caller falls
+    back to the original ``missing_fields`` refusal.
+    """
+    if not _AUTO_HIRE_LLM_EXTRACT_ENABLED:
+        return None
+    if len(intent.strip()) < _LLM_EXTRACT_MIN_INTENT_CHARS:
+        return None
+    if field_name in _CODE_LIKE_FIELDS:
+        return None
+    try:
+        from core.llm import CompletionRequest, Message, run_with_fallback
+    except Exception:  # noqa: BLE001 — LLM stack missing → graceful fallback
+        return None
+    field_description = str(field_spec.get("description") or "").strip()
+    field_title = str(field_spec.get("title") or field_name).strip()
+    system = (
+        "You extract a single structured value from a user intent for an "
+        "API call. Reply with exactly one JSON object and nothing else. "
+        "Use {\"value\": \"<extracted>\"} on success, or "
+        "{\"missing\": true, \"reason\": \"<why>\"} when the intent does "
+        "not clearly contain the value. Never invent values; never wrap "
+        "the answer in code fences. Keep the extracted value as short as "
+        "possible — typically a single token or short phrase."
+    )
+    user = (
+        f"Field: {field_name}\n"
+        f"Title: {field_title}\n"
+        f"Description: {field_description or '(no description)'}\n"
+        f"User intent: {intent.strip()[:1000]}"
+    )
+    try:
+        response = run_with_fallback(
+            CompletionRequest(
+                messages=[
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
+                temperature=_LLM_EXTRACT_TEMPERATURE,
+                max_tokens=_LLM_EXTRACT_MAX_TOKENS,
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    text = (response.text or "").strip()
+    if not text:
+        return None
+    try:
+        import json as _json
+        parsed = _json.loads(text)
+    except Exception:  # noqa: BLE001 — model returned non-JSON
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    if parsed.get("missing"):
+        return None
+    value = parsed.get("value")
+    if isinstance(value, (int, float, bool)):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _resolve_intent_only_payload(
     intent: str, all_required: list[str],
     properties: dict, composite_variants: list[list[str]],
@@ -864,6 +1042,12 @@ def _resolve_intent_only_payload(
     ``cron_expression_parser`` with the entire 9-word sentence as the
     ``expression`` field — the agent rejected with "Expected 5 or 6 fields,
     got 9" and we burned a refund round-trip every time.
+
+    2026-05-18: when the strict regex extractor returns None for a non-
+    code-like field, fall back to a single LLM call (``_llm_extract_field``)
+    capped at 200 tokens with temperature 0.1. The LLM is allowed to refuse
+    with ``{"missing": true}`` — refusal preserves the original
+    ``missing_fields`` outcome and refund contract.
     """
     # No required fields AND no composite variants → free-form intent.
     if not all_required and not composite_variants:
@@ -881,6 +1065,10 @@ def _resolve_intent_only_payload(
                 extracted = extractor(intent)
                 if extracted:
                     return {field_name: extracted}, []
+                # 2026-05-18 LLM fallback before refusing.
+                llm_value = _llm_extract_field(intent, field_name, field_spec)
+                if llm_value:
+                    return {field_name: llm_value}, []
                 return {}, [field_name]
             if _intent_unfit_for_field(intent, field_name):
                 return {}, [field_name]
@@ -894,11 +1082,17 @@ def _resolve_intent_only_payload(
         unfilled: list[str] = []
         for fname in variant:
             extractor = _FIELD_EXTRACTORS.get(fname)
+            field_spec = properties.get(fname) or {}
             if extractor is not None:
                 v = extractor(intent)
                 if v:
                     extracted_payload[fname] = v
                     continue
+            # 2026-05-18 LLM fallback per-field.
+            llm_value = _llm_extract_field(intent, fname, field_spec)
+            if llm_value:
+                extracted_payload[fname] = llm_value
+                continue
             unfilled.append(fname)
         if not unfilled and extracted_payload:
             return extracted_payload, []

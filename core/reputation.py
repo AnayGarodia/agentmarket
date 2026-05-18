@@ -47,7 +47,15 @@ _SUCCESS_WEIGHT = 0.45
 _LATENCY_WEIGHT = 0.15
 _NEUTRAL_TRUST = 0.5
 _QUALITY_PRIOR_RATING = 3.0
-_QUALITY_PRIOR_WEIGHT = 5.0
+# 2026-05-18 (E8): raised from 5 to 20. The previous weight let a single
+# 5-star rating shift the displayed trust by ~1.75 points (68.29 → 70.04
+# in the test report), which means one enthusiastic user could promote a
+# bad agent or one angry user could tank a good one. A weight of 20
+# means a single rating moves the per-rating average by 1/21 ≈ 0.048
+# instead of 1/6 ≈ 0.167 — small-N ratings now barely move the score
+# until real evidence accumulates. The Bayesian prior already existed;
+# its weight was the bug, not its absence.
+_QUALITY_PRIOR_WEIGHT = 20.0
 _LATENCY_HALF_SCORE_MS = 2000.0
 # Confidence denominator was 10 — agents converged to their actual base
 # score too slowly, so trust scores clustered near NEUTRAL (50) even after

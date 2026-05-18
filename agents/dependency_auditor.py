@@ -19,14 +19,23 @@ Output:
       "name": str,
       "current_version": str,
       "latest_version": str | null,
-      "cves": [{"id": str, "severity": str, "cvss": float, "description": str, "fixed_in": str | null}],
+      "cves": [{"id": str, "severity": str, "cvss": float | null,
+                "description": str, "fixed_in": str | null}],
       "license": str | null,
       "license_risk": "none|low|medium|high",
-      "action": "upgrade|replace|review|ok"
+      "action": "upgrade|replace|review|ok|not_found|version_unreachable",
+      "notes": str | null
     }],
     "top_priorities": [str],
+    "parse_warnings": [{"line"|"package": str, "reason": str, ...}],
     "summary": str
   }
+
+INVARIANTS:
+  - cvss is null when the upstream advisory only ships a severity *label*
+    (HIGH / CRITICAL etc.). Never fabricate a numeric score from a bucket.
+  - parse_warnings is always present (may be empty) so callers can rely on
+    its shape without a hasattr/get-with-default dance.
 """
 
 from __future__ import annotations
@@ -56,19 +65,26 @@ _SUPPORTED_ECOSYSTEMS = frozenset({"npm", "pypi", "auto"})
 _DEFAULT_CHECKS = ("cve", "outdated", "license")
 _TOP_PRIORITIES_LIMIT = 10
 
-# CVSS bucket boundaries (per FIRST.org). Used both to label numeric scores
-# and to back-fill scores from upstream "severity": "HIGH" labels.
+# CVSS bucket boundaries (per FIRST.org). Used only to label numeric scores;
+# the reverse (label → numeric midpoint) is deliberately NOT done — see
+# _osv_severity_from_label.
 _CVSS_CRITICAL = 9.0
 _CVSS_HIGH = 7.0
 _CVSS_MEDIUM = 4.0
-_CVSS_LABEL_TO_SCORE = {
-    "LOW": 3.0,
-    "MODERATE": 5.5,
-    "MEDIUM": 5.5,
-    "HIGH": 7.5,
-    "CRITICAL": 9.5,
+# Map OSV/GHSA severity labels to our severity bucket *string*. We used to
+# fabricate a numeric CVSS midpoint (5.5 / 7.5 / 9.5) from these labels and
+# sign them with a receipt as if they were real NVD scores — that was a
+# trust violation. Now we report cvss=None and let severity carry the label.
+_LABEL_TO_SEVERITY = {
+    "LOW": "low",
+    "MODERATE": "medium",
+    "MEDIUM": "medium",
+    "HIGH": "high",
+    "CRITICAL": "critical",
 }
 _OSV_SUMMARY_MAX_CHARS = 600
+_PYPI_LICENSE_CLASSIFIER_PREFIX = "License ::"
+_PYPI_LICENSE_CLASSIFIER_OSI = "License :: OSI Approved ::"
 
 _COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl"}
 _RESTRICTIVE_LICENSE_HINTS = ("unknown", "proprietary", "see license")
@@ -94,20 +110,25 @@ def _detect_ecosystem(manifest: str) -> str:
     return "npm" if manifest.strip().startswith("{") else "pypi"
 
 
-def _parse_pypi_manifest(manifest: str) -> list[tuple[str, str]]:
-    """Parse requirements.txt-style lines into ``(name, version)`` pairs.
+def _parse_pypi_manifest(
+    manifest: str,
+) -> tuple[list[tuple[str, str]], list[dict]]:
+    """Parse requirements.txt-style lines into ``(packages, warnings)``.
 
-    Why: the regex matches *whole* requirement lines (re.fullmatch) so a
-    free-form sentence like "this is not a manifest" does not become a
-    package named "this". Pure: no I/O, no globals.
+    Why: previously we silently dropped lines that didn't fully-match the
+    regex (e.g. ``-e git+https://...``); users had no idea their input
+    wasn't fully processed. Now any non-empty, non-comment line that fails
+    the regex is reported as an ``unparseable`` warning. Pure: no I/O.
     """
     packages: list[tuple[str, str]] = []
+    warnings: list[dict] = []
     for raw_line in manifest.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         m = _PYPI_REQ_LINE_RE.fullmatch(line)
         if not m:
+            warnings.append({"line": raw_line, "reason": "unparseable"})
             continue
         name = m.group(1).strip()
         ver_spec = (m.group(2) or "").strip()
@@ -116,7 +137,7 @@ def _parse_pypi_manifest(manifest: str) -> list[tuple[str, str]]:
         else:
             ver = ""
         packages.append((name, ver))
-    return packages
+    return packages, warnings
 
 
 def _npm_extract_deps(data: Any) -> list[tuple[str, str]]:
@@ -147,8 +168,10 @@ def _npm_candidate_payloads(text: str) -> list[str]:
     return candidates
 
 
-def _parse_npm_manifest(manifest: str) -> list[tuple[str, str]]:
-    """Parse a package.json-shaped string into ``(name, version)`` pairs."""
+def _parse_npm_manifest(
+    manifest: str,
+) -> tuple[list[tuple[str, str]], list[dict]]:
+    """Parse a package.json-shaped string into ``(packages, warnings)``."""
     for candidate in _npm_candidate_payloads(manifest.strip()):
         try:
             parsed = json.loads(candidate)
@@ -156,8 +179,8 @@ def _parse_npm_manifest(manifest: str) -> list[tuple[str, str]]:
             continue
         packages = _npm_extract_deps(parsed)
         if packages:
-            return packages
-    return []
+            return packages, []
+    return [], []
 
 
 def _cvss_to_severity(score: float) -> str:
@@ -209,18 +232,21 @@ def _osv_score_from_severity_field(severity_entries: list) -> float:
     return 0.0
 
 
-def _osv_score_from_label(vuln: dict) -> float:
-    """Pure: back-fill CVSS from OSV's ``database_specific.severity`` label.
+def _osv_severity_from_label(vuln: dict) -> str | None:
+    """Pure: extract the OSV ``database_specific.severity`` label as a severity bucket.
 
-    Why: some advisories only ship a HIGH/CRITICAL label; without this
-    fallback the agent reports cvss=0 even on plainly serious vulns.
+    Why: some advisories only ship a HIGH/CRITICAL label with no numeric CVSS.
+    Returning the label as severity (instead of fabricating a midpoint
+    numeric score) preserves the upstream signal without claiming precision
+    we don't have. cvss stays None — the receipt now attests only to what
+    NVD/OSV actually provided.
     """
     label = (
         str((vuln.get("database_specific") or {}).get("severity") or "")
         .strip()
         .upper()
     )
-    return _CVSS_LABEL_TO_SCORE.get(label, 0.0)
+    return _LABEL_TO_SEVERITY.get(label)
 
 
 def _osv_extract_fixed_in(vuln: dict) -> str | None:
@@ -241,18 +267,51 @@ def _osv_canonical_cve_id(vuln: dict) -> str:
 
 
 def _osv_vuln_to_cve(vuln: dict) -> dict:
-    """Pure: shape a single OSV vuln record into the agent's CVE schema."""
+    """Pure: shape a single OSV vuln record into the agent's CVE schema.
+
+    cvss is None when the upstream advisory only provides a severity label
+    (HIGH / CRITICAL etc.) — see _osv_severity_from_label. Callers that
+    need a comparable number should use ``_cvss_for_sort``.
+    """
     cvss = _osv_score_from_severity_field(vuln.get("severity") or [])
-    if cvss == 0.0:
-        cvss = _osv_score_from_label(vuln)
+    if cvss > 0.0:
+        severity = _cvss_to_severity(cvss)
+        cvss_out: float | None = cvss
+    else:
+        label_severity = _osv_severity_from_label(vuln)
+        severity = label_severity or "none"
+        cvss_out = None
     summary = (vuln.get("summary") or vuln.get("details") or "")[:_OSV_SUMMARY_MAX_CHARS]
     return {
         "id": _osv_canonical_cve_id(vuln),
-        "cvss": cvss,
-        "severity": _cvss_to_severity(cvss),
+        "cvss": cvss_out,
+        "severity": severity,
         "description": summary,
         "fixed_in": _osv_extract_fixed_in(vuln),
     }
+
+
+# Severity → comparable numeric used only for sorting/threshold checks. Kept
+# private to this module: the public API surfaces cvss=None when unknown.
+_SEVERITY_SORT_VALUE = {
+    "critical": 9.5,
+    "high": 7.5,
+    "medium": 5.5,
+    "low": 3.0,
+    "none": 0.0,
+}
+
+
+def _cvss_for_sort(cve: dict) -> float:
+    """Pure: return a comparable float for a CVE record whose ``cvss`` may be None.
+
+    Why: aggregation/sort code wants a number; the *output* still preserves
+    the honest ``cvss: null`` for label-only advisories.
+    """
+    raw = cve.get("cvss")
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return _SEVERITY_SORT_VALUE.get(str(cve.get("severity") or "none").lower(), 0.0)
 
 
 def _osv_fetch(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
@@ -292,20 +351,64 @@ def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
     return out
 
 
-def _fetch_pypi_latest(name: str) -> tuple[str | None, str | None]:
-    """Side-effect: fetch ``(latest_version, license)`` from PyPI; ``(None, None)`` on failure."""
+def _license_from_classifiers(classifiers: list) -> str | None:
+    """Pure: pull a SPDX-ish license name from PyPI's ``classifiers`` list.
+
+    Why: pydantic and many modern packages leave ``info["license"]`` empty
+    and publish the license only as a Trove classifier
+    (``"License :: OSI Approved :: MIT License"``). Without this fallback
+    the auditor reported ``license: null`` and stamped the receipt with
+    that null — making well-licensed packages look unaudited.
+    """
+    if not isinstance(classifiers, list):
+        return None
+    for entry in classifiers:
+        if not isinstance(entry, str) or not entry.startswith(_PYPI_LICENSE_CLASSIFIER_PREFIX):
+            continue
+        # "License :: OSI Approved :: MIT License" → "MIT License"
+        if entry.startswith(_PYPI_LICENSE_CLASSIFIER_OSI):
+            tail = entry[len(_PYPI_LICENSE_CLASSIFIER_OSI):].strip()
+            if tail:
+                return tail
+        # "License :: Other/Proprietary License" → "Other/Proprietary License"
+        parts = [p.strip() for p in entry.split("::") if p.strip()]
+        if len(parts) >= 2 and parts[-1].lower() != "license":
+            return parts[-1]
+    return None
+
+
+def _fetch_pypi_latest(name: str) -> tuple[str | None, str | None, bool]:
+    """Side-effect: fetch ``(latest_version, license, not_found)`` from PyPI.
+
+    ``not_found=True`` is reserved for an explicit HTTP 404 (the package
+    is not on PyPI). Network errors and other non-200s return
+    ``(None, None, False)`` — distinguishing "doesn't exist" from
+    "couldn't reach PyPI" matters: the first means the package is bogus,
+    the second means we have no signal.
+    """
     try:
         resp = requests.get(
             _PYPI_API.format(name=name),
             timeout=_TIMEOUT,
             headers={"User-Agent": _USER_AGENT},
         )
-        if resp.status_code == 200:
-            info = resp.json().get("info", {})
-            return info.get("version"), info.get("license")
     except Exception:
         _LOG.warning("PyPI version fetch failed for %s", name, exc_info=True)
-    return None, None
+        return None, None, False
+    if resp.status_code == 404:
+        return None, None, True
+    if resp.status_code != 200:
+        return None, None, False
+    try:
+        info = resp.json().get("info", {}) or {}
+    except ValueError:
+        _LOG.warning("PyPI non-JSON response for %s", name, exc_info=True)
+        return None, None, False
+    version = info.get("version") or None
+    license_value = info.get("license") or None
+    if not license_value:
+        license_value = _license_from_classifiers(info.get("classifiers") or [])
+    return version, license_value, False
 
 
 def _best_npm_version(versions: dict[str, Any]) -> str | None:
@@ -322,8 +425,12 @@ def _best_npm_version(versions: dict[str, Any]) -> str | None:
     return max(parsed, key=lambda item: item[0])[1]
 
 
-def _fetch_npm_latest(name: str) -> tuple[str | None, str | None]:
-    """Side-effect: fetch ``(latest_version, license)`` from npm; ``(None, None)`` on failure."""
+def _fetch_npm_latest(name: str) -> tuple[str | None, str | None, bool]:
+    """Side-effect: fetch ``(latest_version, license, not_found)`` from npm.
+
+    ``not_found=True`` is reserved for an explicit HTTP 404. Other non-200s
+    and network failures return ``(None, None, False)``.
+    """
     try:
         encoded = quote(name, safe="")
         resp = requests.get(
@@ -331,18 +438,23 @@ def _fetch_npm_latest(name: str) -> tuple[str | None, str | None]:
             timeout=_TIMEOUT,
             headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
         )
-        if resp.status_code != 200:
-            return None, None
-        data = resp.json()
-        versions = data.get("versions") or {}
-        latest = (data.get("dist-tags") or {}).get("latest")
-        if latest not in versions:
-            latest = _best_npm_version(versions)
-        license_ = versions[latest].get("license") if latest and latest in versions else None
-        return latest, license_
     except Exception:
         _LOG.warning("npm version fetch failed for %s", name, exc_info=True)
-        return None, None
+        return None, None, False
+    if resp.status_code == 404:
+        return None, None, True
+    if resp.status_code != 200:
+        return None, None, False
+    try:
+        data = resp.json()
+    except ValueError:
+        return None, None, False
+    versions = data.get("versions") or {}
+    latest = (data.get("dist-tags") or {}).get("latest")
+    if latest not in versions:
+        latest = _best_npm_version(versions)
+    license_ = versions[latest].get("license") if latest and latest in versions else None
+    return latest, license_, False
 
 
 def _license_risk(license_str: str | None) -> str:
@@ -455,23 +567,86 @@ def _normalize_run_inputs(payload: dict) -> tuple[str, str, list[str]]:
     return manifest[:_MAX_MANIFEST_CHARS], ecosystem, checks
 
 
-def _parse_manifest(ecosystem: str, manifest: str) -> list[tuple[str, str]]:
-    """Pure dispatcher: route to the per-ecosystem parser and cap by ``_MAX_PACKAGES``."""
+def _dedup_packages(
+    packages: list[tuple[str, str]],
+) -> tuple[list[tuple[str, str]], list[dict]]:
+    """Pure: drop duplicate package entries, keeping the first occurrence.
+
+    Why: two ``requests==2.28.0`` / ``requests==2.30.0`` lines in the same
+    manifest used to be audited as separate independent entries, which
+    inflated the package count and confused the priority list. We keep the
+    first occurrence (matches what pip/npm actually install) and warn about
+    any later duplicates so the user knows the manifest is inconsistent.
+    """
+    seen: dict[str, tuple[str, str]] = {}
+    deduped: list[tuple[str, str]] = []
+    warnings: list[dict] = []
+    for name, ver in packages:
+        key = name.lower()
+        if key in seen:
+            kept = seen[key]
+            warnings.append({
+                "package": name,
+                "reason": "duplicate_entry",
+                "kept": {"name": kept[0], "version": kept[1]},
+                "ignored": {"name": name, "version": ver},
+            })
+            continue
+        seen[key] = (name, ver)
+        deduped.append((name, ver))
+    return deduped, warnings
+
+
+def _parse_manifest(
+    ecosystem: str, manifest: str,
+) -> tuple[list[tuple[str, str]], list[dict]]:
+    """Pure dispatcher: route to the per-ecosystem parser and cap by ``_MAX_PACKAGES``.
+
+    Returns ``(packages, parse_warnings)``. Warnings include unparseable
+    lines (pypi only — npm manifests are JSON so any failure is whole-file)
+    and duplicate-package entries.
+    """
     parser = _parse_pypi_manifest if ecosystem == "pypi" else _parse_npm_manifest
-    return parser(manifest)[:_MAX_PACKAGES]
+    raw_packages, warnings = parser(manifest)
+    deduped, dedup_warnings = _dedup_packages(raw_packages)
+    warnings.extend(dedup_warnings)
+    return deduped[:_MAX_PACKAGES], warnings
+
+
+def _version_unreachable(current_ver: str | None, latest_version: str | None) -> bool:
+    """Pure: True when the requested version exceeds the latest published one.
+
+    Why: ``django>=99.0.0`` used to slip through silently — we'd parse the
+    constraint, OSV would return no CVEs (there is no Django 99 to attack),
+    and the audit would mark the package "ok". Now we flag it.
+    """
+    if not current_ver or not latest_version:
+        return False
+    cur = _ver_tuple(current_ver)
+    latest = _ver_tuple(latest_version)
+    return cur > latest and cur != (0, 0, 0) and latest != (0, 0, 0)
 
 
 def _classify_package(
-    cves: list[dict], is_outdated: bool, license_risk: str
+    cves: list[dict],
+    is_outdated: bool,
+    license_risk: str,
+    *,
+    not_found: bool = False,
+    version_unreachable: bool = False,
 ) -> tuple[str, dict | None]:
     """Pure: derive ``(action, top_cve_or_None)`` from per-package signals.
 
     Why: keeps the action/priority taxonomy in one place — touching the
     rules later means editing here only, not the parallel auditor closure.
     """
+    if not_found:
+        return "not_found", None
+    if version_unreachable:
+        return "version_unreachable", None
     if cves:
         action = "upgrade" if any(c["fixed_in"] for c in cves) else "replace"
-        top_cve = max(cves, key=lambda c: c["cvss"])
+        top_cve = max(cves, key=_cvss_for_sort)
         return action, top_cve
     if is_outdated:
         return "upgrade", None
@@ -480,11 +655,36 @@ def _classify_package(
     return "ok", None
 
 
+def _action_notes(
+    action: str, current_ver: str | None, latest_version: str | None,
+) -> str | None:
+    """Pure: human-readable notes for non-ok actions that lack a top CVE."""
+    if action == "not_found":
+        return "Package is not present on PyPI / npm — likely typo or removed."
+    if action == "version_unreachable":
+        return (
+            f"Requested version {current_ver or '?'} exceeds latest "
+            f"published version {latest_version or '?'} — constraint is "
+            "unsatisfiable; CVE/outdated checks were skipped."
+        )
+    return None
+
+
 def _format_priority(name: str, current_ver: str | None, top_cve: dict) -> str:
-    """Pure: human-readable priority line for the ``top_priorities`` summary list."""
-    cvss = top_cve["cvss"]
-    label = "CRITICAL" if cvss >= _CVSS_CRITICAL else "HIGH" if cvss >= _CVSS_HIGH else "MEDIUM"
-    return f"{label}: {name}@{current_ver or '?'} — {top_cve['id']} (CVSS {cvss})"
+    """Pure: human-readable priority line for the ``top_priorities`` summary list.
+
+    When the upstream advisory only ships a severity label, ``cvss`` is None
+    and we report the label instead of fabricating a number.
+    """
+    cvss = top_cve.get("cvss")
+    severity = str(top_cve.get("severity") or "").lower()
+    if isinstance(cvss, (int, float)) and cvss > 0:
+        label = "CRITICAL" if cvss >= _CVSS_CRITICAL else "HIGH" if cvss >= _CVSS_HIGH else "MEDIUM"
+        score_str = f"CVSS {cvss}"
+    else:
+        label = severity.upper() or "UNKNOWN"
+        score_str = "CVSS unknown (label-only advisory)"
+    return f"{label}: {name}@{current_ver or '?'} — {top_cve['id']} ({score_str})"
 
 
 def _audit_one(
@@ -495,31 +695,42 @@ def _audit_one(
     Why: side-effecting because it issues HTTP calls; isolating it lets
     callers parallelize over a thread pool while keeping classification
     pure in ``_classify_package``.
+
+    Always fetches registry metadata (even when neither ``outdated`` nor
+    ``license`` is in the requested checks) so ``not_found`` and
+    ``version_unreachable`` signals are honest regardless of check flags.
     """
     name, current_ver = item
+    fetcher = _fetch_pypi_latest if ecosystem == "pypi" else _fetch_npm_latest
+    latest_version, license_str, not_found = fetcher(name)
+    if not_found:
+        # No point asking OSV about a package that doesn't exist.
+        cves: list[dict] = []
+    else:
+        cves = _query_osv(name, current_ver, ecosystem) if "cve" in checks else []
     fetch_latest = "outdated" in checks
     fetch_license = "license" in checks
-    latest_version: str | None = None
-    license_str: str | None = None
-    if fetch_latest or fetch_license:
-        fetcher = _fetch_pypi_latest if ecosystem == "pypi" else _fetch_npm_latest
-        latest_version, license_str = fetcher(name)
-    cves = _query_osv(name, current_ver, ecosystem) if "cve" in checks else []
     is_outdated = bool(
         fetch_latest and current_ver and latest_version
         and _ver_tuple(current_ver) < _ver_tuple(latest_version)
     )
+    version_unreachable = _version_unreachable(current_ver, latest_version)
     risk = _license_risk(license_str) if fetch_license else "none"
-    action, top_cve = _classify_package(cves, is_outdated, risk)
+    action, top_cve = _classify_package(
+        cves, is_outdated, risk,
+        not_found=not_found,
+        version_unreachable=version_unreachable,
+    )
     priority = _format_priority(name, current_ver, top_cve) if top_cve else None
     package = {
         "name": name,
         "current_version": current_ver or "unknown",
         "latest_version": latest_version,
         "cves": cves,
-        "license": license_str,
+        "license": license_str if fetch_license else None,
         "license_risk": risk,
         "action": action,
+        "notes": _action_notes(action, current_ver, latest_version),
     }
     return {"package": package, "is_outdated": is_outdated, "priority": priority}
 
@@ -587,7 +798,7 @@ def _aggregate_audits(audits: list[dict]) -> dict[str, Any]:
     vulnerable = sum(1 for p in packages if p["cves"])
     critical = sum(
         1 for p in packages
-        if p["cves"] and max(c["cvss"] for c in p["cves"]) >= _CVSS_CRITICAL
+        if p["cves"] and max(_cvss_for_sort(c) for c in p["cves"]) >= _CVSS_CRITICAL
     )
     # WHY: a CVE-bearing package already counts in `vulnerable`; only count
     # it as outdated when it has no CVEs to avoid double-billing the user.
@@ -607,7 +818,7 @@ def _aggregate_audits(audits: list[dict]) -> dict[str, Any]:
 def _sort_packages(packages: list[dict]) -> list[dict]:
     """Pure: sort by max CVSS desc, then by 'has issue' so 'ok' rows sink."""
     def key(p: dict) -> tuple[float, int]:
-        max_cvss = max((c["cvss"] for c in p["cves"]), default=0.0)
+        max_cvss = max((_cvss_for_sort(c) for c in p["cves"]), default=0.0)
         return (-max_cvss, 0 if p["action"] == "ok" else 1)
     return sorted(packages, key=key)
 
@@ -641,9 +852,12 @@ def run(payload: dict, *, emit_partial=None) -> dict:
         return _unsupported_ecosystem_error(ecosystem)
     if ecosystem == "auto":
         ecosystem = _detect_ecosystem(manifest)
-    raw_packages = _parse_manifest(ecosystem, manifest)
+    raw_packages, parse_warnings = _parse_manifest(ecosystem, manifest)
     if not raw_packages:
-        return _invalid_manifest_error(ecosystem, manifest)
+        err = _invalid_manifest_error(ecosystem, manifest)
+        # Even on failure, surface the warnings so the user knows what got dropped.
+        err.setdefault("error", {}).setdefault("details", {})["parse_warnings"] = parse_warnings
+        return err
     audits = _audit_all(raw_packages, ecosystem, checks, emit_partial=emit_partial)
     agg = _aggregate_audits(audits)
     packages = _sort_packages(agg["packages"])
@@ -656,6 +870,7 @@ def run(payload: dict, *, emit_partial=None) -> dict:
         "critical_count": agg["critical_count"],
         "packages": packages,
         "top_priorities": agg["top_priorities"],
+        "parse_warnings": parse_warnings,
         "summary": _summarise(
             total, agg["vulnerable_count"], agg["critical_count"], agg["outdated_count"]
         ),

@@ -20,7 +20,10 @@ from server.builtin_agents.constants import (
     DNS_INSPECTOR_AGENT_ID,
     DOCKERFILE_ANALYZER_AGENT_ID,
     DOCS_GROUNDER_AGENT_ID,
+    GITHUB_RELEASES_AGENT_ID,
+    HCL_TERRAFORM_ANALYZER_AGENT_ID,
     HN_DIGEST_AGENT_ID,
+    JWT_VALIDATOR_AGENT_ID,
     K8S_MANIFEST_VALIDATOR_AGENT_ID,
     LIGHTHOUSE_AUDITOR_AGENT_ID,
     LIVE_SANDBOX_AGENT_ID,
@@ -28,9 +31,12 @@ from server.builtin_agents.constants import (
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
     OPENAPI_VALIDATOR_AGENT_ID,
     PDF_DOCUMENT_PARSER_AGENT_ID,
+    PYPI_METADATA_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
     QUALITY_JUDGE_AGENT_ID,
+    REGEX_TESTER_AGENT_ID,
     SAST_SCANNER_AGENT_ID,
+    SBOM_GENERATOR_AGENT_ID,
     SECRET_SCANNER_AGENT_ID,
     SECURITY_HEADERS_GRADER_AGENT_ID,
     SSL_CERTIFICATE_DECODER_AGENT_ID,
@@ -83,6 +89,12 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     UNICODE_INSPECTOR_AGENT_ID: "Security",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "Developer Tools",
     LIVE_SANDBOX_AGENT_ID: "Developer Tools",
+    REGEX_TESTER_AGENT_ID: "Developer Tools",
+    JWT_VALIDATOR_AGENT_ID: "Security",
+    SBOM_GENERATOR_AGENT_ID: "Security",
+    PYPI_METADATA_AGENT_ID: "Developer Tools",
+    GITHUB_RELEASES_AGENT_ID: "Developer Tools",
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: "Security",
 }
 
 _DEFAULT_CACHEABLE_BY_AGENT_ID = {
@@ -123,6 +135,12 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     UNICODE_INSPECTOR_AGENT_ID: True,
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: True,
     LIVE_SANDBOX_AGENT_ID: False,
+    REGEX_TESTER_AGENT_ID: True,
+    JWT_VALIDATOR_AGENT_ID: False,  # tokens are sensitive — never cache.
+    SBOM_GENERATOR_AGENT_ID: True,
+    PYPI_METADATA_AGENT_ID: True,
+    GITHUB_RELEASES_AGENT_ID: False,  # releases change with new tags.
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: True,
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
@@ -160,6 +178,12 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
         "libfaketime (optional)",
         "rsync (optional)",
     ],
+    REGEX_TESTER_AGENT_ID: [],
+    JWT_VALIDATOR_AGENT_ID: ["PyJWT (optional, for signature verification)"],
+    SBOM_GENERATOR_AGENT_ID: [],
+    PYPI_METADATA_AGENT_ID: ["requests"],
+    GITHUB_RELEASES_AGENT_ID: ["requests"],
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: ["checkov (pip install)"],
 }
 
 _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
@@ -194,6 +218,12 @@ _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
     UNICODE_INSPECTOR_AGENT_ID: "tool_execution",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "tool_execution",
     LIVE_SANDBOX_AGENT_ID: "sandbox_orchestration",
+    REGEX_TESTER_AGENT_ID: "tool_execution",
+    JWT_VALIDATOR_AGENT_ID: "tool_execution",
+    SBOM_GENERATOR_AGENT_ID: "tool_execution",
+    PYPI_METADATA_AGENT_ID: "live_api",
+    GITHUB_RELEASES_AGENT_ID: "live_api",
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: "tool_execution",
 }
 
 _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
@@ -228,6 +258,12 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     UNICODE_INSPECTOR_AGENT_ID: "stable",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "stable",
     LIVE_SANDBOX_AGENT_ID: "beta",
+    REGEX_TESTER_AGENT_ID: "stable",
+    JWT_VALIDATOR_AGENT_ID: "beta",
+    SBOM_GENERATOR_AGENT_ID: "beta",
+    PYPI_METADATA_AGENT_ID: "stable",
+    GITHUB_RELEASES_AGENT_ID: "stable",
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: "beta",
 }
 
 _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
@@ -262,6 +298,12 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
     UNICODE_INSPECTOR_AGENT_ID: True,
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: True,
     LIVE_SANDBOX_AGENT_ID: True,
+    REGEX_TESTER_AGENT_ID: True,
+    JWT_VALIDATOR_AGENT_ID: True,
+    SBOM_GENERATOR_AGENT_ID: True,
+    PYPI_METADATA_AGENT_ID: True,
+    GITHUB_RELEASES_AGENT_ID: True,
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: True,
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
@@ -347,6 +389,36 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
         "reproduce a bug in a clone of production",
         "snapshot then test a risky migration",
         "fork a sandbox to try multiple fixes in parallel",
+    ],
+    REGEX_TESTER_AGENT_ID: [
+        "test a regex against sample strings",
+        "verify capture groups",
+        "check regex flag behavior",
+    ],
+    JWT_VALIDATOR_AGENT_ID: [
+        "decode a JWT and inspect claims",
+        "verify a JWT signature against a JWKS",
+        "check exp/nbf claims",
+    ],
+    SBOM_GENERATOR_AGENT_ID: [
+        "generate a CycloneDX SBOM from requirements.txt",
+        "list direct dependencies with Package URLs",
+        "build an SBOM from a package.json",
+    ],
+    PYPI_METADATA_AGENT_ID: [
+        "look up latest_version + license for a Python package",
+        "check requires_python for compatibility",
+        "find release date for a specific version",
+    ],
+    GITHUB_RELEASES_AGENT_ID: [
+        "list recent releases for a repo",
+        "find releases newer than a tag",
+        "fetch a release body / changelog",
+    ],
+    HCL_TERRAFORM_ANALYZER_AGENT_ID: [
+        "scan raw Terraform HCL for misconfigurations",
+        "find S3 buckets without encryption / logging",
+        "run a CIS-only checkov pass",
     ],
 }
 

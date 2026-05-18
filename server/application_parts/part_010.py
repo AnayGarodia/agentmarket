@@ -1264,6 +1264,76 @@ def jobs_dispute(
 
 
 @app.post(
+    "/jobs/{job_id}/dispute/operator-response",
+    status_code=200,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("20/minute")
+def jobs_dispute_operator_response(
+    request: Request,
+    job_id: str,
+    body: dict,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Record the agent operator's defense for a dispute filed against them.
+
+    2026-05-18 (D3): the caller filed a dispute; the operator now has a
+    bounded window to respond. The response text is forwarded to the LLM
+    judges alongside the caller's evidence so both sides are heard before
+    any payout is moved. Silence past the deadline is an implicit waiver
+    — the sweeper auto-advances the dispute to 'judging' on the caller's
+    evidence alone (see ``disputes.expire_operator_response_windows``).
+    """
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=400, detail="JSON body with 'response_text' required."
+        )
+    response_text = str(body.get("response_text") or "").strip()
+    if not response_text:
+        raise HTTPException(
+            status_code=400,
+            detail="'response_text' is required (non-empty string).",
+        )
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    dispute_row = disputes.get_dispute_for_job(job_id) if hasattr(
+        disputes, "get_dispute_for_job"
+    ) else None
+    if dispute_row is None:
+        # Fall back to a scan if the helper isn't there.
+        for d in disputes.list_disputes(status="awaiting_operator", limit=500):
+            if str(d.get("job_id") or "") == job_id:
+                dispute_row = d
+                break
+    if dispute_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No dispute awaiting operator response for job '{job_id}'.",
+        )
+    try:
+        updated = disputes.record_operator_response(
+            dispute_row["dispute_id"],
+            operator_owner_id=caller["owner_id"],
+            response_text=response_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    if updated is None:
+        raise HTTPException(
+            status_code=404, detail=f"Dispute disappeared during update."
+        )
+    _record_job_event(
+        job, "job.dispute_operator_responded",
+        actor_owner_id=caller["owner_id"],
+        payload={"dispute_id": updated["dispute_id"]},
+    )
+    return JSONResponse(content=_dispute_view(updated))
+
+
+@app.post(
     "/ops/disputes/{dispute_id}/judge",
     response_model=core_models.DisputeJudgeResponse,
     responses=_error_responses(400, 401, 403, 404, 429, 500),

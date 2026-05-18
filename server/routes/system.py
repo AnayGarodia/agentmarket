@@ -32,7 +32,7 @@ def _env_int(name: str, default: int) -> int:
 # Defaults mirror the values declared in server/application_parts/part_000.py
 # so this endpoint reflects the same policy the dispute-creation route applies.
 _DEFAULT_DISPUTE_FILING_DEPOSIT_BPS = 500
-_DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS = 5
+_DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS = 25
 _DEFAULT_JOB_DISPUTE_WINDOW_HOURS = 72
 _DISPUTE_JUDGES_REQUIRED = 2
 _DISPUTE_JUDGES_TOTAL = 3

@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _LOG = logging.getLogger(__name__)
 
@@ -35,6 +35,13 @@ _local = _db._local
 DISPUTE_SIDES = {"caller", "agent"}
 DISPUTE_STATUSES = {
     "pending",
+    # 2026-05-18 (D3): the dispute waits in awaiting_operator until the
+    # agent operator submits a defense or the response deadline expires.
+    # The sweeper auto-advances expired rows into 'judging'. The CHECK
+    # constraint on the column was set at table-creation time and isn't
+    # ALTERable in SQLite without a table rewrite — enforcement of the
+    # status set lives in this set + create/transition helpers below.
+    "awaiting_operator",
     "judging",
     "consensus",
     "tied",
@@ -44,6 +51,9 @@ DISPUTE_STATUSES = {
 }
 DISPUTE_OUTCOMES = {"caller_wins", "agent_wins", "split", "void"}
 JUDGE_KINDS = {"llm_primary", "llm_secondary", "human_admin"}
+# Default response window for the operator before the dispute auto-
+# advances to judging. Tunable via DISPUTE_OPERATOR_RESPONSE_HOURS env.
+DEFAULT_OPERATOR_RESPONSE_HOURS = 24
 
 
 def _conn() -> _db.DbConnection:
@@ -191,6 +201,26 @@ def _validate_split_result(
         return Err(str(exc))
 
 
+def _operator_response_enabled() -> bool:
+    """Pure: feature-flag the operator-response slot. Default off until UI ships."""
+    import os
+    return os.environ.get("AZTEA_DISPUTE_OPERATOR_RESPONSE_ENABLED", "0").lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _operator_response_hours() -> int:
+    """Pure: env-tunable response window."""
+    import os
+    try:
+        return max(1, int(os.environ.get(
+            "AZTEA_DISPUTE_OPERATOR_RESPONSE_HOURS",
+            str(DEFAULT_OPERATOR_RESPONSE_HOURS),
+        )))
+    except (TypeError, ValueError):
+        return DEFAULT_OPERATOR_RESPONSE_HOURS
+
+
 def create_dispute(
     *,
     job_id: str,
@@ -211,6 +241,12 @@ def create_dispute(
     Raises ``ValueError`` if the job does not exist, if reason is blank, or
     if ``filed_by_owner_id`` is not a party to the job.
     Raises ``PermissionError`` if the filer is not the caller or agent owner.
+
+    2026-05-18 (D3): when ``AZTEA_DISPUTE_OPERATOR_RESPONSE_ENABLED=1`` and
+    the dispute was filed by the caller side, the row starts in
+    ``awaiting_operator`` with a deadline. The operator (agent side) gets
+    a window to defend; the sweeper auto-advances expired rows to
+    ``judging``. Default off until the operator-response UI ships.
     """
     normalized_reason = str(reason or "").strip()
     if not normalized_reason:
@@ -242,23 +278,41 @@ def create_dispute(
     normalized_filing_deposit = int(filing_deposit_cents)
     if normalized_filing_deposit < 0:
         raise ValueError("filing_deposit_cents must be non-negative.")
+    normalized_side = _validate_side(side)
+    # Operator-response slot only applies to caller-side filings — when the
+    # operator already filed, they don't need a chance to defend themselves.
+    use_operator_window = (
+        _operator_response_enabled() and normalized_side == "caller"
+    )
+    if use_operator_window:
+        initial_status = "awaiting_operator"
+        deadline = (
+            datetime.now(timezone.utc)
+            + timedelta(hours=_operator_response_hours())
+        ).isoformat()
+    else:
+        initial_status = "pending"
+        deadline = None
     params = (
         dispute_id,
         job_id,
         str(filed_by_owner_id).strip(),
-        _validate_side(side),
+        normalized_side,
         normalized_reason,
         str(evidence).strip() if evidence else None,
         normalized_filing_deposit,
+        initial_status,
         now,
+        deadline,
     )
 
     def _insert(created_conn: _db.DbConnection) -> dict:
         created_conn.execute(
             """
             INSERT INTO disputes
-                (dispute_id, job_id, filed_by_owner_id, side, reason, evidence, filing_deposit_cents, status, filed_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)
+                (dispute_id, job_id, filed_by_owner_id, side, reason, evidence,
+                 filing_deposit_cents, status, filed_at, operator_response_deadline)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             params,
         )
@@ -301,6 +355,21 @@ def has_dispute_for_job(job_id: str) -> bool:
     return row is not None
 
 
+def get_dispute_for_job(job_id: str) -> dict | None:
+    """Return the (single) dispute attached to a job, or None.
+
+    The uniqueness constraint on disputes(job_id) means at most one row
+    is ever returned. Used by the operator-response endpoint to look up
+    the dispute without a status-scan.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM disputes WHERE job_id = %s",
+            (str(job_id).strip(),),
+        ).fetchone()
+    return _row_to_dispute(row) if row else None
+
+
 def list_disputes(*, status: str | None = None, limit: int = 100) -> list[dict]:
     """Return a paginated list of disputes, optionally filtered by ``status``. Max 500 rows."""
     capped = min(max(1, int(limit)), 500)
@@ -340,6 +409,99 @@ def set_dispute_status(dispute_id: str, status: str) -> dict | None:
             (normalized_status, dispute_id),
         )
     return get_dispute(dispute_id)
+
+
+def record_operator_response(
+    dispute_id: str,
+    *,
+    operator_owner_id: str,
+    response_text: str,
+) -> dict | None:
+    """Record the agent operator's defense and advance the dispute to 'judging'.
+
+    Returns the updated dispute row, or None if the dispute doesn't exist.
+    Raises:
+      * ``PermissionError`` if ``operator_owner_id`` is not the agent owner.
+      * ``ValueError`` if the dispute isn't in ``awaiting_operator`` or
+        the response_text is blank, or the operator-response window has
+        already expired.
+    """
+    text = str(response_text or "").strip()
+    if not text:
+        raise ValueError("response_text must be a non-empty string.")
+    if len(text) > 10_000:
+        raise ValueError("response_text exceeds the 10 000-char limit.")
+    dispute = get_dispute(dispute_id)
+    if dispute is None:
+        return None
+    current_status = str(dispute.get("status") or "").strip().lower()
+    if current_status != "awaiting_operator":
+        raise ValueError(
+            f"Dispute is in status {current_status!r}; operator responses are "
+            "only accepted while the dispute is 'awaiting_operator'."
+        )
+    job_id = str(dispute.get("job_id") or "")
+    with _conn() as conn:
+        job_row = conn.execute(
+            "SELECT agent_owner_id FROM jobs WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+    if job_row is None:
+        raise ValueError(f"Job '{job_id}' not found for dispute.")
+    agent_owner = str(job_row["agent_owner_id"] or "").strip()
+    if agent_owner != str(operator_owner_id).strip():
+        raise PermissionError(
+            "Only the agent operator may record an operator response."
+        )
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE disputes
+            SET status = 'judging',
+                operator_response_text = %s,
+                operator_response_at = %s
+            WHERE dispute_id = %s
+            """,
+            (text, now, dispute_id),
+        )
+    return get_dispute(dispute_id)
+
+
+def expire_operator_response_windows(*, limit: int = 100) -> int:
+    """Side-effect: advance ``awaiting_operator`` disputes whose deadline has passed.
+
+    Called by the background sweeper. Returns the number of disputes
+    advanced. The operator's silence is treated as an implicit waiver of
+    response — the LLM judges then see only the caller's evidence.
+    """
+    now = _now()
+    capped = min(max(1, int(limit)), 500)
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT dispute_id FROM disputes
+            WHERE status = 'awaiting_operator'
+              AND operator_response_deadline IS NOT NULL
+              AND operator_response_deadline < %s
+            ORDER BY operator_response_deadline ASC
+            LIMIT %s
+            """,
+            (now, capped),
+        ).fetchall()
+        ids = [str(r["dispute_id"]) for r in (rows or [])]
+        if not ids:
+            return 0
+        for did in ids:
+            conn.execute(
+                """
+                UPDATE disputes
+                SET status = 'judging'
+                WHERE dispute_id = %s AND status = 'awaiting_operator'
+                """,
+                (did,),
+            )
+    return len(ids)
 
 
 def set_dispute_tied(dispute_id: str) -> dict | None:
@@ -446,7 +608,14 @@ def record_judgment(
     model: str | None = None,
     admin_user_id: str | None = None,
 ) -> dict:
-    """Persist a single LLM or admin judge vote for a dispute and return the inserted judgment dict."""
+    """Persist a single LLM or admin judge vote for a dispute and return the row.
+
+    2026-05-18 (D2): idempotent on the unique (dispute_id, judge_kind) index
+    added in migration 0054. A retry — including a brief two-leader overlap
+    during a lease handoff, or a re-run of a 'judging' dispute whose first
+    pass died mid-flight — finds the existing row and returns it instead
+    of double-voting.
+    """
     normalized_kind = str(judge_kind or "").strip().lower()
     if normalized_kind not in JUDGE_KINDS:
         raise ValueError("invalid judge_kind")
@@ -467,23 +636,36 @@ def record_judgment(
     }
 
     with _conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO dispute_judgments
-                (judgment_id, dispute_id, judge_kind, verdict, reasoning, model, admin_user_id, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                judgment["judgment_id"],
-                judgment["dispute_id"],
-                judgment["judge_kind"],
-                judgment["verdict"],
-                judgment["reasoning"],
-                judgment["model"],
-                judgment["admin_user_id"],
-                judgment["created_at"],
-            ),
-        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO dispute_judgments
+                    (judgment_id, dispute_id, judge_kind, verdict, reasoning, model, admin_user_id, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    judgment["judgment_id"],
+                    judgment["dispute_id"],
+                    judgment["judge_kind"],
+                    judgment["verdict"],
+                    judgment["reasoning"],
+                    judgment["model"],
+                    judgment["admin_user_id"],
+                    judgment["created_at"],
+                ),
+            )
+        except _db.IntegrityError:
+            existing = conn.execute(
+                "SELECT judgment_id, dispute_id, judge_kind, verdict, reasoning, "
+                "model, admin_user_id, created_at FROM dispute_judgments "
+                "WHERE dispute_id = %s AND judge_kind = %s",
+                (dispute_id, normalized_kind),
+            ).fetchone()
+            if existing is None:
+                # Constraint fired without a visible row — extremely rare
+                # but worth surfacing rather than silently lying.
+                raise
+            return {k: existing[k] for k in existing.keys()}
     return judgment
 
 

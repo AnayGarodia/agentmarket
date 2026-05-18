@@ -1065,6 +1065,28 @@ def _settle_successful_job(
                 success=True,
                 price_cents=int(job.get("price_cents") or 0),
             )
+            # 2026-05-18 (E7): callers reported caller_trust frozen at
+            # 0.25 after 236 settled jobs — the score only moved on
+            # dispute *losses*. Award a tiny positive delta per
+            # successful settlement (idempotent on job_id) so the
+            # caller-side trust score actually climbs with good behavior.
+            # +0.001 per successful job means a brand-new caller takes
+            # ~250 clean calls to reach 0.5, and ~1000 to ceiling at 1.0
+            # — slow enough to be earned, fast enough to be visible.
+            caller_owner_id_for_trust = str(job.get("caller_owner_id") or "").strip()
+            if caller_owner_id_for_trust.startswith("user:"):
+                try:
+                    payments.adjust_caller_trust_once(
+                        caller_owner_id_for_trust,
+                        delta=0.001,
+                        reason="job_settled_clean",
+                        related_id=str(job["job_id"]),
+                    )
+                except Exception as _exc:  # noqa: BLE001 — never block settlement
+                    _LOG.warning(
+                        "caller_trust bump failed for %s job=%s: %s",
+                        caller_owner_id_for_trust, job["job_id"], _exc,
+                    )
     settled = jobs.get_job(job["job_id"]) or job
     if newly_settled:
         _record_job_event(
@@ -1452,6 +1474,69 @@ def _resolve_dispute_with_judges(
             },
         )
     return _dispute_view(latest), settlement
+
+
+def _apply_latency_decay(now_dt: datetime | None = None) -> dict[str, int]:
+    """Daily multiplicative decay for the lifetime ``avg_latency_ms`` average.
+
+    Why: the running average never sheds old outliers — a single old very-slow
+    call kept dragging the catalog display down even for agents that ran
+    fast on every recent invocation. This is a band-aid: the deep fix is a
+    rolling window. We honor a short grace period (7 days from the most
+    recent successful call) so genuinely-slow agents stay flagged, then
+    multiply by ``_LATENCY_DECAY_DAILY_MULTIPLIER`` per idle day, floored
+    at ``_LATENCY_DECAY_FLOOR_MS`` so the value can't underflow to 0.
+    """
+    current = now_dt or datetime.now(timezone.utc)
+    scanned = 0
+    decayed = 0
+    with jobs._conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.agent_id,
+                a.avg_latency_ms,
+                a.latency_last_decay_at,
+                MAX(j.completed_at) AS last_completed_at,
+                a.created_at
+            FROM agents a
+            LEFT JOIN jobs j
+              ON j.agent_id = a.agent_id
+             AND j.status = 'complete'
+             AND j.completed_at IS NOT NULL
+            WHERE a.status = 'active'
+            GROUP BY a.agent_id
+            """
+        ).fetchall()
+    for row in rows:
+        scanned += 1
+        avg_ms = float(row["avg_latency_ms"] or 0)
+        if avg_ms <= _LATENCY_DECAY_FLOOR_MS:
+            continue
+        reference = _parse_iso_datetime(
+            row["last_completed_at"]
+        ) or _parse_iso_datetime(row["created_at"])
+        if reference is None:
+            continue
+        decay_threshold = reference + timedelta(days=_LATENCY_DECAY_GRACE_DAYS)
+        if current <= decay_threshold:
+            continue
+        last_decay_at = _parse_iso_datetime(
+            row["latency_last_decay_at"]
+        ) or decay_threshold
+        start = decay_threshold if last_decay_at < decay_threshold else last_decay_at
+        elapsed_days = int((current - start).total_seconds() // 86400)
+        if elapsed_days <= 0:
+            continue
+        new_avg = avg_ms * (_LATENCY_DECAY_DAILY_MULTIPLIER ** elapsed_days)
+        new_avg = max(_LATENCY_DECAY_FLOOR_MS, new_avg)
+        if new_avg >= avg_ms:
+            continue
+        registry.set_agent_latency_decay(
+            row["agent_id"], new_avg, current.isoformat()
+        )
+        decayed += 1
+    return {"scanned_agents": scanned, "decayed_agents": decayed}
 
 
 def _apply_reputation_decay(now_dt: datetime | None = None) -> dict[str, int]:

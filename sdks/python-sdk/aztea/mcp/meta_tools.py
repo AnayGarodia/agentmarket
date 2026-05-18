@@ -2628,7 +2628,13 @@ def _list_pipelines(
 def _hire_async(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
-    agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
+    # 2026-05-18 (E5): a hung /registry/search used to consume the entire
+    # caller timeout (60s+ observed), turning an "async" submission into
+    # a synchronous wall. Bound slug→id resolution to a short ceiling
+    # since it's just a key lookup; the actual POST /jobs gets the rest.
+    # Callers who pass ``agent_id`` directly skip this entire branch.
+    _resolve_timeout = min(float(timeout or 60.0), 10.0)
+    agent_id, err = _resolve_agent_id(session, base, hdrs, _resolve_timeout, args)
     if err is not None:
         return False, err
     body: dict[str, Any] = {

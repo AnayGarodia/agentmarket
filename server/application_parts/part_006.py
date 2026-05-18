@@ -156,6 +156,7 @@ def _sweep_jobs(
     endpoint_health_summary = _monitor_agent_endpoints(limit=limit)
     suspension_summary = _auto_suspend_low_performing_agents(actor_owner_id)
     decay_summary = _apply_reputation_decay()
+    latency_decay_summary = _apply_latency_decay()
     cache_evicted_count = _cache.evict_expired()
     probation_summary = _maybe_sweep_probation(actor_owner_id=actor_owner_id)
     # Hold-window expiration release: any wallet_holds row whose hold_until
@@ -198,6 +199,7 @@ def _sweep_jobs(
         "auto_suspended_count": int(suspension_summary["auto_suspended_count"]),
         "auto_suspended_agent_ids": suspension_summary["auto_suspended_agent_ids"],
         "reputation_decay": decay_summary,
+        "latency_decay": latency_decay_summary,
         "cache_evicted_count": cache_evicted_count,
         "probation_graduated_count": probation_summary["count"],
         "probation_graduated_agent_ids": probation_summary["agent_ids"],

@@ -25,7 +25,9 @@ Output:
 from __future__ import annotations
 
 import base64
+import json
 import logging
+import struct
 import time
 from typing import Any
 
@@ -34,8 +36,16 @@ from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
-_MAX_WAIT_MS = 10_000
+# Sync gateway budget is 8 s. Page nav + settle alone can take 4–5 s on
+# slow targets, so capping additional wait at 6 s used to land us in 504s.
+# 6 s keeps worst-case under the budget; callers needing longer waits must
+# use the async path (POST /jobs or manage_workflow(action='hire_async')).
+_MAX_WAIT_MS = 6_000
 _DEFAULT_WAIT_MS = 1_500
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PNG_IHDR_OFFSET = 16
+_PNG_IHDR_END = 24
+_SCRIPT_RESULT_MAX_CHARS = 8_000
 _HTML_TRUNCATE = 200_000
 _TEXT_TRUNCATE = 60_000
 _VALID_ACTIONS = ("scrape", "screenshot", "pdf")
@@ -205,8 +215,39 @@ def _attach_listeners(
     page.on("console", _on_console)
 
 
-def _wait_after_load(page: Any, wait_for: str, wait_ms: int, script: str) -> None:
-    """Side-effect: apply the caller's wait/script policy after navigation."""
+def _serialize_script_result(raw: Any) -> Any:
+    """Pure: best-effort JSON-roundtrip of a Playwright eval return.
+
+    Why: playwright's ``page.evaluate`` already returns plain Python (str /
+    int / float / bool / dict / list / None) for JSON-shaped values, but
+    can return ``handle`` references for DOM nodes that aren't JSON-safe.
+    We round-trip through ``json.dumps(default=str)`` to flatten anything
+    weird to a string, then truncate so a huge JSON payload can't blow the
+    8s sync budget by serializing for seconds.
+    """
+    if raw is None:
+        return None
+    try:
+        encoded = json.dumps(raw, default=str, ensure_ascii=False)
+    except Exception:  # noqa: BLE001 — final fallback path
+        return repr(raw)[:_SCRIPT_RESULT_MAX_CHARS]
+    if len(encoded) > _SCRIPT_RESULT_MAX_CHARS:
+        return encoded[:_SCRIPT_RESULT_MAX_CHARS] + "…[truncated]"
+    try:
+        return json.loads(encoded)
+    except Exception:  # noqa: BLE001
+        return encoded
+
+
+def _wait_after_load(
+    page: Any, wait_for: str, wait_ms: int, script: str,
+) -> Any:
+    """Side-effect: apply the caller's wait/script policy after navigation.
+
+    Returns the script's return value (None when no script ran or it
+    returned undefined). Previously the script's return was dropped on the
+    floor and callers had to scrape the result out of visible_text.
+    """
     if wait_for == "networkidle":
         page.wait_for_load_state("networkidle", timeout=_NAV_TIMEOUT_MS)
     else:
@@ -214,7 +255,8 @@ def _wait_after_load(page: Any, wait_for: str, wait_ms: int, script: str) -> Non
     if wait_ms > 0:
         page.wait_for_timeout(wait_ms)
     if script:
-        page.evaluate(script)
+        return _serialize_script_result(page.evaluate(script))
+    return None
 
 
 def _capture_page(page: Any, action: str) -> dict[str, Any]:
@@ -243,29 +285,57 @@ def _capture_page(page: Any, action: str) -> dict[str, Any]:
 
 def _navigate_and_capture(
     page: Any, url: str, *, action: str, wait_for: str, wait_ms: int, script: str,
-) -> tuple[Any, dict[str, Any]]:
-    """Side-effect: navigate to ``url`` and capture page artifacts; returns (response, capture)."""
+) -> tuple[Any, dict[str, Any], Any]:
+    """Side-effect: navigate to ``url`` and capture page artifacts.
+
+    Returns ``(response, capture, script_result)``.
+    """
     response = page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
-    _wait_after_load(page, wait_for, wait_ms, script)
-    return response, _capture_page(page, action)
+    script_result = _wait_after_load(page, wait_for, wait_ms, script)
+    return response, _capture_page(page, action), script_result
+
+
+def _png_dimensions(data: bytes) -> tuple[int | None, int | None]:
+    """Pure: read (width, height) from a PNG byte string; ``(None, None)`` if malformed.
+
+    Why: previously the screenshot artifact only shipped raw base64 — every
+    caller had to decode the PNG header themselves to know the image size.
+    The IHDR chunk is always at offset 16 and is big-endian uint32 pair.
+    """
+    if len(data) < _PNG_IHDR_END or not data.startswith(_PNG_SIGNATURE):
+        return None, None
+    try:
+        width, height = struct.unpack(">II", data[_PNG_IHDR_OFFSET:_PNG_IHDR_END])
+        return int(width), int(height)
+    except struct.error:
+        return None, None
 
 
 def _bytes_to_artifact(name: str, mime: str, raw: bytes) -> dict[str, Any]:
-    """Pure: bytes → artifact dict with base64 data URI."""
+    """Pure: bytes → artifact dict with base64 data URI.
+
+    For PNG inputs, width/height are read from the IHDR chunk so callers
+    don't have to decode the header to know the image size.
+    """
     encoded = base64.b64encode(raw).decode("ascii")
-    return {
+    artifact: dict[str, Any] = {
         "name": name,
         "mime": mime,
         "url_or_base64": f"data:{mime};base64,{encoded}",
         "size_bytes": len(raw),
     }
+    if mime == "image/png":
+        width, height = _png_dimensions(raw)
+        artifact["width"] = width
+        artifact["height"] = height
+    return artifact
 
 
 def _build_result(
     *, url: str, requested_url: str, action: str, wait_for: str,
     response: Any, capture: dict[str, Any], elapsed_ms: int,
     console_messages: list[str], network_log: list[dict[str, Any]],
-    capture_network: bool,
+    capture_network: bool, script_result: Any,
 ) -> dict[str, Any]:
     """Pure: shape the agent's response from captured browser data."""
     result: dict[str, Any] = {
@@ -282,6 +352,7 @@ def _build_result(
         "screenshot_artifact": _bytes_to_artifact(
             "screenshot.png", "image/png", capture["screenshot_bytes"],
         ),
+        "script_result": script_result,
         "execution_time_ms": elapsed_ms,
         "console_messages": console_messages,
     }
@@ -298,8 +369,8 @@ def _drive_chromium(
     pw: Any, url: str, *, action: str, wait_for: str, wait_ms: int,
     script: str, capture_network: bool, viewport: tuple[int, int],
     network_log: list[dict[str, Any]], console_messages: list[str],
-) -> dict | tuple[Any, dict[str, Any]]:
-    """Side-effect: launch Chromium, navigate, and return ``(response, capture)`` or error envelope."""
+) -> dict | tuple[Any, dict[str, Any], Any]:
+    """Side-effect: launch Chromium, navigate, and return ``(response, capture, script_result)`` or error envelope."""
     try:
         browser = pw.chromium.launch(headless=True)
     except Exception as launch_exc:
@@ -358,11 +429,11 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         )
     if isinstance(outcome, dict):  # error envelope from _drive_chromium
         return outcome
-    response, capture = outcome
+    response, capture, script_result = outcome
     elapsed_ms = int((time.monotonic() - t_start) * 1000)
     return _build_result(
         url=capture["final_url"], requested_url=url, action=action, wait_for=wait_for,
         response=response, capture=capture, elapsed_ms=elapsed_ms,
         console_messages=console_messages, network_log=network_log,
-        capture_network=capture_network,
+        capture_network=capture_network, script_result=script_result,
     )

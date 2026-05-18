@@ -135,9 +135,10 @@ def test_dependency_auditor_ignores_invalid_npm_latest_dist_tag(monkeypatch):
 
     monkeypatch.setattr(dependency_auditor.requests, "get", fake_get)
 
-    latest, license_ = dependency_auditor._fetch_npm_latest("lodash")
+    latest, license_, not_found = dependency_auditor._fetch_npm_latest("lodash")
     assert latest == "4.17.21"
     assert license_ == "MIT"
+    assert not_found is False
 
 
 def test_dependency_auditor_rejects_freeform_garbage_manifest():

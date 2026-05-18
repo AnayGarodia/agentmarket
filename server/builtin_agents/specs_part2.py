@@ -25,7 +25,21 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         {
             "agent_id": _PYTHON_EXECUTOR_AGENT_ID,
             "name": "Python Code Executor",
-            "description": "Use when the user wants to actually run Python code, not simulate it. Executes in a real sandboxed subprocess. Returns stdout, stderr, exit code, execution time, and an expert explanation of what the output means.",
+            "description": (
+                "Use when the user wants to actually run Python code, not "
+                "simulate it. Executes in a real sandboxed subprocess and "
+                "returns stdout, stderr, exit code, execution time, and an "
+                "expert explanation. Runtime constraints (enforced; calls "
+                "that exceed them are rejected, not silently truncated): "
+                "128 MB memory cap with a 32 MB pre-spawn static-allocation "
+                "guard; 30 s hard timeout (and the Aztea sync gateway has "
+                "an 8 s wall budget — use the async path for longer jobs); "
+                "no pip install; no subprocess spawning or shell execution; "
+                "no arbitrary file writes outside the sandbox tempdir; no "
+                "network sockets except via the agent contract. Stdlib is "
+                "fully available. Third-party libs are whatever the "
+                "executor image bundles (e.g. requests, numpy, pandas)."
+            ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYTHON_EXECUTOR_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["code-execution", "python", "developer-tools", "compute"],
@@ -64,7 +78,14 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "Python code to execute",
+                        "description": (
+                            "Python code to execute. Sandboxed: no pip "
+                            "install, no subprocess spawning, no shell "
+                            "execution, no arbitrary file writes, 128 MB "
+                            "memory cap. Stdlib only, plus whatever the "
+                            "executor image preinstalls (requests, numpy, "
+                            "pandas are typical)."
+                        ),
                         "example": "print(sum(i**2 for i in range(10)))",
                     },
                     "stdin": {
@@ -77,7 +98,13 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                         "default": 10,
                         "minimum": 1,
                         "maximum": 30,
-                        "description": "Execution timeout in seconds",
+                        "description": (
+                            "Execution timeout in seconds. Hard cap is 30; "
+                            "anything above is rejected. The Aztea sync "
+                            "gateway adds a separate 8 s wall budget — "
+                            "callers needing more than 8 s should use the "
+                            "async path."
+                        ),
                     },
                     "explain": {
                         "type": "boolean",
@@ -356,11 +383,40 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                     "vulnerable_count": {"type": "integer"},
                     "outdated_count": {"type": "integer"},
                     "critical_count": {"type": "integer"},
-                    "packages": {"type": "array", "items": {"type": "object"}},
+                    "packages": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "description": (
+                                "Per-package audit row. ``cvss`` may be null "
+                                "when the upstream advisory only ships a "
+                                "severity label (HIGH/CRITICAL) without a "
+                                "numeric base score — severity carries the "
+                                "label in that case. ``action`` is one of: "
+                                "upgrade, replace, review, ok, not_found, "
+                                "version_unreachable. ``notes`` explains "
+                                "non-CVE actions."
+                            ),
+                        },
+                    },
                     "top_priorities": {"type": "array", "items": {"type": "string"}},
+                    "parse_warnings": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": (
+                            "Manifest lines that were dropped or merged. "
+                            "Examples: ``{\"line\": \"-e git+https://...\", "
+                            "\"reason\": \"unparseable\"}``, "
+                            "``{\"package\": \"requests\", "
+                            "\"reason\": \"duplicate_entry\", ...}``."
+                        ),
+                    },
                     "summary": {"type": "string"},
                 },
-                required=["ecosystem", "total_packages", "packages", "summary"],
+                required=[
+                    "ecosystem", "total_packages", "packages",
+                    "parse_warnings", "summary",
+                ],
             ),
             "output_examples": [
                 {
@@ -383,6 +439,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                                     {
                                         "id": "CVE-2021-23337",
                                         "severity": "high",
+                                        "cvss": 7.2,
                                         "description": "Command injection via template",
                                         "fixed_in": "4.17.21",
                                     }
@@ -390,11 +447,13 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                                 "license": "MIT",
                                 "license_risk": "none",
                                 "action": "upgrade",
+                                "notes": None,
                             }
                         ],
                         "top_priorities": [
                             "Upgrade lodash to 4.17.21 (CVE-2021-23337)"
                         ],
+                        "parse_warnings": [],
                         "summary": "1 package with a high-severity CVE. Upgrade lodash immediately.",
                     },
                 }

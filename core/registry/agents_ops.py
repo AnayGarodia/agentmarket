@@ -647,24 +647,28 @@ def update_call_stats(
     agent_id: str, latency_ms: float, success: bool, *, price_cents: int | None = None
 ) -> None:
     """
-    Increment total_calls, update running avg_latency_ms, and conditionally
-    increment successful_calls. Uses a single UPDATE with arithmetic to avoid
-    a read-modify-write race.
+    Increment total_calls, update avg_latency_ms from the call-history ring,
+    and conditionally increment successful_calls.
+
+    2026-05-18 (D1 — deep tier): switched from the lifetime running average
+    ``(old_avg * n + new) / (n+1)`` to a rolling-window mean computed from
+    the last N samples in ``call_latency_ring``. Without this change a
+    single old 181-second sync timeout took thousands of fast follow-ups
+    to dilute, and security_headers_grader kept showing 181 s in the
+    catalog even after every recent call ran in 0.3 s. The lifetime
+    counters (total_calls / successful_calls) stay intact for billing and
+    quality scoring.
     """
     with _conn() as conn:
-        # Only update avg_latency_ms for successful calls. Failed/timed-out
-        # calls carry artificially high latencies (e.g. full timeout duration)
-        # that inflate the displayed average by orders of magnitude.
         if success:
             conn.execute(
                 """
                 UPDATE agents
                 SET total_calls      = total_calls + 1,
-                    avg_latency_ms   = (avg_latency_ms * successful_calls + %s) / (successful_calls + 1),
                     successful_calls = successful_calls + 1
                 WHERE agent_id = %s
                 """,
-                (latency_ms, agent_id),
+                (agent_id,),
             )
         else:
             conn.execute(
@@ -686,17 +690,28 @@ def update_call_stats(
                 if row["price_per_call_cents"] is not None
                 else _price_usd_to_cents(row["price_per_call_usd"])
             )
-        conn.execute(
-            "UPDATE agents SET call_latency_ring = %s WHERE agent_id = %s",
-            (
-                append_call_ring_sample(
-                    row["call_latency_ring"],
-                    latency_ms=latency_ms,
-                    price_cents=int(effective_price_cents),
-                ),
-                agent_id,
-            ),
+        new_ring_json = append_call_ring_sample(
+            row["call_latency_ring"],
+            latency_ms=latency_ms,
+            price_cents=int(effective_price_cents),
         )
+        # Recompute avg_latency_ms from the bounded window of samples.
+        new_avg = _avg_latency_from_ring(new_ring_json)
+        conn.execute(
+            "UPDATE agents SET call_latency_ring = %s, avg_latency_ms = %s "
+            "WHERE agent_id = %s",
+            (new_ring_json, new_avg, agent_id),
+        )
+
+
+def _avg_latency_from_ring(ring_json: str) -> float:
+    """Pure: mean of the latency samples in the ring (0.0 if empty)."""
+    from core.registry.call_history import normalize_call_ring
+    ring = normalize_call_ring(ring_json)
+    samples = [int(item.get("latency_ms", 0)) for item in ring]
+    if not samples:
+        return 0.0
+    return sum(samples) / len(samples)
 
 
 # ---------------------------------------------------------------------------
@@ -1287,6 +1302,24 @@ def set_agent_decay_multiplier(agent_id: str, multiplier: float, at_iso: str) ->
     with _conn() as conn:
         conn.execute(
             "UPDATE agents SET trust_decay_multiplier = %s, last_decay_at = %s WHERE agent_id = %s",
+            (parsed, str(at_iso or _CANONICAL_CREATED_AT), agent_id),
+        )
+
+
+def set_agent_latency_decay(agent_id: str, new_avg_ms: float, at_iso: str) -> None:
+    """Update the running latency average and stamp ``latency_last_decay_at``.
+
+    Why: the lifetime running average never sheds old outliers (a single
+    181-second sync timeout took thousands of fast calls to dilute). The
+    daily sweep in part_005 calls this to multiply ``avg_latency_ms`` by a
+    decay factor each idle day past the grace window. Migration 0053 adds
+    ``latency_last_decay_at`` so we don't re-decay on every sweep.
+    """
+    parsed = max(0.0, _to_non_negative_float(new_avg_ms, default=0.0))
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agents SET avg_latency_ms = %s, latency_last_decay_at = %s "
+            "WHERE agent_id = %s",
             (parsed, str(at_iso or _CANONICAL_CREATED_AT), agent_id),
         )
 
@@ -2553,20 +2586,45 @@ def _maybe_llm_rerank(
         return ranked
 
 
-def _apply_relevance_floor(ranked: list[dict]) -> list[dict]:
+def _apply_relevance_floor(
+    ranked: list[dict],
+    diagnostic_out: dict | None = None,
+) -> list[dict]:
     """Pure-ish: drop low-relevance candidates so callers don't get mediocre matches.
 
     Why: returning weak distractors is worse than returning empty —
     empty signals "use a different query" while distractors create
     false confidence in low-relevance results.
+
+    When ``diagnostic_out`` is provided, the floor / top_score / below-
+    floor preview is stored on it so the search route can return a
+    ``match_quality`` envelope explaining *why* the catalog came up empty
+    instead of a silent zero-result page.
     """
+    floor = _feature_flags.search_relevance_floor()
+    if diagnostic_out is not None:
+        diagnostic_out.setdefault("floor", floor)
+        diagnostic_out.setdefault("top_score", None)
+        diagnostic_out.setdefault("below_floor", False)
+        diagnostic_out.setdefault("below_floor_preview", [])
     if not ranked:
         return ranked
     top_score = ranked[0]["blended_score"]
-    floor = _feature_flags.search_relevance_floor()
     keep = _feature_flags.search_keep_floor()
     band = _feature_flags.search_dropoff_band()
+    if diagnostic_out is not None:
+        diagnostic_out["top_score"] = round(float(top_score), 6)
     if top_score < floor:
+        if diagnostic_out is not None:
+            diagnostic_out["below_floor"] = True
+            diagnostic_out["below_floor_preview"] = [
+                {
+                    "agent_id": str(item["agent"].get("agent_id") or ""),
+                    "name": str(item["agent"].get("name") or ""),
+                    "blended_score": round(float(item["blended_score"]), 6),
+                }
+                for item in ranked[:3]
+            ]
         return []
     return [
         item for item in ranked
@@ -2588,6 +2646,8 @@ def search_agents(
     outputs_not_stored: bool | None = None,
     audit_logged: bool | None = None,
     region_locked: str | None = None,
+    *,
+    diagnostic_out: dict | None = None,
 ) -> list[dict]:
     """Side-effect: search the agent registry by keyword + embedding similarity with optional filters.
 
@@ -2632,8 +2692,13 @@ def search_agents(
     )
     ranked = _sort_candidates(candidates, price_query_mode)
     if _is_off_catalog_query(normalized_query):
+        if diagnostic_out is not None:
+            diagnostic_out["off_catalog_pattern_matched"] = True
         return []
-    ranked = _apply_relevance_floor(_maybe_llm_rerank(ranked, normalized_query, price_query_mode))
+    ranked = _apply_relevance_floor(
+        _maybe_llm_rerank(ranked, normalized_query, price_query_mode),
+        diagnostic_out=diagnostic_out,
+    )
     return [
         {
             "agent": item["agent"],
