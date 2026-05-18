@@ -204,12 +204,16 @@ def test_quality_rating_and_trust_ranking(client):
     )
     assert rate_low.status_code == 201, rate_low.text
 
+    # PR 76 bug 2: rating now UPSERTs and surfaces previous_rating + revised
     duplicate = client.post(
         f"/jobs/{job_high['job_id']}/rating",
         headers=_auth_headers(caller["raw_api_key"]),
         json={"rating": 4},
     )
-    assert duplicate.status_code == 409
+    assert duplicate.status_code == 201, duplicate.text
+    dup_rating = duplicate.json()["rating"]
+    assert dup_rating.get("revised") is True
+    assert dup_rating.get("previous_rating") == 5
 
     forbidden = client.post(
         f"/jobs/{job_high['job_id']}/rating",
