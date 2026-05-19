@@ -46,3 +46,18 @@ bandit>=1.7.0
 # core/copilot_predicates.py uses jmespath for stop_when expression evaluation.
 # Without this every copilot stop_when call fails to import at module load.
 jmespath>=1.0.0
+# 2026-05-18 (A3/A4/A6): agent-runtime deps that were previously only baked
+# into the Dockerfile via a separate RUN block. Bare-metal prod (no Docker)
+# pip-installs from this file, so the Dockerfile-only path left A3/A4/A6
+# agents broken in production. Moving them here makes pip the single source
+# of truth: `pip install -r requirements.txt` covers every pip-installable
+# runtime dep, OSS and prod both.
+#   - coverage / pytest: coverage_runner shells out to `coverage run --branch
+#     -m pytest`; ci_failure_reproducer re-runs failing pytest commands.
+#   - checkov: hcl_terraform_analyzer invokes `checkov -d ... --output json`.
+# Note: hadolint (A5) is a Go binary, not pip-installable — handle in the
+# host-provision runbook. node + jest + go (also A6) are documented in
+# docs/runbooks/runtime-prerequisites.md.
+coverage>=7.0.0
+pytest>=8.0.0
+checkov>=3.2.0
